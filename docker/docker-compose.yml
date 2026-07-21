@@ -12,3 +12,4 @@ services:
     volumes:
       - ./config:/config
       - ../custom_components:/config/custom_components
+      - ../frontend/todo-overlay-card/dist:/config/www

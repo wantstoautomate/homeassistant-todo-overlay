@@ -1,7 +1,6 @@
-from .adapter import TodoAdapter
-from .repository import RelationshipRepository
+from .interfaces import MetadataProvider, TodoProvider
+from .models import TodoList
 from .tree import build_tree
-from .models import TodoItem
 
 
 class TodoManager:
@@ -9,20 +8,39 @@ class TodoManager:
 
     def __init__(
         self,
-        adapter: TodoAdapter,
-        repository: RelationshipRepository,
+        adapter: TodoProvider,
+        metadata_store: MetadataProvider,
     ) -> None:
         self._adapter = adapter
-        self._repository = repository
+        self._metadata_store = metadata_store
 
-    def get_tree(self) -> list[TodoItem]:
-        """Return the todo hierarchy."""
+    async def get_list(
+        self,
+        entity_id: str,
+    ) -> TodoList:
+        """Return a Todo list."""
 
-        items = self._adapter.get_items()
+        items = await self._adapter.get_items(entity_id)
 
-        relationships = self._repository.get_relationships()
+        relationships = await self._metadata_store.get_relationships(
+            entity_id,
+        )
 
-        return build_tree(
-            items,
-            relationships,
+        return TodoList(
+            entity_id=entity_id,
+            items=build_tree(items, relationships),
+        )
+
+    async def set_parent(
+        self,
+        entity_id: str,
+        child_id: str,
+        parent_id: str | None,
+    ) -> None:
+        """Set the parent of a todo item."""
+
+        await self._metadata_store.set_parent(
+            entity_id=entity_id,
+            child_id=child_id,
+            parent_id=parent_id,
         )

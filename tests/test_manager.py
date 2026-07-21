@@ -1,17 +1,22 @@
+import pytest
+
 from custom_components.todo_overlay.manager import TodoManager
 from custom_components.todo_overlay.models import TodoItem
 
 
 class FakeAdapter:
 
-    def get_items(self) -> list[TodoItem]:
+    async def get_items(
+        self,
+        entity_id: str,
+    ) -> list[TodoItem]:
         return [
             TodoItem(id="1", title="Shopping", completed=False),
             TodoItem(id="2", title="Milk", completed=False),
         ]
 
 
-class FakeRepository:
+class FakeMetadataStore:
 
     def get_relationships(self) -> dict[str, str | None]:
         return {
@@ -20,15 +25,47 @@ class FakeRepository:
         }
 
 
-def test_manager_get_tree():
+@pytest.mark.asyncio
+async def test_manager_get_list():
 
     manager = TodoManager(
         adapter=FakeAdapter(),
-        repository=FakeRepository(),
+        metadata_store=FakeMetadataStore(),
     )
 
-    tree = manager.get_tree()
+    todo_list = await manager.get_list("todo.shopping")
 
-    assert len(tree) == 1
-    assert tree[0].title == "Shopping"
-    assert tree[0].children[0].title == "Milk"
+    assert todo_list.entity_id == "todo.shopping"
+    assert len(todo_list.items) == 1
+    assert todo_list.items[0].title == "Shopping"
+    assert todo_list.items[0].children[0].title == "Milk"
+
+
+@pytest.mark.asyncio
+async def test_manager_returns_serialisable_list():
+
+    manager = TodoManager(
+        adapter=FakeAdapter(),
+        metadata_store=FakeMetadataStore(),
+    )
+
+    data = (await manager.get_list("todo.shopping")).to_dict()
+
+    assert data == {
+        "entity_id": "todo.shopping",
+        "items": [
+            {
+                "id": "1",
+                "title": "Shopping",
+                "completed": False,
+                "children": [
+                    {
+                        "id": "2",
+                        "title": "Milk",
+                        "completed": False,
+                        "children": [],
+                    }
+                ],
+            }
+        ],
+    }
