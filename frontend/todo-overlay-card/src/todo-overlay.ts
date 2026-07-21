@@ -1,39 +1,13 @@
-import {LitElement, html, css, TemplateResult} from "lit";
+import {LitElement, html} from "lit";
 import {customElement, property, state} from "lit/decorators.js";
 
-import {getList, TodoItem, TodoList} from "./api";
+import {getList, setParent} from "./api";
+import type {TodoList} from "./models";
+
+import "./components/todo-tree";
 
 @customElement("todo-overlay-card")
 export class TodoOverlayCard extends LitElement {
-
-    static styles = css`
-        ul {
-            list-style: none;
-            margin: 0;
-            padding-left: 20px;
-        }
-
-        li {
-            margin: 2px 0;
-        }
-
-        .item {
-            padding: 6px 10px;
-            border-radius: 6px;
-            cursor: grab;
-            user-select: none;
-            transition: background 120ms;
-        }
-
-        .item.hover {
-            background: rgba(33,150,243,.18);
-            outline: 2px solid rgb(33,150,243);
-        }
-
-        .item:hover {
-            background: rgba(255,255,255,0.05);
-        }
-    `;
 
     @property({attribute: false})
     public hass: any;
@@ -44,20 +18,12 @@ export class TodoOverlayCard extends LitElement {
     @state()
     private list?: TodoList;
 
-    @state()
-    private dragging?: string;
-
-    @state()
-    private hoverItem?: string;
-
-    private pointerDown = false;
+    private draggedId?: string;
+    private hoverId?: string;
 
     setConfig(config: any) {
         this.config = config;
     }
-
-
-
 
     protected updated(changed: Map<string, unknown>) {
         if (changed.has("hass") && this.hass && !this.list) {
@@ -72,83 +38,63 @@ export class TodoOverlayCard extends LitElement {
         );
     }
 
+    private onPointerDown(e: CustomEvent) {
+        this.draggedId = e.detail.id;
+    }
 
-    private renderItem(item: TodoItem): TemplateResult {
-        return html`
-            <li data-id="${item.id}">
+    private onPointerEnter(e: CustomEvent) {
+        if (!this.draggedId) {
+            return;
+        }
 
-                <div
-                    class="item ${this.hoverItem === item.id ? "hover" : ""}"
+        this.hoverId = e.detail.id;
+    }
 
-                    @pointerdown=${() => {
-                        this.pointerDown = true;
-                        this.dragging = item.id;
-                    }}
+    private async onPointerUp() {
 
-                    @pointerenter=${() => {
-                        if (this.pointerDown && this.dragging !== item.id) {
-                            this.hoverItem = item.id;
-                        }
-                    }}
+        if (
+            this.draggedId &&
+            this.hoverId &&
+            this.draggedId !== this.hoverId
+        ) {
 
-                    @pointerleave=${() => {
-                        if (this.hoverItem === item.id) {
-                            this.hoverItem = undefined;
-                        }
-                    }}
+            await setParent(
+                this.hass,
+                this.config.entity,
+                this.draggedId,
+                this.hoverId,
+            );
 
-                    @pointerup=${async () => {
+            await this.load();
+        }
 
-                        if (
-                            this.pointerDown &&
-                            this.dragging &&
-                            this.hoverItem === item.id
-                        ) {
-
-                            await setParent(
-                                this.hass,
-                                this.config.entity,
-                                this.dragging,
-                                item.id,
-                            );
-
-                            await this.load();
-                        }
-
-                        this.pointerDown = false;
-                        this.dragging = undefined;
-                        this.hoverItem = undefined;
-                    }}
-
-                >
-                    ${item.completed ? "☑" : "☐"}
-                    ${item.title}
-                </div>
-
-                ${
-                    item.children.length
-                        ? html`
-                            <ul>
-                                ${item.children.map(child => this.renderItem(child))}
-                            </ul>
-                        `
-                        : ""
-                }
-
-            </li>
-        `;
+        this.draggedId = undefined;
+        this.hoverId = undefined;
     }
 
     render() {
         return html`
             <ha-card header="Todo Overlay">
-                ${this.list
-                    ? html`
-                        <ul id="tree">
-                            ${this.list.items.map(item => this.renderItem(item))}
-                        </ul>
-                    `
-                    : "Loading..."}
+
+                ${
+                    this.list
+                        ? html`
+                            <todo-tree
+                                .items=${this.list.items}
+
+                                @tree-pointer-down=${this.onPointerDown}
+                                @tree-pointer-enter=${this.onPointerEnter}
+                                @tree-pointer-up=${this.onPointerUp}
+
+                            ></todo-tree>
+                        `
+                        : html`
+                            <div style="padding:16px">
+                                Loading...
+                            </div>
+                        `
+                }
+
             </ha-card>
         `;
     }

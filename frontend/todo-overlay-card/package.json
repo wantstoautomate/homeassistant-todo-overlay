@@ -8,6 +8,7 @@
     "watch": "esbuild src/todo-overlay.ts --bundle --outfile=dist/todo-overlay.js --format=esm --target=es2022 --watch"
   },
   "dependencies": {
+    "interactjs": "^1.10.27",
     "lit": "^3.3.1"
   },
   "devDependencies": {

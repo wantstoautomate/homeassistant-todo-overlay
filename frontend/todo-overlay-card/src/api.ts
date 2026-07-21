@@ -1,14 +1,4 @@
-export interface TodoItem {
-    id: string;
-    title: string;
-    completed: boolean;
-    children: TodoItem[];
-}
-
-export interface TodoList {
-    entity_id: string;
-    items: TodoItem[];
-}
+import type { TodoList } from "./models";
 
 export async function getList(
     hass: any,
