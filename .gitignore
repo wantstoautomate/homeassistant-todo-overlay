@@ -1,0 +1,29 @@
+# Python
+__pycache__/
+*.py[cod]
+*.so
+
+# Virtual environments
+.venv/
+venv/
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+
+# VS Code
+.vscode/settings.json
+
+# Home Assistant
+config/
+.storage/
+
+# macOS
+.DS_Store
+
+# Linux
+*~
+
+# Logs
+*.log
