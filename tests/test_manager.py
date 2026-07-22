@@ -239,6 +239,129 @@ async def test_manager_set_completed_cascades_to_descendants():
 
 
 @pytest.mark.asyncio
+async def test_manager_set_completed_moves_item_to_top_of_completed_group():
+
+    adapter = FakeAdapter(items=[
+        TodoItem(id="1", title="First", completed=False),
+        TodoItem(id="2", title="Second", completed=False),
+        TodoItem(id="3", title="Already done", completed=True),
+    ])
+
+    metadata_store = FakeMetadataStore({
+        "1": ItemPosition(parent_id=None, order=0),
+        "2": ItemPosition(parent_id=None, order=1),
+        "3": ItemPosition(parent_id=None, order=2),
+    })
+
+    manager = TodoManager(adapter=adapter, metadata_store=metadata_store)
+
+    await manager.set_completed(entity_id="todo.shopping", item_id="1", completed=True)
+
+    todo_list = await manager.get_list("todo.shopping")
+
+    # "1" was just completed, so it should sit above "3" (completed
+    # earlier) - the top of the completed group - not wherever its old
+    # stored order would have placed it.
+    assert [item.id for item in todo_list.items] == ["2", "1", "3"]
+
+
+@pytest.mark.asyncio
+async def test_manager_set_completed_moves_item_to_bottom_of_incomplete_group():
+
+    adapter = FakeAdapter(items=[
+        TodoItem(id="1", title="Was done", completed=True),
+        TodoItem(id="2", title="Still incomplete", completed=False),
+        TodoItem(id="3", title="Also done", completed=True),
+    ])
+
+    metadata_store = FakeMetadataStore({
+        "1": ItemPosition(parent_id=None, order=0),
+        "2": ItemPosition(parent_id=None, order=1),
+        "3": ItemPosition(parent_id=None, order=2),
+    })
+
+    manager = TodoManager(adapter=adapter, metadata_store=metadata_store)
+
+    await manager.set_completed(entity_id="todo.shopping", item_id="1", completed=False)
+
+    todo_list = await manager.get_list("todo.shopping")
+
+    # "1" was just uncompleted, so it should sit below "2" (still
+    # incomplete) - the bottom of the incomplete group - not wherever
+    # its old stored order would have placed it.
+    assert [item.id for item in todo_list.items] == ["2", "1", "3"]
+
+
+@pytest.mark.asyncio
+async def test_manager_set_completed_repositions_auto_completed_parent_among_siblings():
+
+    adapter = FakeAdapter(items=[
+        TodoItem(id="1", title="Parent", completed=False),
+        TodoItem(id="2", title="Other completed root", completed=True),
+        TodoItem(id="3", title="Other incomplete root", completed=False),
+        TodoItem(id="4", title="Only child", completed=False),
+    ])
+
+    metadata_store = FakeMetadataStore({
+        "1": ItemPosition(parent_id=None, order=0),
+        "2": ItemPosition(parent_id=None, order=1),
+        "3": ItemPosition(parent_id=None, order=2),
+        "4": ItemPosition(parent_id="1", order=0),
+    })
+
+    manager = TodoManager(adapter=adapter, metadata_store=metadata_store)
+
+    # Completing the only child makes "Parent" derive to complete too -
+    # it should reposition among its own root-level siblings, landing
+    # at the top of the completed ones (right after the incomplete
+    # root), even though its own completion was never directly set.
+    await manager.set_completed(entity_id="todo.shopping", item_id="4", completed=True)
+
+    todo_list = await manager.get_list("todo.shopping")
+
+    assert [item.id for item in todo_list.items] == ["3", "1", "2"]
+    assert todo_list.items[1].completed is True
+
+
+@pytest.mark.asyncio
+async def test_manager_reposition_uses_derived_not_raw_completed_for_siblings():
+
+    # "Shopping" is a parent whose own raw completed flag was never
+    # independently written (it stays False at rest - only the tree's
+    # bottom-up derivation renders it as complete via its children).
+    # When "Egg" completes and flips "Milk" (its parent) to derived-
+    # complete too, Milk's reposition among its OWN root siblings must
+    # judge "Shopping" by what it actually renders as (complete),
+    # not by Shopping's stale raw flag - otherwise Milk gets inserted
+    # on the wrong side of an already-complete sibling.
+    adapter = FakeAdapter(items=[
+        TodoItem(id="milk", title="Milk", completed=False),
+        TodoItem(id="shopping", title="Shopping", completed=False),
+        TodoItem(id="egg", title="Egg", completed=False),
+        TodoItem(id="item", title="Item", completed=True),
+        TodoItem(id="asdf", title="asdf", completed=True),
+    ])
+
+    metadata_store = FakeMetadataStore({
+        "milk": ItemPosition(parent_id=None, order=0),
+        "shopping": ItemPosition(parent_id=None, order=1),
+        "egg": ItemPosition(parent_id="milk", order=0),
+        "item": ItemPosition(parent_id="shopping", order=0),
+        "asdf": ItemPosition(parent_id="shopping", order=1),
+    })
+
+    manager = TodoManager(adapter=adapter, metadata_store=metadata_store)
+
+    await manager.set_completed(entity_id="todo.shopping", item_id="egg", completed=True)
+
+    todo_list = await manager.get_list("todo.shopping")
+
+    assert [item.id for item in todo_list.items] == ["milk", "shopping"]
+    assert todo_list.items[0].completed is True
+    assert todo_list.items[1].completed is True
+
+
+@pytest.mark.asyncio
 async def test_manager_restore_completed_writes_back_exact_values():
 
     adapter = FakeAdapter(items=[

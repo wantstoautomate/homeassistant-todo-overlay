@@ -1085,21 +1085,22 @@ var TodoTreeItem = class extends i4 {
                     @pointerup=${this.pointerUp}
                     @dblclick=${this.onDoubleClick}
                 >
-                    <div class="row-main">
-                        <ha-checkbox .checked=${this.item.completed}></ha-checkbox>
-                        <span class="summary">${this.item.title}</span>
-                    </div>
+                    <ha-checkbox .checked=${this.item.completed}></ha-checkbox>
 
-                    ${hasMeta ? b2`
-                                <div class="row-meta">
-                                    ${due ? b2`
-                                                <span class=${e6({ "due-chip": true, overdue: due.overdue })}>
-                                                    ${CLOCK_ICON}${due.label}
-                                                </span>
-                                            ` : ""}
-                                    ${this.item.description ? b2`<span class="description-text">${this.item.description}</span>` : ""}
-                                </div>
-                            ` : ""}
+                    <div class="content">
+                        <span class="summary">${this.item.title}</span>
+
+                        ${hasMeta ? b2`
+                                    <div class="row-meta">
+                                        ${due ? b2`
+                                                    <span class=${e6({ "due-chip": true, overdue: due.overdue })}>
+                                                        ${CLOCK_ICON}${due.label}
+                                                    </span>
+                                                ` : ""}
+                                        ${this.item.description ? b2`<span class="description-text">${this.item.description}</span>` : ""}
+                                    </div>
+                                ` : ""}
+                    </div>
 
                     ${this.holdRippleOrigin ? b2`
                                 <div
@@ -1145,8 +1146,10 @@ TodoTreeItem.styles = i`
         .row {
             position: relative;
             display: flex;
-            flex-direction: column;
-            padding: 0 20px;
+            align-items: center;
+            gap: 12px;
+            min-height: 40px;
+            padding: 8px 20px;
             border-radius: 4px;
             outline: 2px solid transparent;
             outline-offset: -2px;
@@ -1192,16 +1195,23 @@ TodoTreeItem.styles = i`
             bottom: -1px;
         }
 
-        .row-main {
+        .content {
+            flex: 1;
+            min-width: 0;
             display: flex;
-            align-items: center;
-            gap: 12px;
-            min-height: 40px;
+            flex-direction: column;
+            gap: 2px;
+        }
+
+        .summary {
             font-family: Roboto, "Noto Sans", sans-serif;
             font-size: 14px;
             font-weight: 400;
             line-height: 21px;
             color: var(--primary-text-color);
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
         }
 
         .row.completed .summary {
@@ -1214,22 +1224,15 @@ TodoTreeItem.styles = i`
             flex-shrink: 0;
         }
 
-        .summary {
-            flex: 1;
-            overflow: hidden;
-            text-overflow: ellipsis;
-            white-space: nowrap;
-        }
-
         /* Secondary metadata line: due date + description today, with
            room to append more chips (e.g. tags) here later without
-           restructuring the row. Indented to align under the title,
-           past the checkbox (28px) and its gap (12px). */
+           restructuring the row. Lives in the same content column as
+           the title, so it naturally lines up under it with no manual
+           indent - the checkbox centers against the whole column. */
         .row-meta {
             display: flex;
             align-items: center;
             gap: 8px;
-            padding: 0 0 4px 40px;
             font-family: Roboto, "Noto Sans", sans-serif;
             font-size: 12px;
             line-height: 14px;
