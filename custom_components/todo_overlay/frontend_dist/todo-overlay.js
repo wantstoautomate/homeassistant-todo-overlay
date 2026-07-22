@@ -1783,43 +1783,6 @@ TodoTree = __decorateClass([
 ], TodoTree);
 
 // src/todo-overlay.ts
-function deepElementFromPoint(x2, y3) {
-  let el = document.elementFromPoint(x2, y3);
-  while (el && el.shadowRoot) {
-    const inner = el.shadowRoot.elementFromPoint(x2, y3);
-    if (!inner || inner === el) {
-      break;
-    }
-    el = inner;
-  }
-  return el;
-}
-function closestAcrossShadowRoots(start, selector) {
-  let current = start;
-  while (current) {
-    const found = current.closest(selector);
-    if (found) {
-      return found;
-    }
-    const root = current.getRootNode();
-    current = root instanceof ShadowRoot ? root.host : null;
-  }
-  return null;
-}
-function resolvePlacement(rowId, rowChildren, relativeY) {
-  let placement;
-  if (relativeY < BEFORE_AFTER_ZONE) {
-    placement = "before";
-  } else if (relativeY > 1 - BEFORE_AFTER_ZONE) {
-    placement = "after";
-  } else {
-    placement = "inside";
-  }
-  if (placement === "after" && rowChildren.length > 0) {
-    return { id: rowChildren[0].id, placement: "before" };
-  }
-  return { id: rowId, placement };
-}
 function collectAllRows(root) {
   const rows = [];
   for (const el of Array.from(root.querySelectorAll("*"))) {
@@ -1836,8 +1799,21 @@ function collectAllRows(root) {
   }
   return rows;
 }
-function nearestRowFallback(x2, y3, excludeId) {
-  const rows = collectAllRows(document).filter((r6) => r6.id !== excludeId && r6.rect.height > 0);
+function resolvePlacement(rowId, rowChildren, relativeY) {
+  let placement;
+  if (relativeY < BEFORE_AFTER_ZONE) {
+    placement = "before";
+  } else if (relativeY > 1 - BEFORE_AFTER_ZONE) {
+    placement = "after";
+  } else {
+    placement = "inside";
+  }
+  if (placement === "after" && rowChildren.length > 0) {
+    return { id: rowChildren[0].id, placement: "before" };
+  }
+  return { id: rowId, placement };
+}
+function findDropTarget(y3, rows) {
   if (rows.length === 0) {
     return void 0;
   }
@@ -1852,17 +1828,6 @@ function nearestRowFallback(x2, y3, excludeId) {
   }
   const relativeY = (y3 - nearest.rect.top) / nearest.rect.height;
   return resolvePlacement(nearest.id, nearest.children, relativeY);
-}
-function hitTestRow(x2, y3, excludeId) {
-  const el = deepElementFromPoint(x2, y3);
-  const itemEl = closestAcrossShadowRoots(el, "todo-overlay-tree-item");
-  if (!itemEl?.item || itemEl.item.id === excludeId) {
-    return nearestRowFallback(x2, y3, excludeId);
-  }
-  const rowEl = itemEl.shadowRoot?.querySelector(".row");
-  const rect = (rowEl ?? itemEl).getBoundingClientRect();
-  const relativeY = (y3 - rect.top) / rect.height;
-  return resolvePlacement(itemEl.item.id, itemEl.item.children, relativeY);
 }
 var UNDO_TIMEOUT_MS = 8e3;
 function findItem(items, id) {
@@ -1888,12 +1853,13 @@ var TodoOverlayCard = class extends i4 {
   constructor() {
     super(...arguments);
     this.dragGhostOffset = { x: 0, y: 0 };
+    this.rowSnapshot = [];
     this.quickAddValue = "";
     this.saveLoadValue = EMPTY_SAVE_LOAD_VALUE;
     this.savedNames = [];
     this.onGlobalPointerMove = (e7) => {
       this.ghostPosition = { x: e7.clientX, y: e7.clientY };
-      const hit = hitTestRow(e7.clientX, e7.clientY, this.draggedId);
+      const hit = findDropTarget(e7.clientY, this.rowSnapshot);
       this.hoverId = hit && hit.id !== this.draggedId ? hit.id : void 0;
       this.hoverPlacement = hit && hit.id !== this.draggedId ? hit.placement : void 0;
     };
@@ -1908,6 +1874,7 @@ var TodoOverlayCard = class extends i4 {
       this.draggedId = void 0;
       this.hoverId = void 0;
       this.hoverPlacement = void 0;
+      this.rowSnapshot = [];
       if (draggedId && hoverId && draggedId !== hoverId) {
         try {
           await moveItem(
@@ -1970,16 +1937,22 @@ var TodoOverlayCard = class extends i4 {
   // still scrolls the page normally, and only a sustained hold-then-
   // move actually picks an item up. Once that happens, this component
   // takes over entirely via window-level listeners and its own
-  // hit-testing (hitTestRow), rather than relying on the dragged
-  // item's own bubbled events for hover detection.
+  // hit-testing (findDropTarget against a frozen row snapshot, see
+  // its own comment for why it's frozen), rather than relying on the
+  // dragged item's own bubbled events for hover detection.
   onPointerDown(e7) {
     this.draggedId = e7.detail.id;
+  }
+  snapshotRows() {
+    this.rowSnapshot = collectAllRows(document).filter((row) => row.id !== this.draggedId);
   }
   onDragStart(e7) {
     const { rect, pointerX, pointerY } = e7.detail;
     this.dragGhostOffset = rect ? { x: pointerX - rect.x, y: pointerY - rect.y } : { x: 0, y: 0 };
     this.dragGhostSize = rect ? { width: rect.width, height: rect.height } : void 0;
     this.ghostPosition = { x: pointerX, y: pointerY };
+    this.snapshotRows();
+    requestAnimationFrame(() => this.snapshotRows());
     window.addEventListener("pointermove", this.onGlobalPointerMove, { capture: true });
     window.addEventListener("pointerup", this.onGlobalPointerUp, { capture: true });
     window.addEventListener("pointercancel", this.onGlobalPointerUp, { capture: true });

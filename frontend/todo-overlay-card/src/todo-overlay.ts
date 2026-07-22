@@ -36,50 +36,38 @@ import "./components/todo-tree";
 import "./components/todo-item-dialog";
 import "./components/todo-save-load-dialog";
 
-// Hit-testing pierces shadow roots manually - elementFromPoint alone
-// only reliably returns the outermost custom element in every browser,
-// and .closest() doesn't cross shadow boundaries either. This is what
-// makes drag-and-drop actually work on touch: a touch pointer is
-// implicitly captured to whichever element it started on, so relying
-// on pointerenter/pointermove firing on OTHER rows (the old approach)
-// never worked for a real finger drag - only for a mouse, which
-// doesn't get that implicit capture. Doing our own hit-test from
-// scratch on every pointermove sidesteps the whole issue.
-function deepElementFromPoint(x: number, y: number): Element | null {
-    let el: Element | null = document.elementFromPoint(x, y);
-
-    while (el && el.shadowRoot) {
-        const inner = el.shadowRoot.elementFromPoint(x, y);
-
-        if (!inner || inner === el) {
-            break;
-        }
-
-        el = inner;
-    }
-
-    return el;
-}
-
-function closestAcrossShadowRoots(start: Element | null, selector: string): Element | null {
-    let current: Element | null = start;
-
-    while (current) {
-        const found = current.closest(selector);
-
-        if (found) {
-            return found;
-        }
-
-        const root = current.getRootNode();
-        current = root instanceof ShadowRoot ? (root.host as Element) : null;
-    }
-
-    return null;
-}
-
 interface TreeItemElement extends Element {
     item?: TodoItem;
+}
+
+type RowSnapshot = {id: string; children: TodoItem[]; rect: DOMRect};
+
+// Recursively collects every rendered row across all nested shadow roots.
+// Reaching even the FIRST todo-overlay-tree-item at all means crossing
+// several ancestor shadow roots (ha-card, todo-overlay-card,
+// todo-overlay-tree) that don't themselves match the selector - so this has
+// to walk every element's shadow root, not just the ones that happen to
+// match.
+function collectAllRows(root: ParentNode): RowSnapshot[] {
+    const rows: RowSnapshot[] = [];
+
+    for (const el of Array.from(root.querySelectorAll("*"))) {
+        const itemEl = el as TreeItemElement;
+
+        if (el.localName === "todo-overlay-tree-item" && itemEl.item) {
+            const rowEl = itemEl.shadowRoot?.querySelector(".row");
+
+            if (rowEl) {
+                rows.push({id: itemEl.item.id, children: itemEl.item.children, rect: rowEl.getBoundingClientRect()});
+            }
+        }
+
+        if (el.shadowRoot) {
+            rows.push(...collectAllRows(el.shadowRoot));
+        }
+    }
+
+    return rows;
 }
 
 // "inside" always appends as the LAST child of the anchor (see manager.py's
@@ -114,45 +102,18 @@ function resolvePlacement(
     return {id: rowId, placement};
 }
 
-// Recursively collects every rendered row across all nested shadow roots,
-// so the "above the top item" / "below the bottom item" fallback below can
-// find the actual topmost/bottommost row rather than giving up. Reaching
-// even the FIRST todo-overlay-tree-item at all means crossing several
-// ancestor shadow roots (ha-card, todo-overlay-card, todo-overlay-tree)
-// that don't themselves match the selector - so this has to walk every
-// element's shadow root, not just the ones that happen to match.
-function collectAllRows(root: ParentNode): {id: string; children: TodoItem[]; rect: DOMRect}[] {
-    const rows: {id: string; children: TodoItem[]; rect: DOMRect}[] = [];
-
-    for (const el of Array.from(root.querySelectorAll("*"))) {
-        const itemEl = el as TreeItemElement;
-
-        if (el.localName === "todo-overlay-tree-item" && itemEl.item) {
-            const rowEl = itemEl.shadowRoot?.querySelector(".row");
-
-            if (rowEl) {
-                rows.push({id: itemEl.item.id, children: itemEl.item.children, rect: rowEl.getBoundingClientRect()});
-            }
-        }
-
-        if (el.shadowRoot) {
-            rows.push(...collectAllRows(el.shadowRoot));
-        }
-    }
-
-    return rows;
-}
-
-// A direct hit-test only recognizes a drop target when the pointer lands
-// exactly on some row's own rectangle - once the pointer moves above the
-// very first row or below the very last one (an easy thing to do, since
-// that's exactly where you'd aim to drop something at either end of the
-// list), elementFromPoint finds nothing, and dragging would silently lose
-// its target. Falling back to the nearest row by vertical distance (rather
-// than requiring literal containment) fixes both ends at once.
-function nearestRowFallback(x: number, y: number, excludeId?: string): {id: string; placement: Placement} | undefined {
-    const rows = collectAllRows(document).filter(r => r.id !== excludeId && r.rect.height > 0);
-
+// Hit-testing against LIVE row positions creates a feedback loop: hovering
+// near a boundary opens a "gap" (a margin shift) on the rows next to it,
+// which moves those rows' rects, which can put a now-stationary pointer over
+// a *different* row's new zone, which opens a different gap, moving things
+// again - the drop target oscillates even while the pointer holds still.
+// Snapshotting every row's rect once when the drag engages, and hit-testing
+// against that frozen snapshot for the rest of the gesture, breaks the loop:
+// the coordinates being tested against never move in response to their own
+// output. Distance-to-nearest-row (rather than requiring the pointer land
+// inside a row's rect) also naturally covers dragging above the first item
+// or below the last, where a direct hit would otherwise find nothing.
+function findDropTarget(y: number, rows: RowSnapshot[]): {id: string; placement: Placement} | undefined {
     if (rows.length === 0) {
         return undefined;
     }
@@ -176,21 +137,6 @@ function nearestRowFallback(x: number, y: number, excludeId?: string): {id: stri
     const relativeY = (y - nearest.rect.top) / nearest.rect.height;
 
     return resolvePlacement(nearest.id, nearest.children, relativeY);
-}
-
-function hitTestRow(x: number, y: number, excludeId?: string): {id: string; placement: Placement} | undefined {
-    const el = deepElementFromPoint(x, y);
-    const itemEl = closestAcrossShadowRoots(el, "todo-overlay-tree-item") as TreeItemElement | null;
-
-    if (!itemEl?.item || itemEl.item.id === excludeId) {
-        return nearestRowFallback(x, y, excludeId);
-    }
-
-    const rowEl = itemEl.shadowRoot?.querySelector(".row");
-    const rect = (rowEl ?? itemEl).getBoundingClientRect();
-    const relativeY = (y - rect.top) / rect.height;
-
-    return resolvePlacement(itemEl.item.id, itemEl.item.children, relativeY);
 }
 
 export interface TodoOverlayCardConfig {
@@ -403,6 +349,7 @@ export class TodoOverlayCard extends LitElement {
 
     private dragGhostOffset = {x: 0, y: 0};
     private dragGhostSize?: {width: number; height: number};
+    private rowSnapshot: RowSnapshot[] = [];
 
     @state()
     private dialogMode?: "create" | "edit";
@@ -488,11 +435,16 @@ export class TodoOverlayCard extends LitElement {
     // still scrolls the page normally, and only a sustained hold-then-
     // move actually picks an item up. Once that happens, this component
     // takes over entirely via window-level listeners and its own
-    // hit-testing (hitTestRow), rather than relying on the dragged
-    // item's own bubbled events for hover detection.
+    // hit-testing (findDropTarget against a frozen row snapshot, see
+    // its own comment for why it's frozen), rather than relying on the
+    // dragged item's own bubbled events for hover detection.
 
     private onPointerDown(e: CustomEvent) {
         this.draggedId = e.detail.id;
+    }
+
+    private snapshotRows() {
+        this.rowSnapshot = collectAllRows(document).filter(row => row.id !== this.draggedId);
     }
 
     private onDragStart(e: CustomEvent) {
@@ -503,6 +455,18 @@ export class TodoOverlayCard extends LitElement {
             : {x: 0, y: 0};
         this.dragGhostSize = rect ? {width: rect.width, height: rect.height} : undefined;
         this.ghostPosition = {x: pointerX, y: pointerY};
+
+        // Captured twice: immediately (approximate - the dragged row's own
+        // collapse to its lifted placeholder hasn't rendered yet, since
+        // that's queued as a Lit update) and again next frame, once that
+        // collapse has actually painted and every other row has settled
+        // into its final resting position. Snapshotting only once, before
+        // the collapse, would leave every row below the drag origin
+        // measured taller than they end up - close enough to work, but the
+        // immediate capture exists only so there's never a moment with no
+        // snapshot at all (e.g. a release within the same frame it started).
+        this.snapshotRows();
+        requestAnimationFrame(() => this.snapshotRows());
 
         // Capture phase: HA's own frontend has various touch/gesture
         // handling that can call stopPropagation() on the way back up,
@@ -522,7 +486,7 @@ export class TodoOverlayCard extends LitElement {
     private onGlobalPointerMove = (e: PointerEvent) => {
         this.ghostPosition = {x: e.clientX, y: e.clientY};
 
-        const hit = hitTestRow(e.clientX, e.clientY, this.draggedId);
+        const hit = findDropTarget(e.clientY, this.rowSnapshot);
 
         this.hoverId = hit && hit.id !== this.draggedId ? hit.id : undefined;
         this.hoverPlacement = hit && hit.id !== this.draggedId ? hit.placement : undefined;
@@ -541,6 +505,7 @@ export class TodoOverlayCard extends LitElement {
         this.draggedId = undefined;
         this.hoverId = undefined;
         this.hoverPlacement = undefined;
+        this.rowSnapshot = [];
 
         if (draggedId && hoverId && draggedId !== hoverId) {
             try {
