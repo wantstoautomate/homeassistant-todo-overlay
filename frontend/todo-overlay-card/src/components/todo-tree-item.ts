@@ -133,6 +133,13 @@ export class TodoTreeItem extends LitElement {
             gap: 2px;
         }
 
+        .title-line {
+            display: flex;
+            align-items: baseline;
+            gap: 6px;
+            min-width: 0;
+        }
+
         .summary {
             font-family: Roboto, "Noto Sans", sans-serif;
             font-size: 14px;
@@ -142,6 +149,23 @@ export class TodoTreeItem extends LitElement {
             overflow: hidden;
             text-overflow: ellipsis;
             white-space: nowrap;
+        }
+
+        .quantity-chip {
+            flex-shrink: 0;
+            font-family: Roboto, "Noto Sans", sans-serif;
+            font-size: 12px;
+            font-weight: 600;
+            color: var(--primary-color);
+            background: rgba(var(--rgb-primary-color, 3, 169, 244), 0.12);
+            padding: 1px 7px;
+            border-radius: 10px;
+            white-space: nowrap;
+        }
+
+        .row.completed .quantity-chip {
+            color: var(--secondary-text-color);
+            background: rgba(var(--rgb-primary-text-color, 0, 0, 0), 0.08);
         }
 
         .row.completed .summary {
@@ -380,7 +404,14 @@ export class TodoTreeItem extends LitElement {
                     <ha-checkbox .checked=${this.item.completed}></ha-checkbox>
 
                     <div class="content">
-                        <span class="summary">${this.item.title}</span>
+                        <div class="title-line">
+                            ${
+                                this.item.quantity
+                                    ? html`<span class="quantity-chip">${this.item.quantity}</span>`
+                                    : ""
+                            }
+                            <span class="summary">${this.item.title}</span>
+                        </div>
 
                         ${
                             hasMeta

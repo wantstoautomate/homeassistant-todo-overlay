@@ -68,6 +68,50 @@ export async function restoreCompleted(
 
 }
 
+export interface CreateItemFields {
+    title: string;
+    description?: string;
+    dueDate?: string;
+    dueDatetime?: string;
+    quantity?: string;
+}
+
+export async function createItem(
+    hass: HassLike,
+    entityId: string,
+    fields: CreateItemFields,
+): Promise<string> {
+
+    const result = await hass.connection.sendMessagePromise<{id: string}>({
+        type: "todo_overlay/create_item",
+        entity_id: entityId,
+        title: fields.title,
+        description: fields.description,
+        due_date: fields.dueDate,
+        due_datetime: fields.dueDatetime,
+        quantity: fields.quantity,
+    });
+
+    return result.id;
+
+}
+
+export async function setQuantity(
+    hass: HassLike,
+    entityId: string,
+    itemId: string,
+    quantity: string | undefined,
+): Promise<void> {
+
+    await hass.connection.sendMessagePromise<void>({
+        type: "todo_overlay/set_quantity",
+        entity_id: entityId,
+        item_id: itemId,
+        quantity,
+    });
+
+}
+
 export async function clearCompleted(
     hass: HassLike,
     entityId: string,

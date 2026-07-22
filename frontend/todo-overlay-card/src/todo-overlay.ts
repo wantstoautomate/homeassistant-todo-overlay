@@ -4,10 +4,12 @@ import {customElement, property, state} from "lit/decorators.js";
 import {
     type CompletionChange,
     clearCompleted,
+    createItem,
     getList,
     moveItem,
     restoreCompleted,
     setCompleted,
+    setQuantity,
 } from "./api";
 import type {HassLike} from "./hass";
 import {
@@ -381,6 +383,7 @@ export class TodoOverlayCard extends LitElement {
 
             return {
                 title: this.dialogItem.title,
+                quantity: this.dialogItem.quantity ?? "",
                 description: this.dialogItem.description ?? "",
                 dueDate: due.date,
                 dueTime: due.time,
@@ -394,31 +397,46 @@ export class TodoOverlayCard extends LitElement {
         const value = e.detail;
         const support = this.fieldSupport;
 
-        const serviceData: Record<string, unknown> = {
-            entity_id: this.config.entity,
-        };
+        const description = support.description ? value.description : undefined;
 
-        if (support.description) {
-            serviceData.description = value.description;
-        }
+        let dueDate: string | undefined;
+        let dueDatetime: string | undefined;
 
         if (support.dueDateTime && value.dueDate && value.dueTime) {
-            serviceData.due_datetime = `${value.dueDate}T${value.dueTime}:00`;
+            dueDatetime = `${value.dueDate}T${value.dueTime}:00`;
         } else if (support.dueDate && value.dueDate) {
-            serviceData.due_date = value.dueDate;
+            dueDate = value.dueDate;
         }
+
+        const quantity = value.quantity.trim() || undefined;
 
         try {
             if (this.dialogMode === "edit" && this.dialogItem) {
-                await this.hass.callService("todo", "update_item", {
-                    ...serviceData,
+                const serviceData: Record<string, unknown> = {
+                    entity_id: this.config.entity,
                     item: this.dialogItem.id,
                     rename: value.title,
-                });
+                };
+
+                if (description !== undefined) {
+                    serviceData.description = description;
+                }
+
+                if (dueDatetime) {
+                    serviceData.due_datetime = dueDatetime;
+                } else if (dueDate) {
+                    serviceData.due_date = dueDate;
+                }
+
+                await this.hass.callService("todo", "update_item", serviceData);
+                await setQuantity(this.hass, this.config.entity, this.dialogItem.id, quantity);
             } else {
-                await this.hass.callService("todo", "add_item", {
-                    ...serviceData,
-                    item: value.title,
+                await createItem(this.hass, this.config.entity, {
+                    title: value.title,
+                    description,
+                    dueDate,
+                    dueDatetime,
+                    quantity,
                 });
             }
 

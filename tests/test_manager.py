@@ -76,9 +76,32 @@ class FakeMetadataStore:
         self._positions = positions or {}
         self.set_positions_calls: list[tuple[str, dict[str, ItemPosition]]] = []
         self._snapshots: dict[str, dict] = {}
+        self._quantities: dict[str, str] = {}
 
     async def get_relationships(self, entity_id: str) -> dict[str, ItemPosition]:
         return dict(self._positions)
+
+    async def get_quantities(self, entity_id: str) -> dict[str, str]:
+        return dict(self._quantities)
+
+    async def set_quantity(
+        self,
+        entity_id: str,
+        item_id: str,
+        quantity: str | None,
+    ) -> None:
+        if quantity:
+            self._quantities[item_id] = quantity
+        else:
+            self._quantities.pop(item_id, None)
+
+    async def remove_quantities(
+        self,
+        entity_id: str,
+        item_ids: list[str],
+    ) -> None:
+        for item_id in item_ids:
+            self._quantities.pop(item_id, None)
 
     async def set_positions(
         self,
@@ -173,6 +196,7 @@ async def test_manager_returns_serialisable_list():
                 "description": None,
                 "due_date": None,
                 "due_datetime": None,
+                "quantity": None,
                 "children": [
                     {
                         "id": "2",
@@ -181,6 +205,7 @@ async def test_manager_returns_serialisable_list():
                         "description": None,
                         "due_date": None,
                         "due_datetime": None,
+                        "quantity": None,
                         "children": [],
                     }
                 ],
@@ -735,3 +760,139 @@ async def test_manager_list_saved_and_delete_saved():
     await manager.delete_saved("todo.shopping", "a")
 
     assert await manager.list_saved("todo.shopping") == ["b"]
+
+
+@pytest.mark.asyncio
+async def test_manager_create_item_sets_quantity():
+
+    adapter = FakeAdapter(items=[])
+    metadata_store = FakeMetadataStore()
+    manager = TodoManager(adapter=adapter, metadata_store=metadata_store)
+
+    item_id = await manager.create_item(
+        entity_id="todo.shopping",
+        title="Salami",
+        quantity="150g",
+    )
+
+    assert adapter.add_item_calls == [("todo.shopping", "Salami")]
+
+    todo_list = await manager.get_list("todo.shopping")
+    assert todo_list.items[0].id == item_id
+    assert todo_list.items[0].quantity == "150g"
+
+
+@pytest.mark.asyncio
+async def test_manager_set_quantity_updates_and_clears():
+
+    adapter = FakeAdapter(items=[TodoItem(id="1", title="Salami", completed=False)])
+    metadata_store = FakeMetadataStore({"1": ItemPosition(parent_id=None, order=0)})
+    manager = TodoManager(adapter=adapter, metadata_store=metadata_store)
+
+    await manager.set_quantity("todo.shopping", "1", "150g")
+    todo_list = await manager.get_list("todo.shopping")
+    assert todo_list.items[0].quantity == "150g"
+
+    await manager.set_quantity("todo.shopping", "1", None)
+    todo_list_after = await manager.get_list("todo.shopping")
+    assert todo_list_after.items[0].quantity is None
+
+
+@pytest.mark.asyncio
+async def test_manager_save_and_load_list_round_trips_quantity():
+
+    adapter = FakeAdapter(items=[TodoItem(id="1", title="Salami", completed=False)])
+    metadata_store = FakeMetadataStore({"1": ItemPosition(parent_id=None, order=0)})
+    manager = TodoManager(adapter=adapter, metadata_store=metadata_store)
+
+    await manager.set_quantity("todo.shopping", "1", "150g")
+    await manager.save_list(entity_id="todo.shopping", name="template")
+
+    await manager.load_list(entity_id="todo.shopping", name="template", mode="full_merge")
+
+    todo_list = await manager.get_list("todo.shopping")
+    salamis = [item for item in todo_list.items if item.title == "Salami"]
+    assert len(salamis) == 2
+    assert all(item.quantity == "150g" for item in salamis)
+
+
+@pytest.mark.asyncio
+async def test_manager_load_list_merge_combines_matching_quantities():
+
+    adapter = FakeAdapter(items=[TodoItem(id="1", title="Salami", completed=False)])
+    metadata_store = FakeMetadataStore({"1": ItemPosition(parent_id=None, order=0)})
+    manager = TodoManager(adapter=adapter, metadata_store=metadata_store)
+
+    await manager.set_quantity("todo.shopping", "1", "150g")
+
+    await metadata_store.save_snapshot("todo.shopping", "template", [
+        {
+            "title": "Salami",
+            "description": None,
+            "due_date": None,
+            "due_datetime": None,
+            "quantity": "200g",
+            "completed": False,
+            "children": [],
+        },
+    ])
+
+    await manager.load_list(entity_id="todo.shopping", name="template", mode="merge")
+
+    todo_list = await manager.get_list("todo.shopping")
+
+    # Merged into the SAME existing item - no duplicate "Salami" line -
+    # with quantities added together since both share a unit.
+    assert len(todo_list.items) == 1
+    assert todo_list.items[0].quantity == "350g"
+
+
+@pytest.mark.asyncio
+async def test_manager_load_list_merge_leaves_mismatched_units_untouched():
+
+    adapter = FakeAdapter(items=[TodoItem(id="1", title="Salami", completed=False)])
+    metadata_store = FakeMetadataStore({"1": ItemPosition(parent_id=None, order=0)})
+    manager = TodoManager(adapter=adapter, metadata_store=metadata_store)
+
+    await manager.set_quantity("todo.shopping", "1", "150g")
+
+    await metadata_store.save_snapshot("todo.shopping", "template", [
+        {
+            "title": "Salami",
+            "description": None,
+            "due_date": None,
+            "due_datetime": None,
+            "quantity": "2 packs",
+            "completed": False,
+            "children": [],
+        },
+    ])
+
+    await manager.load_list(entity_id="todo.shopping", name="template", mode="merge")
+
+    todo_list = await manager.get_list("todo.shopping")
+
+    # Units don't match ("g" vs "packs") - can't confidently combine,
+    # so the existing quantity is left exactly as it was.
+    assert len(todo_list.items) == 1
+    assert todo_list.items[0].quantity == "150g"
+
+
+def test_combine_quantities_adds_matching_units():
+    assert TodoManager._combine_quantities("150g", "200g") == "350g"
+
+
+def test_combine_quantities_adopts_incoming_when_existing_missing():
+    assert TodoManager._combine_quantities(None, "200g") == "200g"
+
+
+def test_combine_quantities_keeps_existing_when_incoming_missing():
+    assert TodoManager._combine_quantities("150g", None) is None
+
+
+def test_combine_quantities_none_for_mismatched_units():
+    assert TodoManager._combine_quantities("150g", "2 packs") is None
+
+
+def test_combine_quantities_bare_counts():
+    assert TodoManager._combine_quantities("2", "3") == "5"

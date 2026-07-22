@@ -27,6 +27,27 @@ def test_build_tree():
     assert root.children[1].id == "3"
 
 
+def test_build_tree_attaches_quantities():
+    items = [
+        TodoItem(id="1", title="Salami", completed=False),
+        TodoItem(id="2", title="Milk", completed=False),
+    ]
+
+    positions = {
+        "1": ItemPosition(parent_id=None, order=0),
+        "2": ItemPosition(parent_id=None, order=1),
+    }
+
+    quantities = {"1": "150g"}
+
+    tree = build_tree(items, positions, quantities)
+
+    assert tree[0].quantity == "150g"
+    # No stored quantity for "Milk" - stays None rather than stale data
+    # left over from a previous build_tree call on the same objects.
+    assert tree[1].quantity is None
+
+
 def test_build_tree_sorts_by_order():
     items = [
         TodoItem(id="1", title="First", completed=False),

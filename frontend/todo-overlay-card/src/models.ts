@@ -5,6 +5,7 @@ export interface TodoItem {
     description: string | null;
     due_date: string | null;
     due_datetime: string | null;
+    quantity: string | null;
     children: TodoItem[];
 }
 

@@ -3,6 +3,7 @@ import {customElement, property} from "lit/decorators.js";
 
 export interface TodoItemFormValue {
     title: string;
+    quantity: string;
     description: string;
     dueDate: string;
     dueTime: string;
@@ -16,6 +17,7 @@ export interface TodoItemDialogFieldSupport {
 
 export const EMPTY_FORM_VALUE: TodoItemFormValue = {
     title: "",
+    quantity: "",
     description: "",
     dueDate: "",
     dueTime: "",
@@ -48,6 +50,21 @@ export class TodoItemDialog extends LitElement {
         .due-row .field {
             flex: 1;
             min-width: 140px;
+        }
+
+        .title-row {
+            display: flex;
+            gap: 16px;
+        }
+
+        .title-row .field.title {
+            flex: 2;
+            min-width: 0;
+        }
+
+        .title-row .field.quantity {
+            flex: 1;
+            min-width: 90px;
         }
 
         label {
@@ -155,15 +172,29 @@ export class TodoItemDialog extends LitElement {
 
         return html`
             <ha-dialog open .heading=${this.heading} @closed=${this.close}>
-                <div class="field">
-                    <label for="todo-item-title">Title</label>
-                    <input
-                        id="todo-item-title"
-                        type="text"
-                        .value=${this.value.title}
-                        @input=${(e: InputEvent) =>
-                            this.updateField("title", (e.target as HTMLInputElement).value)}
-                    />
+                <div class="title-row">
+                    <div class="field title">
+                        <label for="todo-item-title">Title</label>
+                        <input
+                            id="todo-item-title"
+                            type="text"
+                            .value=${this.value.title}
+                            @input=${(e: InputEvent) =>
+                                this.updateField("title", (e.target as HTMLInputElement).value)}
+                        />
+                    </div>
+
+                    <div class="field quantity">
+                        <label for="todo-item-quantity">Quantity</label>
+                        <input
+                            id="todo-item-quantity"
+                            type="text"
+                            placeholder="e.g. 150g"
+                            .value=${this.value.quantity}
+                            @input=${(e: InputEvent) =>
+                                this.updateField("quantity", (e.target as HTMLInputElement).value)}
+                        />
+                    </div>
                 </div>
 
                 ${

@@ -8,6 +8,7 @@ from .const import (
     DATA_MANAGER,
     DOMAIN,
     WS_TYPE_CLEAR_COMPLETED,
+    WS_TYPE_CREATE_ITEM,
     WS_TYPE_GET_LIST,
     WS_TYPE_LIST_SAVED,
     WS_TYPE_LOAD_LIST,
@@ -15,6 +16,7 @@ from .const import (
     WS_TYPE_RESTORE_COMPLETED,
     WS_TYPE_SAVE_LIST,
     WS_TYPE_SET_COMPLETED,
+    WS_TYPE_SET_QUANTITY,
 )
 
 
@@ -238,6 +240,66 @@ async def websocket_list_saved(
     connection.send_result(msg["id"], {"names": names})
 
 
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): WS_TYPE_CREATE_ITEM,
+        vol.Required("entity_id"): cv.entity_id,
+        vol.Required("title"): str,
+        vol.Optional("description"): str,
+        vol.Optional("due_date"): str,
+        vol.Optional("due_datetime"): str,
+        vol.Optional("quantity"): str,
+    }
+)
+@websocket_api.async_response
+async def websocket_create_item(
+    hass: HomeAssistant,
+    connection: websocket_api.ActiveConnection,
+    msg,
+) -> None:
+    """Create an item, including overlay-only fields like quantity."""
+
+    manager = hass.data[DOMAIN][DATA_MANAGER]
+
+    item_id = await manager.create_item(
+        entity_id=msg["entity_id"],
+        title=msg["title"],
+        description=msg.get("description"),
+        due_date=msg.get("due_date"),
+        due_datetime=msg.get("due_datetime"),
+        quantity=msg.get("quantity"),
+    )
+
+    connection.send_result(msg["id"], {"id": item_id})
+
+
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): WS_TYPE_SET_QUANTITY,
+        vol.Required("entity_id"): cv.entity_id,
+        vol.Required("item_id"): str,
+        vol.Optional("quantity"): str,
+    }
+)
+@websocket_api.async_response
+async def websocket_set_quantity(
+    hass: HomeAssistant,
+    connection: websocket_api.ActiveConnection,
+    msg,
+) -> None:
+    """Set (or clear) an item's quantity."""
+
+    manager = hass.data[DOMAIN][DATA_MANAGER]
+
+    await manager.set_quantity(
+        entity_id=msg["entity_id"],
+        item_id=msg["item_id"],
+        quantity=msg.get("quantity"),
+    )
+
+    connection.send_result(msg["id"])
+
+
 def async_register_websocket(hass: HomeAssistant) -> None:
     for handler in (
         websocket_get_list,
@@ -248,5 +310,7 @@ def async_register_websocket(hass: HomeAssistant) -> None:
         websocket_save_list,
         websocket_load_list,
         websocket_list_saved,
+        websocket_create_item,
+        websocket_set_quantity,
     ):
         websocket_api.async_register_command(hass, handler)

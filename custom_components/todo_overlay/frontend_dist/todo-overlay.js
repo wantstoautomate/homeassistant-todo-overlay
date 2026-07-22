@@ -633,6 +633,26 @@ async function restoreCompleted(hass, entityId, changes) {
     changes
   });
 }
+async function createItem(hass, entityId, fields) {
+  const result = await hass.connection.sendMessagePromise({
+    type: "todo_overlay/create_item",
+    entity_id: entityId,
+    title: fields.title,
+    description: fields.description,
+    due_date: fields.dueDate,
+    due_datetime: fields.dueDatetime,
+    quantity: fields.quantity
+  });
+  return result.id;
+}
+async function setQuantity(hass, entityId, itemId, quantity) {
+  await hass.connection.sendMessagePromise({
+    type: "todo_overlay/set_quantity",
+    entity_id: entityId,
+    item_id: itemId,
+    quantity
+  });
+}
 async function clearCompleted(hass, entityId) {
   const result = await hass.connection.sendMessagePromise({
     type: "todo_overlay/clear_completed",
@@ -659,6 +679,7 @@ function supportsFeature(supportedFeatures, feature) {
 // src/components/todo-item-dialog.ts
 var EMPTY_FORM_VALUE = {
   title: "",
+  quantity: "",
   description: "",
   dueDate: "",
   dueTime: ""
@@ -701,14 +722,27 @@ var TodoItemDialog = class extends i4 {
     const showDue = this.fieldSupport.dueDate || this.fieldSupport.dueDateTime;
     return b2`
             <ha-dialog open .heading=${this.heading} @closed=${this.close}>
-                <div class="field">
-                    <label for="todo-item-title">Title</label>
-                    <input
-                        id="todo-item-title"
-                        type="text"
-                        .value=${this.value.title}
-                        @input=${(e7) => this.updateField("title", e7.target.value)}
-                    />
+                <div class="title-row">
+                    <div class="field title">
+                        <label for="todo-item-title">Title</label>
+                        <input
+                            id="todo-item-title"
+                            type="text"
+                            .value=${this.value.title}
+                            @input=${(e7) => this.updateField("title", e7.target.value)}
+                        />
+                    </div>
+
+                    <div class="field quantity">
+                        <label for="todo-item-quantity">Quantity</label>
+                        <input
+                            id="todo-item-quantity"
+                            type="text"
+                            placeholder="e.g. 150g"
+                            .value=${this.value.quantity}
+                            @input=${(e7) => this.updateField("quantity", e7.target.value)}
+                        />
+                    </div>
                 </div>
 
                 ${this.fieldSupport.description ? b2`
@@ -789,6 +823,21 @@ TodoItemDialog.styles = i`
         .due-row .field {
             flex: 1;
             min-width: 140px;
+        }
+
+        .title-row {
+            display: flex;
+            gap: 16px;
+        }
+
+        .title-row .field.title {
+            flex: 2;
+            min-width: 0;
+        }
+
+        .title-row .field.quantity {
+            flex: 1;
+            min-width: 90px;
         }
 
         label {
@@ -1095,7 +1144,10 @@ var TodoTreeItem = class extends i4 {
                     <ha-checkbox .checked=${this.item.completed}></ha-checkbox>
 
                     <div class="content">
-                        <span class="summary">${this.item.title}</span>
+                        <div class="title-line">
+                            ${this.item.quantity ? b2`<span class="quantity-chip">${this.item.quantity}</span>` : ""}
+                            <span class="summary">${this.item.title}</span>
+                        </div>
 
                         ${hasMeta ? b2`
                                     <div class="row-meta">
@@ -1210,6 +1262,13 @@ TodoTreeItem.styles = i`
             gap: 2px;
         }
 
+        .title-line {
+            display: flex;
+            align-items: baseline;
+            gap: 6px;
+            min-width: 0;
+        }
+
         .summary {
             font-family: Roboto, "Noto Sans", sans-serif;
             font-size: 14px;
@@ -1219,6 +1278,23 @@ TodoTreeItem.styles = i`
             overflow: hidden;
             text-overflow: ellipsis;
             white-space: nowrap;
+        }
+
+        .quantity-chip {
+            flex-shrink: 0;
+            font-family: Roboto, "Noto Sans", sans-serif;
+            font-size: 12px;
+            font-weight: 600;
+            color: var(--primary-color);
+            background: rgba(var(--rgb-primary-color, 3, 169, 244), 0.12);
+            padding: 1px 7px;
+            border-radius: 10px;
+            white-space: nowrap;
+        }
+
+        .row.completed .quantity-chip {
+            color: var(--secondary-text-color);
+            background: rgba(var(--rgb-primary-text-color, 0, 0, 0), 0.08);
         }
 
         .row.completed .summary {
@@ -1523,6 +1599,7 @@ var TodoOverlayCard = class extends i4 {
       const due = this.dialogItem.due_datetime ? splitDueDateTime(this.dialogItem.due_datetime) : { date: this.dialogItem.due_date ?? "", time: "" };
       return {
         title: this.dialogItem.title,
+        quantity: this.dialogItem.quantity ?? "",
         description: this.dialogItem.description ?? "",
         dueDate: due.date,
         dueTime: due.time
@@ -1533,28 +1610,39 @@ var TodoOverlayCard = class extends i4 {
   async onDialogSave(e7) {
     const value = e7.detail;
     const support = this.fieldSupport;
-    const serviceData = {
-      entity_id: this.config.entity
-    };
-    if (support.description) {
-      serviceData.description = value.description;
-    }
+    const description = support.description ? value.description : void 0;
+    let dueDate;
+    let dueDatetime;
     if (support.dueDateTime && value.dueDate && value.dueTime) {
-      serviceData.due_datetime = `${value.dueDate}T${value.dueTime}:00`;
+      dueDatetime = `${value.dueDate}T${value.dueTime}:00`;
     } else if (support.dueDate && value.dueDate) {
-      serviceData.due_date = value.dueDate;
+      dueDate = value.dueDate;
     }
+    const quantity = value.quantity.trim() || void 0;
     try {
       if (this.dialogMode === "edit" && this.dialogItem) {
-        await this.hass.callService("todo", "update_item", {
-          ...serviceData,
+        const serviceData = {
+          entity_id: this.config.entity,
           item: this.dialogItem.id,
           rename: value.title
-        });
+        };
+        if (description !== void 0) {
+          serviceData.description = description;
+        }
+        if (dueDatetime) {
+          serviceData.due_datetime = dueDatetime;
+        } else if (dueDate) {
+          serviceData.due_date = dueDate;
+        }
+        await this.hass.callService("todo", "update_item", serviceData);
+        await setQuantity(this.hass, this.config.entity, this.dialogItem.id, quantity);
       } else {
-        await this.hass.callService("todo", "add_item", {
-          ...serviceData,
-          item: value.title
+        await createItem(this.hass, this.config.entity, {
+          title: value.title,
+          description,
+          dueDate,
+          dueDatetime,
+          quantity
         });
       }
       await this.load();

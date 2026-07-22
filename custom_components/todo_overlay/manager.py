@@ -1,11 +1,17 @@
 from __future__ import annotations
 
+import re
 from typing import Literal
 
 from .ha_adapter import HomeAssistantTodoProvider
 from .metadata_store import MetadataStore
 from .models import ItemPosition, TodoItem, TodoList
 from .tree import build_tree
+
+# A leading numeric amount, an optional separating space, then a unit
+# (which may itself be empty for a bare count like "3"). Used to combine
+# matching quantities on a merge-mode load, e.g. "150g" + "200g" -> "350g".
+_QUANTITY_PATTERN = re.compile(r"^\s*(\d+(?:\.\d+)?)(\s*)(.*?)\s*$")
 
 Placement = Literal["before", "after", "inside"]
 LoadMode = Literal["replace", "merge", "full_merge"]
@@ -34,10 +40,51 @@ class TodoManager:
             entity_id,
         )
 
+        quantities = await self._metadata_store.get_quantities(entity_id)
+
         return TodoList(
             entity_id=entity_id,
-            items=build_tree(items, positions),
+            items=build_tree(items, positions, quantities),
         )
+
+    async def create_item(
+        self,
+        entity_id: str,
+        title: str,
+        description: str | None = None,
+        due_date: str | None = None,
+        due_datetime: str | None = None,
+        quantity: str | None = None,
+    ) -> str:
+        """Create an item, including overlay-only fields (quantity)
+        that Home Assistant's native todo.add_item has no concept of.
+
+        Returns the new item's id.
+        """
+
+        item_id = await self._adapter.add_item(
+            entity_id,
+            title,
+            description=description,
+            due_date=due_date,
+            due_datetime=due_datetime,
+        )
+
+        if quantity:
+            await self._metadata_store.set_quantity(entity_id, item_id, quantity)
+
+        return item_id
+
+    async def set_quantity(
+        self,
+        entity_id: str,
+        item_id: str,
+        quantity: str | None,
+    ) -> None:
+        """Set (or clear) an item's quantity - overlay-only metadata,
+        since native Home Assistant todo items have no such field."""
+
+        await self._metadata_store.set_quantity(entity_id, item_id, quantity)
 
     async def move_item(
         self,
@@ -297,6 +344,7 @@ class TodoManager:
 
         if removed_ids:
             await self._metadata_store.remove_positions(entity_id, removed_ids)
+            await self._metadata_store.remove_quantities(entity_id, removed_ids)
 
         return removed_ids
 
@@ -390,6 +438,7 @@ class TodoManager:
             "description": item.description,
             "due_date": item.due_date,
             "due_datetime": item.due_datetime,
+            "quantity": item.quantity,
             "completed": item.completed if persist_states else False,
             "children": [
                 TodoManager._snapshot_node(child, persist_states)
@@ -439,6 +488,19 @@ class TodoManager:
 
             if matched_id is not None:
                 target_id = matched_id
+
+                # Already exists - rather than leaving it untouched
+                # outright, combine quantities when possible (e.g.
+                # "150g" + "200g" -> "350g"), so a merge unifies
+                # matching items instead of just ignoring the incoming
+                # amount.
+                existing_quantities = await self._metadata_store.get_quantities(entity_id)
+                combined = self._combine_quantities(
+                    existing_quantities.get(target_id), node.get("quantity")
+                )
+
+                if combined is not None:
+                    await self._metadata_store.set_quantity(entity_id, target_id, combined)
             else:
                 target_id = await self._adapter.add_item(
                     entity_id,
@@ -453,6 +515,9 @@ class TodoManager:
                     {target_id: ItemPosition(parent_id=parent_id, order=next_order)},
                 )
                 next_order += 1
+
+                if node.get("quantity"):
+                    await self._metadata_store.set_quantity(entity_id, target_id, node["quantity"])
 
                 if node.get("completed"):
                     await self._adapter.set_completed(entity_id, target_id, True)
@@ -473,6 +538,44 @@ class TodoManager:
     ) -> int:
         position = positions.get(item_id)
         return position.order if position else 0
+
+    @staticmethod
+    def _combine_quantities(
+        existing: str | None,
+        incoming: str | None,
+    ) -> str | None:
+        """Combine two quantity strings for a merged duplicate.
+
+        Adds the numeric amounts when both share a unit (e.g. "150g" +
+        "200g" -> "350g"), adopts the incoming value outright when the
+        existing item has none, and otherwise leaves the existing value
+        alone (returns None, meaning "nothing to write") rather than
+        guessing when they can't be confidently reconciled - e.g.
+        different or unparseable units.
+        """
+
+        if not incoming:
+            return None
+
+        if not existing:
+            return incoming
+
+        existing_match = _QUANTITY_PATTERN.match(existing)
+        incoming_match = _QUANTITY_PATTERN.match(incoming)
+
+        if not existing_match or not incoming_match:
+            return None
+
+        existing_amount, separator, unit = existing_match.groups()
+        incoming_amount, _, incoming_unit = incoming_match.groups()
+
+        if unit.strip().lower() != incoming_unit.strip().lower():
+            return None
+
+        total = float(existing_amount) + float(incoming_amount)
+        total_str = str(int(total)) if total.is_integer() else str(total)
+
+        return f"{total_str}{separator}{unit}"
 
     @staticmethod
     def _descendants(

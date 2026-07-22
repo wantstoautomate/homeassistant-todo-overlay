@@ -1,7 +1,7 @@
 {
   "domain": "todo_overlay",
   "name": "Todo Overlay",
-  "version": "0.2.7",
+  "version": "0.2.8",
   "documentation": "https://github.com/wantstoautomate/homeassistant-todo-overlay",
   "codeowners": [
     "@wantstoautomate"

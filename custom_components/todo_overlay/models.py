@@ -21,6 +21,7 @@ class TodoItem:
     description: str | None = None
     due_date: str | None = None
     due_datetime: str | None = None
+    quantity: str | None = None
     children: list["TodoItem"] = field(default_factory=list)
 
     def to_dict(self) -> dict:
@@ -31,6 +32,7 @@ class TodoItem:
             "description": self.description,
             "due_date": self.due_date,
             "due_datetime": self.due_datetime,
+            "quantity": self.quantity,
             "children": [child.to_dict() for child in self.children],
         }
 

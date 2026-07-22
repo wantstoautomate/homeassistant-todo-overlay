@@ -7,10 +7,12 @@ from .models import ItemPosition
 STORAGE_VERSION = 2
 STORAGE_KEY = "todo_overlay"
 
-# Saved snapshots live under this reserved top-level cache key, separate
-# from the per-entity position maps (which are keyed directly by entity_id,
-# e.g. "todo.shopping" - always dotted, so this can never collide).
+# Saved snapshots and quantities live under these reserved top-level
+# cache keys, separate from the per-entity position maps (which are
+# keyed directly by entity_id, e.g. "todo.shopping" - always dotted,
+# so this can never collide).
 SNAPSHOTS_KEY = "_snapshots"
+QUANTITIES_KEY = "_quantities"
 
 
 class MetadataStore:
@@ -143,5 +145,58 @@ class MetadataStore:
         assert self._cache is not None
 
         self._cache.get(SNAPSHOTS_KEY, {}).get(entity_id, {}).pop(name, None)
+
+        await self._store.async_save(self._cache)
+
+    async def get_quantities(
+        self,
+        entity_id: str,
+    ) -> dict[str, str]:
+        await self._load()
+
+        assert self._cache is not None
+
+        return dict(self._cache.get(QUANTITIES_KEY, {}).get(entity_id, {}))
+
+    async def set_quantity(
+        self,
+        entity_id: str,
+        item_id: str,
+        quantity: str | None,
+    ) -> None:
+        """Set (or clear, if quantity is falsy) an item's quantity."""
+
+        await self._load()
+
+        assert self._cache is not None
+
+        entity_quantities = self._cache.setdefault(QUANTITIES_KEY, {}).setdefault(entity_id, {})
+
+        if quantity:
+            entity_quantities[item_id] = quantity
+        else:
+            entity_quantities.pop(item_id, None)
+
+        await self._store.async_save(self._cache)
+
+    async def remove_quantities(
+        self,
+        entity_id: str,
+        item_ids: list[str],
+    ) -> None:
+        """Drop stored quantities for items that no longer exist, e.g.
+        after a clear-completed removal."""
+
+        await self._load()
+
+        assert self._cache is not None
+
+        entity_quantities = self._cache.get(QUANTITIES_KEY, {}).get(entity_id)
+
+        if not entity_quantities:
+            return
+
+        for item_id in item_ids:
+            entity_quantities.pop(item_id, None)
 
         await self._store.async_save(self._cache)
