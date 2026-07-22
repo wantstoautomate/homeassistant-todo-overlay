@@ -9,8 +9,11 @@ from .const import (
     DOMAIN,
     WS_TYPE_CLEAR_COMPLETED,
     WS_TYPE_GET_LIST,
+    WS_TYPE_LIST_SAVED,
+    WS_TYPE_LOAD_LIST,
     WS_TYPE_MOVE_ITEM,
     WS_TYPE_RESTORE_COMPLETED,
+    WS_TYPE_SAVE_LIST,
     WS_TYPE_SET_COMPLETED,
 )
 
@@ -154,6 +157,87 @@ async def websocket_clear_completed(
     connection.send_result(msg["id"], {"removed": removed})
 
 
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): WS_TYPE_SAVE_LIST,
+        vol.Required("entity_id"): cv.entity_id,
+        vol.Required("name"): str,
+        vol.Optional("persist_states", default=False): bool,
+    }
+)
+@websocket_api.async_response
+async def websocket_save_list(
+    hass: HomeAssistant,
+    connection: websocket_api.ActiveConnection,
+    msg,
+) -> None:
+    """Save a named snapshot of the list."""
+
+    manager = hass.data[DOMAIN][DATA_MANAGER]
+
+    await manager.save_list(
+        entity_id=msg["entity_id"],
+        name=msg["name"],
+        persist_states=msg["persist_states"],
+    )
+
+    connection.send_result(msg["id"])
+
+
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): WS_TYPE_LOAD_LIST,
+        vol.Required("entity_id"): cv.entity_id,
+        vol.Required("name"): str,
+        vol.Optional("mode", default="merge"): vol.In(["replace", "merge", "full_merge"]),
+    }
+)
+@websocket_api.async_response
+async def websocket_load_list(
+    hass: HomeAssistant,
+    connection: websocket_api.ActiveConnection,
+    msg,
+) -> None:
+    """Load a named snapshot back onto the list."""
+
+    manager = hass.data[DOMAIN][DATA_MANAGER]
+
+    try:
+        await manager.load_list(
+            entity_id=msg["entity_id"],
+            name=msg["name"],
+            mode=msg["mode"],
+        )
+    except ValueError as err:
+        connection.send_error(msg["id"], "not_found", str(err))
+        return
+
+    connection.send_result(msg["id"])
+
+
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): WS_TYPE_LIST_SAVED,
+        vol.Required("entity_id"): cv.entity_id,
+    }
+)
+@websocket_api.async_response
+async def websocket_list_saved(
+    hass: HomeAssistant,
+    connection: websocket_api.ActiveConnection,
+    msg,
+) -> None:
+    """Return the names of every snapshot saved for this list."""
+
+    manager = hass.data[DOMAIN][DATA_MANAGER]
+
+    names = await manager.list_saved(
+        entity_id=msg["entity_id"],
+    )
+
+    connection.send_result(msg["id"], {"names": names})
+
+
 def async_register_websocket(hass: HomeAssistant) -> None:
     for handler in (
         websocket_get_list,
@@ -161,5 +245,8 @@ def async_register_websocket(hass: HomeAssistant) -> None:
         websocket_set_completed,
         websocket_restore_completed,
         websocket_clear_completed,
+        websocket_save_list,
+        websocket_load_list,
+        websocket_list_saved,
     ):
         websocket_api.async_register_command(hass, handler)

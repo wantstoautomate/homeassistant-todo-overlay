@@ -8,6 +8,7 @@ from .models import ItemPosition, TodoItem, TodoList
 from .tree import build_tree
 
 Placement = Literal["before", "after", "inside"]
+LoadMode = Literal["replace", "merge", "full_merge"]
 
 
 class TodoManager:
@@ -299,6 +300,180 @@ class TodoManager:
 
         return removed_ids
 
+    async def save_list(
+        self,
+        entity_id: str,
+        name: str,
+        persist_states: bool = False,
+    ) -> None:
+        """Save a named snapshot of the list's current items and
+        hierarchy, for later reuse via load_list().
+
+        Completion status is only captured when persist_states is set -
+        otherwise a snapshot is a reusable template that always starts
+        fresh (everything incomplete) when loaded.
+        """
+
+        todo_list = await self.get_list(entity_id)
+
+        snapshot = [
+            self._snapshot_node(item, persist_states)
+            for item in todo_list.items
+        ]
+
+        await self._metadata_store.save_snapshot(entity_id, name, snapshot)
+
+    async def load_list(
+        self,
+        entity_id: str,
+        name: str,
+        mode: LoadMode = "merge",
+    ) -> None:
+        """Recreate a named snapshot's items on the list.
+
+        - "replace": every current item is removed first, so the list
+          ends up matching the snapshot exactly.
+        - "merge": items already on the list are matched against
+          snapshot items by title path (own title plus ancestor
+          titles) and left untouched rather than duplicated - only
+          genuinely new items are created, as children of whichever
+          existing item matched their snapshot parent.
+        - "full_merge": the whole snapshot is (re)created as new items
+          regardless of what's already on the list, duplicates and all.
+        """
+
+        snapshot = await self._metadata_store.get_snapshot(entity_id, name)
+
+        if snapshot is None:
+            raise ValueError(f"No saved list named {name!r} for {entity_id}")
+
+        if mode == "replace":
+            for item in await self._adapter.get_items(entity_id):
+                await self._adapter.remove_item(entity_id, item.id)
+
+            await self._metadata_store.clear_positions(entity_id)
+
+        existing_by_path: dict[tuple[str, ...], str] = {}
+
+        if mode == "merge":
+            items = await self._adapter.get_items(entity_id)
+            positions = await self._metadata_store.get_relationships(entity_id)
+            existing_by_path = self._title_path_index(items, positions)
+
+        await self._create_snapshot_nodes(
+            entity_id,
+            snapshot,
+            parent_id=None,
+            ancestor_path=(),
+            existing_by_path=existing_by_path,
+        )
+
+    async def list_saved(
+        self,
+        entity_id: str,
+    ) -> list[str]:
+        """Names of every snapshot saved for this entity."""
+
+        return await self._metadata_store.list_snapshots(entity_id)
+
+    async def delete_saved(
+        self,
+        entity_id: str,
+        name: str,
+    ) -> None:
+        await self._metadata_store.delete_snapshot(entity_id, name)
+
+    @staticmethod
+    def _snapshot_node(item: TodoItem, persist_states: bool) -> dict:
+        return {
+            "title": item.title,
+            "description": item.description,
+            "due_date": item.due_date,
+            "due_datetime": item.due_datetime,
+            "completed": item.completed if persist_states else False,
+            "children": [
+                TodoManager._snapshot_node(child, persist_states)
+                for child in item.children
+            ],
+        }
+
+    @staticmethod
+    def _title_path_index(
+        items: list[TodoItem],
+        positions: dict[str, ItemPosition],
+    ) -> dict[tuple[str, ...], str]:
+        """Map each item's (ancestor titles..., own title) path to its
+        id, so merge-mode loading can recognise items that already
+        exist without relying on ids, which a snapshot never has."""
+
+        item_by_id = {item.id: item for item in items}
+
+        def path_of(item_id: str) -> tuple[str, ...]:
+            parent_id = TodoManager._parent_id_of(item_id, positions)
+            title = item_by_id[item_id].title
+
+            return (*path_of(parent_id), title) if parent_id is not None else (title,)
+
+        return {path_of(item.id): item.id for item in items}
+
+    async def _create_snapshot_nodes(
+        self,
+        entity_id: str,
+        nodes: list[dict],
+        parent_id: str | None,
+        ancestor_path: tuple[str, ...],
+        existing_by_path: dict[tuple[str, ...], str],
+    ) -> None:
+        items = await self._adapter.get_items(entity_id)
+        positions = await self._metadata_store.get_relationships(entity_id)
+
+        existing_children = self._siblings(items, positions, parent_id)
+        next_order = max(
+            (self._order_of(child_id, positions) for child_id in existing_children),
+            default=-1,
+        ) + 1
+
+        for node in nodes:
+            path = (*ancestor_path, node["title"])
+            matched_id = existing_by_path.get(path)
+
+            if matched_id is not None:
+                target_id = matched_id
+            else:
+                target_id = await self._adapter.add_item(
+                    entity_id,
+                    node["title"],
+                    description=node.get("description"),
+                    due_date=node.get("due_date"),
+                    due_datetime=node.get("due_datetime"),
+                )
+
+                await self._metadata_store.set_positions(
+                    entity_id,
+                    {target_id: ItemPosition(parent_id=parent_id, order=next_order)},
+                )
+                next_order += 1
+
+                if node.get("completed"):
+                    await self._adapter.set_completed(entity_id, target_id, True)
+
+            if node.get("children"):
+                await self._create_snapshot_nodes(
+                    entity_id,
+                    node["children"],
+                    parent_id=target_id,
+                    ancestor_path=path,
+                    existing_by_path=existing_by_path,
+                )
+
+    @staticmethod
+    def _order_of(
+        item_id: str,
+        positions: dict[str, ItemPosition],
+    ) -> int:
+        position = positions.get(item_id)
+        return position.order if position else 0
+
     @staticmethod
     def _descendants(
         item_id: str,
@@ -346,7 +521,7 @@ class TodoManager:
         items: list[TodoItem],
         positions: dict[str, ItemPosition],
         parent_id: str | None,
-        exclude: str,
+        exclude: str | None = None,
     ) -> list[str]:
         """Return sibling item ids under parent_id, in their current order."""
 

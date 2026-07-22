@@ -7,12 +7,18 @@ from custom_components.todo_overlay.models import ItemPosition, TodoItem
 class FakeAdapter:
 
     def __init__(self, items: list[TodoItem] | None = None) -> None:
-        self._items = items or [
-            TodoItem(id="1", title="Shopping", completed=False),
-            TodoItem(id="2", title="Milk", completed=False),
-        ]
+        self._items = (
+            items
+            if items is not None
+            else [
+                TodoItem(id="1", title="Shopping", completed=False),
+                TodoItem(id="2", title="Milk", completed=False),
+            ]
+        )
         self.set_completed_calls: list[tuple[str, str, bool]] = []
         self.remove_item_calls: list[tuple[str, str]] = []
+        self.add_item_calls: list[tuple[str, str]] = []
+        self._next_id = 0
 
     async def get_items(
         self,
@@ -40,12 +46,36 @@ class FakeAdapter:
         self.remove_item_calls.append((entity_id, item_id))
         self._items = [item for item in self._items if item.id != item_id]
 
+    async def add_item(
+        self,
+        entity_id: str,
+        title: str,
+        description: str | None = None,
+        due_date: str | None = None,
+        due_datetime: str | None = None,
+    ) -> str:
+        self._next_id += 1
+        new_id = f"new-{self._next_id}"
+
+        self._items.append(TodoItem(
+            id=new_id,
+            title=title,
+            completed=False,
+            description=description,
+            due_date=due_date,
+            due_datetime=due_datetime,
+        ))
+        self.add_item_calls.append((entity_id, title))
+
+        return new_id
+
 
 class FakeMetadataStore:
 
     def __init__(self, positions: dict[str, ItemPosition] | None = None) -> None:
         self._positions = positions or {}
         self.set_positions_calls: list[tuple[str, dict[str, ItemPosition]]] = []
+        self._snapshots: dict[str, dict] = {}
 
     async def get_relationships(self, entity_id: str) -> dict[str, ItemPosition]:
         return dict(self._positions)
@@ -65,6 +95,40 @@ class FakeMetadataStore:
     ) -> None:
         for item_id in item_ids:
             self._positions.pop(item_id, None)
+
+    async def clear_positions(
+        self,
+        entity_id: str,
+    ) -> None:
+        self._positions = {}
+
+    async def save_snapshot(
+        self,
+        entity_id: str,
+        name: str,
+        snapshot: list[dict],
+    ) -> None:
+        self._snapshots.setdefault(entity_id, {})[name] = snapshot
+
+    async def get_snapshot(
+        self,
+        entity_id: str,
+        name: str,
+    ) -> list[dict] | None:
+        return self._snapshots.get(entity_id, {}).get(name)
+
+    async def list_snapshots(
+        self,
+        entity_id: str,
+    ) -> list[str]:
+        return sorted(self._snapshots.get(entity_id, {}).keys())
+
+    async def delete_snapshot(
+        self,
+        entity_id: str,
+        name: str,
+    ) -> None:
+        self._snapshots.get(entity_id, {}).pop(name, None)
 
 
 @pytest.mark.asyncio
@@ -466,3 +530,208 @@ async def test_manager_restore_completed_writes_back_exact_values():
 
     assert adapter._items[1].completed is False
     assert adapter._items[2].completed is True
+
+
+@pytest.mark.asyncio
+async def test_manager_save_list_without_persist_states_omits_completion():
+
+    adapter = FakeAdapter(items=[
+        TodoItem(id="1", title="Shopping", completed=True),
+        TodoItem(id="2", title="Milk", completed=True),
+    ])
+
+    metadata_store = FakeMetadataStore({
+        "1": ItemPosition(parent_id=None, order=0),
+        "2": ItemPosition(parent_id="1", order=0),
+    })
+
+    manager = TodoManager(adapter=adapter, metadata_store=metadata_store)
+
+    await manager.save_list(entity_id="todo.shopping", name="template")
+
+    snapshot = metadata_store._snapshots["todo.shopping"]["template"]
+
+    assert snapshot[0]["title"] == "Shopping"
+    assert snapshot[0]["completed"] is False
+    assert snapshot[0]["children"][0]["completed"] is False
+
+
+@pytest.mark.asyncio
+async def test_manager_save_list_with_persist_states_captures_completion():
+
+    adapter = FakeAdapter(items=[
+        TodoItem(id="1", title="Shopping", completed=False),
+        TodoItem(id="2", title="Milk", completed=True),
+        TodoItem(id="3", title="Bread", completed=False),
+    ])
+
+    metadata_store = FakeMetadataStore({
+        "1": ItemPosition(parent_id=None, order=0),
+        "2": ItemPosition(parent_id="1", order=0),
+        "3": ItemPosition(parent_id="1", order=1),
+    })
+
+    manager = TodoManager(adapter=adapter, metadata_store=metadata_store)
+
+    await manager.save_list(entity_id="todo.shopping", name="template", persist_states=True)
+
+    snapshot = metadata_store._snapshots["todo.shopping"]["template"]
+
+    children_by_title = {c["title"]: c["completed"] for c in snapshot[0]["children"]}
+    assert children_by_title == {"Milk": True, "Bread": False}
+
+
+@pytest.mark.asyncio
+async def test_manager_load_list_full_merge_recreates_snapshot_as_new_items():
+
+    adapter = FakeAdapter(items=[])
+    metadata_store = FakeMetadataStore({})
+    manager = TodoManager(adapter=adapter, metadata_store=metadata_store)
+
+    await metadata_store.save_snapshot("todo.shopping", "template", [
+        {
+            "title": "Shopping",
+            "description": None,
+            "due_date": None,
+            "due_datetime": None,
+            "completed": False,
+            "children": [
+                {
+                    "title": "Milk",
+                    "description": None,
+                    "due_date": None,
+                    "due_datetime": None,
+                    "completed": False,
+                    "children": [],
+                },
+            ],
+        },
+    ])
+
+    await manager.load_list(entity_id="todo.shopping", name="template", mode="full_merge")
+
+    todo_list = await manager.get_list("todo.shopping")
+
+    assert len(todo_list.items) == 1
+    assert todo_list.items[0].title == "Shopping"
+    assert todo_list.items[0].children[0].title == "Milk"
+
+    # Loading it again should create a SECOND "Shopping" - full_merge
+    # never checks for duplicates.
+    await manager.load_list(entity_id="todo.shopping", name="template", mode="full_merge")
+
+    todo_list_after = await manager.get_list("todo.shopping")
+    assert len(todo_list_after.items) == 2
+
+
+@pytest.mark.asyncio
+async def test_manager_load_list_merge_skips_existing_and_adds_missing_children():
+
+    adapter = FakeAdapter(items=[
+        TodoItem(id="1", title="Shopping", completed=False),
+        TodoItem(id="2", title="Milk", completed=False),
+    ])
+
+    metadata_store = FakeMetadataStore({
+        "1": ItemPosition(parent_id=None, order=0),
+        "2": ItemPosition(parent_id="1", order=0),
+    })
+
+    manager = TodoManager(adapter=adapter, metadata_store=metadata_store)
+
+    await metadata_store.save_snapshot("todo.shopping", "template", [
+        {
+            "title": "Shopping",
+            "description": None,
+            "due_date": None,
+            "due_datetime": None,
+            "completed": False,
+            "children": [
+                {
+                    "title": "Milk",
+                    "description": None,
+                    "due_date": None,
+                    "due_datetime": None,
+                    "completed": False,
+                    "children": [],
+                },
+                {
+                    "title": "Eggs",
+                    "description": None,
+                    "due_date": None,
+                    "due_datetime": None,
+                    "completed": False,
+                    "children": [],
+                },
+            ],
+        },
+    ])
+
+    await manager.load_list(entity_id="todo.shopping", name="template", mode="merge")
+
+    todo_list = await manager.get_list("todo.shopping")
+
+    # "Shopping" and "Milk" already existed (matched by title path) and
+    # were left alone - only "Eggs" is genuinely new, added as a child
+    # of the EXISTING "Shopping" rather than duplicating it.
+    assert len(todo_list.items) == 1
+    assert todo_list.items[0].id == "1"
+    assert {c.title for c in todo_list.items[0].children} == {"Milk", "Eggs"}
+    assert len(todo_list.items[0].children) == 2
+
+
+@pytest.mark.asyncio
+async def test_manager_load_list_replace_clears_existing_items_first():
+
+    adapter = FakeAdapter(items=[
+        TodoItem(id="1", title="Old item", completed=False),
+    ])
+
+    metadata_store = FakeMetadataStore({
+        "1": ItemPosition(parent_id=None, order=0),
+    })
+
+    manager = TodoManager(adapter=adapter, metadata_store=metadata_store)
+
+    await metadata_store.save_snapshot("todo.shopping", "template", [
+        {
+            "title": "New item",
+            "description": None,
+            "due_date": None,
+            "due_datetime": None,
+            "completed": False,
+            "children": [],
+        },
+    ])
+
+    await manager.load_list(entity_id="todo.shopping", name="template", mode="replace")
+
+    assert adapter.remove_item_calls == [("todo.shopping", "1")]
+
+    todo_list = await manager.get_list("todo.shopping")
+    assert [item.title for item in todo_list.items] == ["New item"]
+
+
+@pytest.mark.asyncio
+async def test_manager_load_list_raises_for_unknown_snapshot():
+
+    manager = TodoManager(adapter=FakeAdapter(items=[]), metadata_store=FakeMetadataStore())
+
+    with pytest.raises(ValueError):
+        await manager.load_list(entity_id="todo.shopping", name="nope", mode="merge")
+
+
+@pytest.mark.asyncio
+async def test_manager_list_saved_and_delete_saved():
+
+    metadata_store = FakeMetadataStore()
+    manager = TodoManager(adapter=FakeAdapter(items=[]), metadata_store=metadata_store)
+
+    await manager.save_list(entity_id="todo.shopping", name="a")
+    await manager.save_list(entity_id="todo.shopping", name="b")
+
+    assert await manager.list_saved("todo.shopping") == ["a", "b"]
+
+    await manager.delete_saved("todo.shopping", "a")
+
+    assert await manager.list_saved("todo.shopping") == ["b"]

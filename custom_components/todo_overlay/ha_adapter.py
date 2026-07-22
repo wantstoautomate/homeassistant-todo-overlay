@@ -91,3 +91,44 @@ class HomeAssistantTodoProvider:
             },
             blocking=True,
         )
+
+    async def add_item(
+        self,
+        entity_id: str,
+        title: str,
+        description: str | None = None,
+        due_date: str | None = None,
+        due_datetime: str | None = None,
+    ) -> str:
+        """Create an item and return its new uid.
+
+        todo.add_item doesn't return the created item itself, so the
+        new uid is found by diffing the item list before and after.
+        """
+
+        before_ids = {item.id for item in await self.get_items(entity_id)}
+
+        service_data: dict = {"entity_id": entity_id, "item": title}
+
+        if description:
+            service_data["description"] = description
+
+        if due_datetime:
+            service_data["due_datetime"] = due_datetime
+        elif due_date:
+            service_data["due_date"] = due_date
+
+        await self._hass.services.async_call(
+            "todo",
+            "add_item",
+            service_data,
+            blocking=True,
+        )
+
+        after_items = await self.get_items(entity_id)
+        new_items = [item for item in after_items if item.id not in before_ids]
+
+        if not new_items:
+            raise RuntimeError(f"Failed to determine new item id after adding {title!r}")
+
+        return new_items[0].id

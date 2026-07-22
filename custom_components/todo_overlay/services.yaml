@@ -1,0 +1,52 @@
+save_list:
+  fields:
+    entity_id:
+      required: true
+      selector:
+        entity:
+          domain: todo
+    name:
+      required: true
+      example: weekly_groceries
+      selector:
+        text:
+    persist_states:
+      required: false
+      default: false
+      selector:
+        boolean:
+
+load_list:
+  fields:
+    entity_id:
+      required: true
+      selector:
+        entity:
+          domain: todo
+    name:
+      required: true
+      example: weekly_groceries
+      selector:
+        text:
+    mode:
+      required: false
+      default: merge
+      selector:
+        select:
+          options:
+            - replace
+            - merge
+            - full_merge
+
+delete_saved_list:
+  fields:
+    entity_id:
+      required: true
+      selector:
+        entity:
+          domain: todo
+    name:
+      required: true
+      example: weekly_groceries
+      selector:
+        text:

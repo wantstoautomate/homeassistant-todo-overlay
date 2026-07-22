@@ -10,6 +10,7 @@ from .const import DATA_MANAGER, DOMAIN
 from .ha_adapter import HomeAssistantTodoProvider
 from .manager import TodoManager
 from .metadata_store import MetadataStore
+from .services import async_register_services
 from .websocket import async_register_websocket
 
 FRONTEND_URL_PATH = "/todo_overlay_static"
@@ -28,6 +29,7 @@ async def async_setup(hass: HomeAssistant, config) -> bool:
     hass.data.setdefault(DOMAIN, {})[DATA_MANAGER] = manager
 
     async_register_websocket(hass)
+    async_register_services(hass)
 
     await hass.http.async_register_static_paths(
         [StaticPathConfig(FRONTEND_URL_PATH, str(FRONTEND_DIST), cache_headers=True)]

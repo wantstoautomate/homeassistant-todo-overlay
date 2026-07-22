@@ -7,6 +7,11 @@ from .models import ItemPosition
 STORAGE_VERSION = 2
 STORAGE_KEY = "todo_overlay"
 
+# Saved snapshots live under this reserved top-level cache key, separate
+# from the per-entity position maps (which are keyed directly by entity_id,
+# e.g. "todo.shopping" - always dotted, so this can never collide).
+SNAPSHOTS_KEY = "_snapshots"
+
 
 class MetadataStore:
     """Stores Todo Overlay metadata."""
@@ -72,5 +77,71 @@ class MetadataStore:
 
         for item_id in item_ids:
             entity_positions.pop(item_id, None)
+
+        await self._store.async_save(self._cache)
+
+    async def clear_positions(
+        self,
+        entity_id: str,
+    ) -> None:
+        """Drop every stored position for an entity, e.g. before a
+        replace-mode load repopulates the list from scratch."""
+
+        await self._load()
+
+        assert self._cache is not None
+
+        self._cache.pop(entity_id, None)
+
+        await self._store.async_save(self._cache)
+
+    async def save_snapshot(
+        self,
+        entity_id: str,
+        name: str,
+        snapshot: list[dict],
+    ) -> None:
+        """Save a named snapshot of an entity's items/hierarchy."""
+
+        await self._load()
+
+        assert self._cache is not None
+
+        snapshots = self._cache.setdefault(SNAPSHOTS_KEY, {}).setdefault(entity_id, {})
+        snapshots[name] = snapshot
+
+        await self._store.async_save(self._cache)
+
+    async def get_snapshot(
+        self,
+        entity_id: str,
+        name: str,
+    ) -> list[dict] | None:
+        await self._load()
+
+        assert self._cache is not None
+
+        return self._cache.get(SNAPSHOTS_KEY, {}).get(entity_id, {}).get(name)
+
+    async def list_snapshots(
+        self,
+        entity_id: str,
+    ) -> list[str]:
+        await self._load()
+
+        assert self._cache is not None
+
+        return sorted(self._cache.get(SNAPSHOTS_KEY, {}).get(entity_id, {}).keys())
+
+    async def delete_snapshot(
+        self,
+        entity_id: str,
+        name: str,
+    ) -> None:
+        await self._load()
+
+        assert self._cache is not None
+
+        self._cache.get(SNAPSHOTS_KEY, {}).get(entity_id, {}).pop(name, None)
 
         await self._store.async_save(self._cache)
