@@ -1,17 +1,33 @@
-import {LitElement, html} from "lit";
+import {LitElement, html, css} from "lit";
 import {customElement, property, state} from "lit/decorators.js";
 
-import {getList, moveItem} from "./api";
+import {
+    type CompletionChange,
+    getList,
+    moveItem,
+    restoreCompleted,
+    setCompleted,
+} from "./api";
 import type {HassLike} from "./hass";
-import type {Placement, TodoItem, TodoList} from "./models";
+import {
+    type Placement,
+    type TodoItem,
+    type TodoList,
+    TodoListEntityFeature,
+    supportsFeature,
+} from "./models";
+import type {TodoItemDialogFieldSupport, TodoItemFormValue} from "./components/todo-item-dialog";
+import {EMPTY_FORM_VALUE} from "./components/todo-item-dialog";
 
 import "./components/todo-tree";
+import "./components/todo-item-dialog";
 
 export interface TodoOverlayCardConfig {
     entity: string;
 }
 
 const LONG_PRESS_MS = 500;
+const UNDO_TIMEOUT_MS = 8000;
 
 function findItem(items: TodoItem[], id: string): TodoItem | undefined {
     for (const item of items) {
@@ -29,8 +45,88 @@ function findItem(items: TodoItem[], id: string): TodoItem | undefined {
     return undefined;
 }
 
+function toDateTimeLocalValue(iso: string | null): string {
+    if (!iso) {
+        return "";
+    }
+
+    // datetime-local inputs need "YYYY-MM-DDTHH:mm", no seconds/timezone.
+    return iso.slice(0, 16);
+}
+
 @customElement("todo-overlay-card")
 export class TodoOverlayCard extends LitElement {
+
+    static styles = css`
+        .quick-add {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 8px 20px 16px;
+            font-family: Roboto, "Noto Sans", sans-serif;
+        }
+
+        .quick-add input {
+            flex: 1;
+            font-family: inherit;
+            font-size: 14px;
+            color: var(--primary-text-color);
+            background: none;
+            border: none;
+            border-bottom: 1px solid var(--divider-color);
+            padding: 6px 0;
+            outline: none;
+        }
+
+        .quick-add input:focus {
+            border-bottom: 2px solid var(--primary-color);
+            padding-bottom: 5px;
+        }
+
+        .quick-add button {
+            border: none;
+            background: none;
+            font-family: inherit;
+            cursor: pointer;
+        }
+
+        .quick-add .add {
+            color: var(--primary-color);
+            font-weight: 500;
+        }
+
+        .quick-add .details {
+            color: var(--secondary-text-color);
+            font-size: 12px;
+        }
+
+        .undo-snackbar {
+            position: fixed;
+            bottom: 16px;
+            left: 50%;
+            transform: translateX(-50%);
+            display: flex;
+            align-items: center;
+            gap: 16px;
+            padding: 12px 16px;
+            border-radius: 4px;
+            background: var(--primary-text-color);
+            color: var(--primary-background-color);
+            font-family: Roboto, "Noto Sans", sans-serif;
+            font-size: 14px;
+            z-index: 10;
+        }
+
+        .undo-snackbar button {
+            border: none;
+            background: none;
+            color: var(--primary-color);
+            font-family: inherit;
+            font-weight: 600;
+            text-transform: uppercase;
+            cursor: pointer;
+        }
+    `;
 
     @property({attribute: false})
     public hass!: HassLike;
@@ -54,10 +150,18 @@ export class TodoOverlayCard extends LitElement {
     private hoverPlacement?: Placement;
 
     @state()
-    private editingItem?: TodoItem;
+    private dialogMode?: "create" | "edit";
 
     @state()
-    private editValue = "";
+    private dialogItem?: TodoItem;
+
+    @state()
+    private quickAddValue = "";
+
+    @state()
+    private undoState?: {message: string; changes: CompletionChange[]};
+
+    private undoTimer?: number;
 
     setConfig(config: TodoOverlayCardConfig) {
         if (!config.entity) {
@@ -85,6 +189,19 @@ export class TodoOverlayCard extends LitElement {
             this.error = err instanceof Error ? err.message : String(err);
         }
     }
+
+    private get fieldSupport(): TodoItemDialogFieldSupport {
+        const supportedFeatures = this.hass.states[this.config.entity]
+            ?.attributes.supported_features;
+
+        return {
+            description: supportsFeature(supportedFeatures, TodoListEntityFeature.SET_DESCRIPTION_ON_ITEM),
+            dueDate: supportsFeature(supportedFeatures, TodoListEntityFeature.SET_DUE_DATE_ON_ITEM),
+            dueDateTime: supportsFeature(supportedFeatures, TodoListEntityFeature.SET_DUE_DATETIME_ON_ITEM),
+        };
+    }
+
+    // --- drag / tap / hold ---------------------------------------------
 
     private onPointerDown(e: CustomEvent) {
         this.draggedId = e.detail.id;
@@ -129,7 +246,7 @@ export class TodoOverlayCard extends LitElement {
                 if (pressDurationMs < LONG_PRESS_MS) {
                     await this.toggleComplete(item);
                 } else {
-                    this.openEdit(item);
+                    this.openEditDialog(item);
                 }
             }
         }
@@ -139,46 +256,172 @@ export class TodoOverlayCard extends LitElement {
         this.hoverPlacement = undefined;
     }
 
+    // --- completion + cascade undo --------------------------------------
+
     private async toggleComplete(item: TodoItem) {
         try {
-            await this.hass.callService("todo", "update_item", {
+            const changes = await setCompleted(
+                this.hass,
+                this.config.entity,
+                item.id,
+                !item.completed,
+            );
+
+            await this.load();
+
+            if (changes.length > 1) {
+                this.showUndo(
+                    `Marked ${changes.length} items ${!item.completed ? "complete" : "incomplete"}`,
+                    changes,
+                );
+            }
+        } catch (err) {
+            this.error = err instanceof Error ? err.message : String(err);
+        }
+    }
+
+    private showUndo(message: string, changes: CompletionChange[]) {
+        window.clearTimeout(this.undoTimer);
+
+        this.undoState = {message, changes};
+
+        this.undoTimer = window.setTimeout(() => {
+            this.undoState = undefined;
+        }, UNDO_TIMEOUT_MS);
+    }
+
+    private async onUndo() {
+        if (!this.undoState) {
+            return;
+        }
+
+        window.clearTimeout(this.undoTimer);
+
+        try {
+            await restoreCompleted(this.hass, this.config.entity, this.undoState.changes);
+            await this.load();
+        } catch (err) {
+            this.error = err instanceof Error ? err.message : String(err);
+        }
+
+        this.undoState = undefined;
+    }
+
+    // --- add / edit / delete dialog --------------------------------------
+
+    private openEditDialog(item: TodoItem) {
+        this.dialogMode = "edit";
+        this.dialogItem = item;
+    }
+
+    private openCreateDialog() {
+        this.dialogMode = "create";
+        this.dialogItem = undefined;
+    }
+
+    private closeDialog() {
+        this.dialogMode = undefined;
+        this.dialogItem = undefined;
+    }
+
+    private dialogValue(): TodoItemFormValue {
+        if (this.dialogMode === "edit" && this.dialogItem) {
+            return {
+                title: this.dialogItem.title,
+                description: this.dialogItem.description ?? "",
+                dueDate: this.dialogItem.due_date ?? "",
+                dueDateTime: toDateTimeLocalValue(this.dialogItem.due_datetime),
+            };
+        }
+
+        return EMPTY_FORM_VALUE;
+    }
+
+    private async onDialogSave(e: CustomEvent<TodoItemFormValue>) {
+        const value = e.detail;
+        const support = this.fieldSupport;
+
+        const serviceData: Record<string, unknown> = {
+            entity_id: this.config.entity,
+        };
+
+        if (support.description) {
+            serviceData.description = value.description;
+        }
+
+        if (support.dueDateTime && value.dueDateTime) {
+            serviceData.due_datetime = value.dueDateTime;
+        } else if (support.dueDate && value.dueDate) {
+            serviceData.due_date = value.dueDate;
+        }
+
+        try {
+            if (this.dialogMode === "edit" && this.dialogItem) {
+                await this.hass.callService("todo", "update_item", {
+                    ...serviceData,
+                    item: this.dialogItem.id,
+                    rename: value.title,
+                });
+            } else {
+                await this.hass.callService("todo", "add_item", {
+                    ...serviceData,
+                    item: value.title,
+                });
+            }
+
+            await this.load();
+        } catch (err) {
+            this.error = err instanceof Error ? err.message : String(err);
+        }
+
+        this.closeDialog();
+    }
+
+    private async onDialogDelete() {
+        if (!this.dialogItem) {
+            return;
+        }
+
+        try {
+            await this.hass.callService("todo", "remove_item", {
                 entity_id: this.config.entity,
-                item: item.id,
-                status: item.completed ? "needs_action" : "completed",
+                item: this.dialogItem.id,
             });
 
             await this.load();
         } catch (err) {
             this.error = err instanceof Error ? err.message : String(err);
         }
+
+        this.closeDialog();
     }
 
-    private openEdit(item: TodoItem) {
-        this.editingItem = item;
-        this.editValue = item.title;
+    // --- quick add ---------------------------------------------------
+
+    private onQuickAddInput(e: InputEvent) {
+        this.quickAddValue = (e.target as HTMLInputElement).value;
     }
 
-    private closeEdit() {
-        this.editingItem = undefined;
+    private onQuickAddKeydown(e: KeyboardEvent) {
+        if (e.key === "Enter") {
+            this.submitQuickAdd();
+        }
     }
 
-    private onEditValueInput(e: InputEvent) {
-        this.editValue = (e.target as HTMLInputElement).value;
-    }
+    private async submitQuickAdd() {
+        const title = this.quickAddValue.trim();
 
-    private async saveEdit() {
-        if (!this.editingItem) {
+        if (!title) {
             return;
         }
 
         try {
-            await this.hass.callService("todo", "update_item", {
+            await this.hass.callService("todo", "add_item", {
                 entity_id: this.config.entity,
-                item: this.editingItem.id,
-                rename: this.editValue,
+                item: title,
             });
 
-            this.editingItem = undefined;
+            this.quickAddValue = "";
 
             await this.load();
         } catch (err) {
@@ -218,29 +461,50 @@ export class TodoOverlayCard extends LitElement {
                             `
                 }
 
+                <div class="quick-add">
+                    <input
+                        type="text"
+                        placeholder="Add item"
+                        .value=${this.quickAddValue}
+                        @input=${this.onQuickAddInput}
+                        @keydown=${this.onQuickAddKeydown}
+                    />
+                    <button class="add" @click=${this.submitQuickAdd}>
+                        Add
+                    </button>
+                    <button class="details" @click=${this.openCreateDialog}>
+                        Details…
+                    </button>
+                </div>
+
             </ha-card>
 
             ${
-                this.editingItem
+                this.undoState
                     ? html`
-                        <ha-dialog
-                            open
-                            heading="Edit item"
-                            @closed=${this.closeEdit}
-                        >
-                            <ha-textfield
-                                label="Title"
-                                .value=${this.editValue}
-                                @input=${this.onEditValueInput}
-                            ></ha-textfield>
+                        <div class="undo-snackbar">
+                            <span>${this.undoState.message}</span>
+                            <button @click=${this.onUndo}>
+                                Undo
+                            </button>
+                        </div>
+                    `
+                    : ""
+            }
 
-                            <mwc-button slot="secondaryAction" @click=${this.closeEdit}>
-                                Cancel
-                            </mwc-button>
-                            <mwc-button slot="primaryAction" @click=${this.saveEdit}>
-                                Save
-                            </mwc-button>
-                        </ha-dialog>
+            ${
+                this.dialogMode
+                    ? html`
+                        <todo-overlay-item-dialog
+                            .heading=${this.dialogMode === "edit" ? "Edit item" : "Add item"}
+                            .value=${this.dialogValue()}
+                            .fieldSupport=${this.fieldSupport}
+                            ?showDelete=${this.dialogMode === "edit"}
+
+                            @dialog-close=${this.closeDialog}
+                            @dialog-save=${this.onDialogSave}
+                            @dialog-delete=${this.onDialogDelete}
+                        ></todo-overlay-item-dialog>
                     `
                     : ""
             }

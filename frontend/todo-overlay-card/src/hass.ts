@@ -7,4 +7,5 @@ export interface HassLike {
         service: string,
         serviceData?: Record<string, unknown>,
     ): Promise<unknown>;
+    states: Record<string, {attributes: Record<string, unknown>}>;
 }

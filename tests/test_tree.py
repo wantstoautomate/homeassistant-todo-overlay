@@ -55,3 +55,62 @@ def test_build_tree_defaults_unpositioned_items_to_root():
     tree = build_tree(items, positions={})
 
     assert [item.id for item in tree] == ["1", "2"]
+
+
+def test_build_tree_parent_completed_is_computed_from_children():
+    items = [
+        TodoItem(id="1", title="Shopping", completed=False),
+        TodoItem(id="2", title="Milk", completed=True),
+        TodoItem(id="3", title="Bread", completed=True),
+    ]
+
+    positions = {
+        "1": ItemPosition(parent_id=None, order=0),
+        "2": ItemPosition(parent_id="1", order=0),
+        "3": ItemPosition(parent_id="1", order=1),
+    }
+
+    tree = build_tree(items, positions)
+
+    # "1"'s own stored status was False, but both its children are
+    # complete, so it should be computed as complete.
+    assert tree[0].completed is True
+
+
+def test_build_tree_parent_incomplete_if_any_child_incomplete():
+    items = [
+        TodoItem(id="1", title="Shopping", completed=True),
+        TodoItem(id="2", title="Milk", completed=True),
+        TodoItem(id="3", title="Bread", completed=False),
+    ]
+
+    positions = {
+        "1": ItemPosition(parent_id=None, order=0),
+        "2": ItemPosition(parent_id="1", order=0),
+        "3": ItemPosition(parent_id="1", order=1),
+    }
+
+    tree = build_tree(items, positions)
+
+    # "1"'s own stored status was True, but "3" is incomplete, so it
+    # should be computed as incomplete.
+    assert tree[0].completed is False
+
+
+def test_build_tree_grandparent_completion_derives_through_parent():
+    items = [
+        TodoItem(id="1", title="Grandparent", completed=False),
+        TodoItem(id="2", title="Parent", completed=False),
+        TodoItem(id="3", title="Child", completed=True),
+    ]
+
+    positions = {
+        "1": ItemPosition(parent_id=None, order=0),
+        "2": ItemPosition(parent_id="1", order=0),
+        "3": ItemPosition(parent_id="2", order=0),
+    }
+
+    tree = build_tree(items, positions)
+
+    assert tree[0].children[0].completed is True
+    assert tree[0].completed is True

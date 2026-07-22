@@ -11,12 +11,25 @@ class FakeAdapter:
             TodoItem(id="1", title="Shopping", completed=False),
             TodoItem(id="2", title="Milk", completed=False),
         ]
+        self.set_completed_calls: list[tuple[str, str, bool]] = []
 
     async def get_items(
         self,
         entity_id: str,
     ) -> list[TodoItem]:
         return self._items
+
+    async def set_completed(
+        self,
+        entity_id: str,
+        item_id: str,
+        completed: bool,
+    ) -> None:
+        self.set_completed_calls.append((entity_id, item_id, completed))
+
+        for item in self._items:
+            if item.id == item_id:
+                item.completed = completed
 
 
 class FakeMetadataStore:
@@ -76,11 +89,17 @@ async def test_manager_returns_serialisable_list():
                 "id": "1",
                 "title": "Shopping",
                 "completed": False,
+                "description": None,
+                "due_date": None,
+                "due_datetime": None,
                 "children": [
                     {
                         "id": "2",
                         "title": "Milk",
                         "completed": False,
+                        "description": None,
+                        "due_date": None,
+                        "due_datetime": None,
                         "children": [],
                     }
                 ],
@@ -187,3 +206,57 @@ async def test_manager_move_item_before_reorders_siblings():
     todo_list = await manager.get_list("todo.shopping")
 
     assert [item.id for item in todo_list.items] == ["1", "3", "2"]
+
+
+@pytest.mark.asyncio
+async def test_manager_set_completed_cascades_to_descendants():
+
+    adapter = FakeAdapter(items=[
+        TodoItem(id="1", title="Shopping", completed=False),
+        TodoItem(id="2", title="Milk", completed=False),
+        TodoItem(id="3", title="Bread", completed=True),
+    ])
+
+    metadata_store = FakeMetadataStore({
+        "1": ItemPosition(parent_id=None, order=0),
+        "2": ItemPosition(parent_id="1", order=0),
+        "3": ItemPosition(parent_id="1", order=1),
+    })
+
+    manager = TodoManager(adapter=adapter, metadata_store=metadata_store)
+
+    changed = await manager.set_completed(
+        entity_id="todo.shopping",
+        item_id="1",
+        completed=True,
+    )
+
+    # "3" was already completed, so only "1" and "2" actually changed.
+    assert {c["id"] for c in changed} == {"1", "2"}
+    assert adapter._items[0].completed is True
+    assert adapter._items[1].completed is True
+    assert adapter._items[2].completed is True
+
+
+@pytest.mark.asyncio
+async def test_manager_restore_completed_writes_back_exact_values():
+
+    adapter = FakeAdapter(items=[
+        TodoItem(id="1", title="Shopping", completed=True),
+        TodoItem(id="2", title="Milk", completed=True),
+        TodoItem(id="3", title="Bread", completed=True),
+    ])
+
+    manager = TodoManager(adapter=adapter, metadata_store=FakeMetadataStore())
+
+    # Simulate undoing a cascade where "2" and "3" had different prior states.
+    await manager.restore_completed(
+        entity_id="todo.shopping",
+        changes=[
+            {"id": "2", "completed": False},
+            {"id": "3", "completed": True},
+        ],
+    )
+
+    assert adapter._items[1].completed is False
+    assert adapter._items[2].completed is True

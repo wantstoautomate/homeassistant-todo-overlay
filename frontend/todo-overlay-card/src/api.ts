@@ -30,3 +30,40 @@ export async function moveItem(
     });
 
 }
+
+export interface CompletionChange {
+    id: string;
+    completed: boolean;
+}
+
+export async function setCompleted(
+    hass: HassLike,
+    entityId: string,
+    itemId: string,
+    completed: boolean,
+): Promise<CompletionChange[]> {
+
+    const result = await hass.connection.sendMessagePromise<{changed: CompletionChange[]}>({
+        type: "todo_overlay/set_completed",
+        entity_id: entityId,
+        item_id: itemId,
+        completed,
+    });
+
+    return result.changed;
+
+}
+
+export async function restoreCompleted(
+    hass: HassLike,
+    entityId: string,
+    changes: CompletionChange[],
+): Promise<void> {
+
+    await hass.connection.sendMessagePromise<void>({
+        type: "todo_overlay/restore_completed",
+        entity_id: entityId,
+        changes,
+    });
+
+}

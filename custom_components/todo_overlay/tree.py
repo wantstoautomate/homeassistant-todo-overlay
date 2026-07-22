@@ -37,4 +37,21 @@ def build_tree(
     for item in items:
         item.children.sort(key=order_of)
 
+    for root in roots:
+        _compute_completed(root)
+
     return roots
+
+
+def _compute_completed(item: TodoItem) -> bool:
+    """An item with children is complete iff all of its children are -
+    computed bottom-up rather than stored, so it can never drift out of
+    sync with the children it's derived from."""
+
+    for child in item.children:
+        _compute_completed(child)
+
+    if item.children:
+        item.completed = all(child.completed for child in item.children)
+
+    return item.completed

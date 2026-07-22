@@ -1,10 +1,27 @@
+import datetime
+
 from homeassistant.components.todo import DATA_COMPONENT, TodoItemStatus
 
 from .models import TodoItem
 
 
+def _due_fields(
+    due: datetime.date | datetime.datetime | None,
+) -> tuple[str | None, str | None]:
+    """Split HA's unified `due` field into the date/datetime pair our
+    model and the todo.update_item/add_item services both use."""
+
+    if isinstance(due, datetime.datetime):
+        return None, due.isoformat()
+
+    if isinstance(due, datetime.date):
+        return due.isoformat(), None
+
+    return None, None
+
+
 class HomeAssistantTodoProvider:
-    """Reads Todo items from Home Assistant."""
+    """Reads and writes Todo items via Home Assistant's todo integration."""
 
     def __init__(self, hass) -> None:
         self._hass = hass
@@ -21,11 +38,41 @@ class HomeAssistantTodoProvider:
         if entity is None:
             raise ValueError(f"Unknown todo entity: {entity_id}")
 
-        return [
-            TodoItem(
-                id=item.uid or "",
-                title=item.summary or "",
-                completed=item.status == TodoItemStatus.COMPLETED,
+        items = []
+
+        for item in (entity.todo_items or []):
+            due_date, due_datetime = _due_fields(item.due)
+
+            items.append(
+                TodoItem(
+                    id=item.uid or "",
+                    title=item.summary or "",
+                    completed=item.status == TodoItemStatus.COMPLETED,
+                    description=item.description,
+                    due_date=due_date,
+                    due_datetime=due_datetime,
+                )
             )
-            for item in (entity.todo_items or [])
-        ]
+
+        return items
+
+    async def set_completed(
+        self,
+        entity_id: str,
+        item_id: str,
+        completed: bool,
+    ) -> None:
+        await self._hass.services.async_call(
+            "todo",
+            "update_item",
+            {
+                "entity_id": entity_id,
+                "item": item_id,
+                "status": (
+                    TodoItemStatus.COMPLETED
+                    if completed
+                    else TodoItemStatus.NEEDS_ACTION
+                ),
+            },
+            blocking=True,
+        )
