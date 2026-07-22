@@ -29,6 +29,3 @@ config/
 *.log
 # Node
 node_modules/
-
-# Frontend build output
-frontend/todo-overlay-card/dist/

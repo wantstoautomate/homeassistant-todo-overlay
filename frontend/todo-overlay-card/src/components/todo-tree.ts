@@ -5,7 +5,7 @@ import type {TodoItem} from "../models";
 
 import "./todo-tree-item";
 
-@customElement("todo-tree")
+@customElement("todo-overlay-tree")
 export class TodoTree extends LitElement {
 
     static styles = css`
@@ -19,47 +19,22 @@ export class TodoTree extends LitElement {
     @property({attribute: false})
     items: TodoItem[] = [];
 
-    private onPointerDown(e: CustomEvent) {
-        this.dispatchEvent(
-            new CustomEvent("tree-pointer-down", {
-                detail: e.detail,
-                bubbles: true,
-                composed: true,
-            }),
-        );
-    }
+    @property({attribute: false})
+    draggedId?: string;
 
-    private onPointerEnter(e: CustomEvent) {
-        this.dispatchEvent(
-            new CustomEvent("tree-pointer-enter", {
-                detail: e.detail,
-                bubbles: true,
-                composed: true,
-            }),
-        );
-    }
-
-    private onPointerUp(e: CustomEvent) {
-        this.dispatchEvent(
-            new CustomEvent("tree-pointer-up", {
-                detail: e.detail,
-                bubbles: true,
-                composed: true,
-            }),
-        );
-    }
+    @property({attribute: false})
+    hoverId?: string;
 
     render() {
         return html`
             <ul>
                 ${this.items.map(
                     item => html`
-                        <todo-tree-item
+                        <todo-overlay-tree-item
                             .item=${item}
-                            @tree-pointer-down=${this.onPointerDown}
-                            @tree-pointer-enter=${this.onPointerEnter}
-                            @tree-pointer-up=${this.onPointerUp}
-                        ></todo-tree-item>
+                            .draggedId=${this.draggedId}
+                            .hoverId=${this.hoverId}
+                        ></todo-overlay-tree-item>
                     `,
                 )}
             </ul>
@@ -69,6 +44,6 @@ export class TodoTree extends LitElement {
 
 declare global {
     interface HTMLElementTagNameMap {
-        "todo-tree": TodoTree;
+        "todo-overlay-tree": TodoTree;
     }
 }
