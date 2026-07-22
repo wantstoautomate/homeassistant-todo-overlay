@@ -1343,6 +1343,7 @@ var TodoTreeItem = class extends i4 {
       if (this.pointerIsMouse || this.holdReady) {
         this.hasMoved = true;
         this.dragEngaged = true;
+        const grabOffset = this.holdRippleOrigin ?? { x: 0, y: 0 };
         this.clearHoldRipple();
         const rowEl = this.shadowRoot?.querySelector(".row");
         const rect = rowEl?.getBoundingClientRect();
@@ -1351,6 +1352,8 @@ var TodoTreeItem = class extends i4 {
             detail: {
               id: this.item.id,
               rect: rect ? { x: rect.left, y: rect.top, width: rect.width, height: rect.height } : void 0,
+              grabOffsetX: grabOffset.x,
+              grabOffsetY: grabOffset.y,
               pointerX: e7.clientX,
               pointerY: e7.clientY
             },
@@ -1800,18 +1803,19 @@ function collectAllRows(root) {
   return rows;
 }
 function resolvePlacement(rowId, rowChildren, relativeY) {
-  let placement;
-  if (relativeY < BEFORE_AFTER_ZONE) {
-    placement = "before";
-  } else if (relativeY > 1 - BEFORE_AFTER_ZONE) {
-    placement = "after";
-  } else {
-    placement = "inside";
-  }
-  if (placement === "after" && rowChildren.length > 0) {
+  if (rowChildren.length > 0) {
+    if (relativeY < BEFORE_AFTER_ZONE) {
+      return { id: rowId, placement: "before" };
+    }
     return { id: rowChildren[0].id, placement: "before" };
   }
-  return { id: rowId, placement };
+  if (relativeY < BEFORE_AFTER_ZONE) {
+    return { id: rowId, placement: "before" };
+  }
+  if (relativeY > 1 - BEFORE_AFTER_ZONE) {
+    return { id: rowId, placement: "after" };
+  }
+  return { id: rowId, placement: "inside" };
 }
 function findDropTarget(y3, rows) {
   if (rows.length === 0) {
@@ -1947,8 +1951,8 @@ var TodoOverlayCard = class extends i4 {
     this.rowSnapshot = collectAllRows(document).filter((row) => row.id !== this.draggedId);
   }
   onDragStart(e7) {
-    const { rect, pointerX, pointerY } = e7.detail;
-    this.dragGhostOffset = rect ? { x: pointerX - rect.x, y: pointerY - rect.y } : { x: 0, y: 0 };
+    const { rect, pointerX, pointerY, grabOffsetX, grabOffsetY } = e7.detail;
+    this.dragGhostOffset = { x: grabOffsetX ?? 0, y: grabOffsetY ?? 0 };
     this.dragGhostSize = rect ? { width: rect.width, height: rect.height } : void 0;
     this.ghostPosition = { x: pointerX, y: pointerY };
     this.snapshotRows();

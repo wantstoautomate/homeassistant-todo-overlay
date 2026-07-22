@@ -73,33 +73,40 @@ function collectAllRows(root: ParentNode): RowSnapshot[] {
 // "inside" always appends as the LAST child of the anchor (see manager.py's
 // move_item), and "after" always inserts as the anchor's next sibling at the
 // anchor's OWN level (never as a child of it), regardless of whether that
-// anchor has children of its own. That means hovering the bottom edge of a
-// parent row - which visually sits right above that parent's first child -
-// would otherwise resolve to "after the parent", which the backend renders
-// below the parent's ENTIRE subtree: a drop that lands nowhere near where
-// the pointer actually was. Remapping that case to "before the parent's
-// first child" produces the one sensible interpretation (new first child of
-// the parent) using only the existing placement semantics.
+// anchor has children of its own. For a row with no children, that's fine -
+// the middle "inside" zone naturally means "become its (only) child", and
+// the bottom "after" zone naturally means "become the next sibling".
+//
+// For a row that already HAS children, both of those go wrong the same way:
+// "inside" appends past every existing child, and "after" jumps below the
+// parent's entire subtree - either can render the drop far from wherever
+// the pointer actually was, since both existing children sit visually
+// between the parent's own row and either target. There's no drop point
+// that could ever land there anyway - hovering anywhere below the "before"
+// zone on such a row can only sensibly mean "become its new first child",
+// so that's the one placement offered for the whole rest of the row.
 function resolvePlacement(
     rowId: string,
     rowChildren: TodoItem[],
     relativeY: number,
 ): {id: string; placement: Placement} {
-    let placement: Placement;
+    if (rowChildren.length > 0) {
+        if (relativeY < BEFORE_AFTER_ZONE) {
+            return {id: rowId, placement: "before"};
+        }
 
-    if (relativeY < BEFORE_AFTER_ZONE) {
-        placement = "before";
-    } else if (relativeY > 1 - BEFORE_AFTER_ZONE) {
-        placement = "after";
-    } else {
-        placement = "inside";
-    }
-
-    if (placement === "after" && rowChildren.length > 0) {
         return {id: rowChildren[0].id, placement: "before"};
     }
 
-    return {id: rowId, placement};
+    if (relativeY < BEFORE_AFTER_ZONE) {
+        return {id: rowId, placement: "before"};
+    }
+
+    if (relativeY > 1 - BEFORE_AFTER_ZONE) {
+        return {id: rowId, placement: "after"};
+    }
+
+    return {id: rowId, placement: "inside"};
 }
 
 // Hit-testing against LIVE row positions creates a feedback loop: hovering
@@ -448,11 +455,12 @@ export class TodoOverlayCard extends LitElement {
     }
 
     private onDragStart(e: CustomEvent) {
-        const {rect, pointerX, pointerY} = e.detail;
+        const {rect, pointerX, pointerY, grabOffsetX, grabOffsetY} = e.detail;
 
-        this.dragGhostOffset = rect
-            ? {x: pointerX - rect.x, y: pointerY - rect.y}
-            : {x: 0, y: 0};
+        // grabOffsetX/Y come from the original press position, not this
+        // event's - see the dispatch site in todo-tree-item.ts for why
+        // that distinction matters for fast drags.
+        this.dragGhostOffset = {x: grabOffsetX ?? 0, y: grabOffsetY ?? 0};
         this.dragGhostSize = rect ? {width: rect.width, height: rect.height} : undefined;
         this.ghostPosition = {x: pointerX, y: pointerY};
 

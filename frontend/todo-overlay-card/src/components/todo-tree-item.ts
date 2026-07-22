@@ -390,6 +390,19 @@ export class TodoTreeItem extends LitElement {
         if (this.pointerIsMouse || this.holdReady) {
             this.hasMoved = true;
             this.dragEngaged = true;
+
+            // Captured from the ORIGINAL press, not the current event: for
+            // a mouse, drag now engages on the very first move past the
+            // jitter threshold (see pointerIsMouse above), so a fast flick
+            // can already be well clear of pointerDownScreenPos by the time
+            // this fires. The ghost tracks the pointer by subtracting a
+            // fixed grab offset from its current position every frame - if
+            // that offset were taken from THIS event instead of the
+            // original press, a fast first move bakes in a bogus offset
+            // (however far the pointer already travelled before engaging),
+            // and the ghost stays visibly behind the cursor for the rest of
+            // the drag by exactly that amount.
+            const grabOffset = this.holdRippleOrigin ?? {x: 0, y: 0};
             this.clearHoldRipple();
 
             const rowEl = this.shadowRoot?.querySelector(".row");
@@ -402,6 +415,8 @@ export class TodoTreeItem extends LitElement {
                         rect: rect
                             ? {x: rect.left, y: rect.top, width: rect.width, height: rect.height}
                             : undefined,
+                        grabOffsetX: grabOffset.x,
+                        grabOffsetY: grabOffset.y,
                         pointerX: e.clientX,
                         pointerY: e.clientY,
                     },
