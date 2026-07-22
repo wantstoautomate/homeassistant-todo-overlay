@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import re
-from typing import Literal
+from typing import Any, Literal
 
+from .const import EVENT_ITEM_CHANGED
 from .ha_adapter import HomeAssistantTodoProvider
 from .metadata_store import MetadataStore
 from .models import ItemPosition, TodoItem, TodoList
@@ -24,9 +25,36 @@ class TodoManager:
         self,
         adapter: HomeAssistantTodoProvider,
         metadata_store: MetadataStore,
+        hass: Any | None = None,
     ) -> None:
         self._adapter = adapter
         self._metadata_store = metadata_store
+        # Optional: only needed to fire events for the todo_overlay
+        # trigger platform. None in tests, where there's nothing
+        # listening for them anyway.
+        self._hass = hass
+
+    def _fire_event(
+        self,
+        entity_id: str,
+        item_id: str,
+        title: str,
+        action: str,
+        **extra: Any,
+    ) -> None:
+        if self._hass is None:
+            return
+
+        self._hass.bus.async_fire(
+            EVENT_ITEM_CHANGED,
+            {
+                "entity_id": entity_id,
+                "item_id": item_id,
+                "title": title,
+                "action": action,
+                **extra,
+            },
+        )
 
     async def get_list(
         self,
@@ -194,6 +222,8 @@ class TodoManager:
         if tags:
             await self._metadata_store.set_tags(entity_id, item_id, tags)
 
+        self._fire_event(entity_id, item_id, title, "created", quantity=quantity, tags=tags or [])
+
         return item_id
 
     async def set_quantity(
@@ -206,6 +236,25 @@ class TodoManager:
         since native Home Assistant todo items have no such field."""
 
         await self._metadata_store.set_quantity(entity_id, item_id, quantity)
+
+        items = await self._adapter.get_items(entity_id)
+        item = next((candidate for candidate in items if candidate.id == item_id), None)
+
+        if item is not None:
+            self._fire_event(entity_id, item_id, item.title, "quantity_changed", quantity=quantity)
+
+    async def set_quantity_by_item(
+        self,
+        entity_id: str,
+        item: str,
+        quantity: str | None,
+    ) -> None:
+        """Set an item's quantity, identified by uid or title - the
+        service-facing counterpart to set_quantity(), which callers
+        with a real item_id already in hand (the frontend) use directly."""
+
+        resolved = await self._resolve_item(entity_id, item)
+        await self.set_quantity(entity_id, resolved.id, quantity)
 
     async def set_tags(
         self,
@@ -229,6 +278,7 @@ class TodoManager:
 
         resolved = await self._resolve_item(entity_id, item)
         await self._metadata_store.add_tag(entity_id, resolved.id, tag)
+        self._fire_event(entity_id, resolved.id, resolved.title, "tag_added", tag=tag)
 
     async def remove_tag(
         self,
@@ -238,6 +288,7 @@ class TodoManager:
     ) -> None:
         resolved = await self._resolve_item(entity_id, item)
         await self._metadata_store.remove_tag(entity_id, resolved.id, tag)
+        self._fire_event(entity_id, resolved.id, resolved.title, "tag_removed", tag=tag)
 
     async def _resolve_item(
         self,
@@ -349,6 +400,11 @@ class TodoManager:
             await self._adapter.set_completed(entity_id, target_id, completed)
             item.completed = completed
             touched_ids.append(target_id)
+
+            self._fire_event(
+                entity_id, target_id, item.title,
+                "completed" if completed else "uncompleted",
+            )
 
         position_updates: dict[str, ItemPosition] = {}
 
@@ -505,8 +561,14 @@ class TodoManager:
             removed_ids.append(root_id)
             removed_ids.extend(self._descendants(root_id, positions, items))
 
+        item_by_id = {item.id: item for item in items}
+
         for removed_id in removed_ids:
             await self._adapter.remove_item(entity_id, removed_id)
+            removed_item = item_by_id.get(removed_id)
+            self._fire_event(
+                entity_id, removed_id, removed_item.title if removed_item else "", "removed",
+            )
 
         if removed_ids:
             await self._metadata_store.remove_positions(entity_id, removed_ids)

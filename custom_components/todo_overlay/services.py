@@ -4,18 +4,26 @@ from homeassistant.core import HomeAssistant, ServiceCall
 from homeassistant.helpers import config_validation as cv
 
 from .const import (
+    ATTR_DESCRIPTION,
+    ATTR_DUE_DATE,
+    ATTR_DUE_DATETIME,
     ATTR_ITEM,
     ATTR_MODE,
     ATTR_NAME,
     ATTR_PERSIST_STATES,
+    ATTR_QUANTITY,
     ATTR_TAG,
+    ATTR_TAGS,
+    ATTR_TITLE,
     DATA_MANAGER,
     DOMAIN,
     SERVICE_ADD_TAG,
+    SERVICE_CREATE_ITEM,
     SERVICE_DELETE_SAVED_LIST,
     SERVICE_LOAD_LIST,
     SERVICE_REMOVE_TAG,
     SERVICE_SAVE_LIST,
+    SERVICE_SET_QUANTITY,
 )
 
 SAVE_LIST_SCHEMA = vol.Schema(
@@ -47,6 +55,26 @@ ADD_OR_REMOVE_TAG_SCHEMA = vol.Schema(
         vol.Required("entity_id"): cv.entity_id,
         vol.Required(ATTR_ITEM): str,
         vol.Required(ATTR_TAG): str,
+    }
+)
+
+CREATE_ITEM_SCHEMA = vol.Schema(
+    {
+        vol.Required("entity_id"): cv.entity_id,
+        vol.Required(ATTR_TITLE): str,
+        vol.Optional(ATTR_DESCRIPTION): str,
+        vol.Optional(ATTR_DUE_DATE): str,
+        vol.Optional(ATTR_DUE_DATETIME): str,
+        vol.Optional(ATTR_QUANTITY): str,
+        vol.Optional(ATTR_TAGS): [str],
+    }
+)
+
+SET_QUANTITY_SCHEMA = vol.Schema(
+    {
+        vol.Required("entity_id"): cv.entity_id,
+        vol.Required(ATTR_ITEM): str,
+        vol.Optional(ATTR_QUANTITY): str,
     }
 )
 
@@ -98,6 +126,28 @@ def async_register_services(hass: HomeAssistant) -> None:
             tag=call.data[ATTR_TAG],
         )
 
+    async def handle_create_item(call: ServiceCall) -> None:
+        manager = hass.data[DOMAIN][DATA_MANAGER]
+
+        await manager.create_item(
+            entity_id=call.data["entity_id"],
+            title=call.data[ATTR_TITLE],
+            description=call.data.get(ATTR_DESCRIPTION),
+            due_date=call.data.get(ATTR_DUE_DATE),
+            due_datetime=call.data.get(ATTR_DUE_DATETIME),
+            quantity=call.data.get(ATTR_QUANTITY),
+            tags=call.data.get(ATTR_TAGS),
+        )
+
+    async def handle_set_quantity(call: ServiceCall) -> None:
+        manager = hass.data[DOMAIN][DATA_MANAGER]
+
+        await manager.set_quantity_by_item(
+            entity_id=call.data["entity_id"],
+            item=call.data[ATTR_ITEM],
+            quantity=call.data.get(ATTR_QUANTITY),
+        )
+
     hass.services.async_register(
         DOMAIN, SERVICE_SAVE_LIST, handle_save_list, schema=SAVE_LIST_SCHEMA
     )
@@ -115,4 +165,10 @@ def async_register_services(hass: HomeAssistant) -> None:
     )
     hass.services.async_register(
         DOMAIN, SERVICE_REMOVE_TAG, handle_remove_tag, schema=ADD_OR_REMOVE_TAG_SCHEMA
+    )
+    hass.services.async_register(
+        DOMAIN, SERVICE_CREATE_ITEM, handle_create_item, schema=CREATE_ITEM_SCHEMA
+    )
+    hass.services.async_register(
+        DOMAIN, SERVICE_SET_QUANTITY, handle_set_quantity, schema=SET_QUANTITY_SCHEMA
     )

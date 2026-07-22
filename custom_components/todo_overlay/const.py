@@ -22,9 +22,21 @@ SERVICE_LOAD_LIST = "load_list"
 SERVICE_DELETE_SAVED_LIST = "delete_saved_list"
 SERVICE_ADD_TAG = "add_tag"
 SERVICE_REMOVE_TAG = "remove_tag"
+SERVICE_CREATE_ITEM = "create_item"
+SERVICE_SET_QUANTITY = "set_quantity"
 
 ATTR_NAME = "name"
 ATTR_PERSIST_STATES = "persist_states"
 ATTR_MODE = "mode"
 ATTR_ITEM = "item"
 ATTR_TAG = "tag"
+ATTR_TITLE = "title"
+ATTR_DESCRIPTION = "description"
+ATTR_DUE_DATE = "due_date"
+ATTR_DUE_DATETIME = "due_datetime"
+ATTR_QUANTITY = "quantity"
+ATTR_TAGS = "tags"
+
+# Fired whenever a meaningful change happens to a list's items, so
+# automations can react via the todo_overlay trigger platform.
+EVENT_ITEM_CHANGED = "todo_overlay_item_event"

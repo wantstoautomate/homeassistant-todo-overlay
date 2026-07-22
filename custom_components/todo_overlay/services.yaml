@@ -83,3 +83,57 @@ remove_tag:
       example: urgent
       selector:
         text:
+
+create_item:
+  fields:
+    entity_id:
+      required: true
+      selector:
+        entity:
+          domain: todo
+    title:
+      required: true
+      example: Salami
+      selector:
+        text:
+    description:
+      required: false
+      selector:
+        text:
+    due_date:
+      required: false
+      selector:
+        date:
+    due_datetime:
+      required: false
+      selector:
+        datetime:
+    quantity:
+      required: false
+      example: 150g
+      selector:
+        text:
+    tags:
+      required: false
+      example: ["urgent", "deli"]
+      selector:
+        object:
+
+set_quantity:
+  fields:
+    entity_id:
+      required: true
+      selector:
+        entity:
+          domain: todo
+    item:
+      required: true
+      example: Salami
+      description: The item's id or title (same convention as todo.update_item).
+      selector:
+        text:
+    quantity:
+      required: false
+      example: 150g
+      selector:
+        text:

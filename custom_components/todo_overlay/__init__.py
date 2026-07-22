@@ -24,6 +24,7 @@ async def async_setup(hass: HomeAssistant, config) -> bool:
     manager = TodoManager(
         adapter=HomeAssistantTodoProvider(hass),
         metadata_store=MetadataStore(hass),
+        hass=hass,
     )
 
     hass.data.setdefault(DOMAIN, {})[DATA_MANAGER] = manager
