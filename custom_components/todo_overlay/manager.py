@@ -32,7 +32,19 @@ class TodoManager:
         self,
         entity_id: str,
     ) -> TodoList:
-        """Return a Todo list."""
+        """Return a Todo list.
+
+        Before building the tree, items that share a title with a
+        sibling are merged together (combining their quantities where
+        possible) - see _merge_duplicate_titles(). Running this on
+        every read, rather than only when our own UI creates an item,
+        is what makes it catch duplicates added through ANY path: a
+        voice assistant or automation calling todo.add_item directly
+        bypasses this integration entirely, but our card already
+        reactively re-reads the list whenever the entity's state
+        changes (see the live-sync handling in the frontend), so those
+        additions still end up back through here.
+        """
 
         items = await self._adapter.get_items(entity_id)
 
@@ -42,10 +54,100 @@ class TodoManager:
 
         quantities = await self._metadata_store.get_quantities(entity_id)
 
+        items, positions, quantities = await self._merge_duplicate_titles(
+            entity_id, items, positions, quantities,
+        )
+
         return TodoList(
             entity_id=entity_id,
             items=build_tree(items, positions, quantities),
         )
+
+    async def _merge_duplicate_titles(
+        self,
+        entity_id: str,
+        items: list[TodoItem],
+        positions: dict[str, ItemPosition],
+        quantities: dict[str, str],
+    ) -> tuple[list[TodoItem], dict[str, ItemPosition], dict[str, str]]:
+        """Collapse sibling items that share a title into one, combining
+        their quantities where possible (see _combine_quantities).
+
+        Only merges a group when at least one member actually carries a
+        quantity - two plain same-titled items with no quantity at all
+        (e.g. two unrelated "Call mom" reminders) are left alone, since
+        there'd be nothing to combine and no quantity-shopping-list
+        reason to assume they're the same thing.
+
+        A surviving duplicate keeps whichever item appeared first in
+        the adapter's own item list (its native creation order), and
+        any children the removed duplicate had are reparented onto it
+        rather than being silently orphaned or lost.
+        """
+
+        groups: dict[tuple[str | None, str], list[TodoItem]] = {}
+
+        for item in items:
+            parent_id = self._parent_id_of(item.id, positions)
+            groups.setdefault((parent_id, item.title), []).append(item)
+
+        removed_ids: list[str] = []
+        reparented: dict[str, ItemPosition] = {}
+
+        for group in groups.values():
+            if len(group) < 2:
+                continue
+
+            if not any(quantities.get(item.id) for item in group):
+                continue
+
+            survivor, *duplicates = group
+            combined_quantity = quantities.get(survivor.id)
+
+            for duplicate in duplicates:
+                combined_quantity = (
+                    self._combine_quantities(combined_quantity, quantities.get(duplicate.id))
+                    or combined_quantity
+                )
+
+                child_ids = self._siblings(items, positions, duplicate.id)
+
+                if child_ids:
+                    survivor_children = self._siblings(items, positions, survivor.id)
+                    next_order = max(
+                        (self._order_of(cid, positions) for cid in survivor_children),
+                        default=-1,
+                    ) + 1
+
+                    for child_id in child_ids:
+                        reparented[child_id] = ItemPosition(
+                            parent_id=survivor.id, order=next_order,
+                        )
+                        positions[child_id] = reparented[child_id]
+                        next_order += 1
+
+                await self._adapter.remove_item(entity_id, duplicate.id)
+                removed_ids.append(duplicate.id)
+
+            if combined_quantity:
+                await self._metadata_store.set_quantity(entity_id, survivor.id, combined_quantity)
+                quantities[survivor.id] = combined_quantity
+
+        if reparented:
+            await self._metadata_store.set_positions(entity_id, reparented)
+
+        if not removed_ids:
+            return items, positions, quantities
+
+        await self._metadata_store.remove_positions(entity_id, removed_ids)
+        await self._metadata_store.remove_quantities(entity_id, removed_ids)
+
+        removed_id_set = set(removed_ids)
+        items = [item for item in items if item.id not in removed_id_set]
+        positions = {k: v for k, v in positions.items() if k not in removed_id_set}
+        quantities = {k: v for k, v in quantities.items() if k not in removed_id_set}
+
+        return items, positions, quantities
 
     async def create_item(
         self,

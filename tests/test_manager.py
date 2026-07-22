@@ -801,6 +801,11 @@ async def test_manager_set_quantity_updates_and_clears():
 @pytest.mark.asyncio
 async def test_manager_save_and_load_list_round_trips_quantity():
 
+    # full_merge itself never dedupes at creation time, but get_list()'s
+    # own universal same-title merge (see the tests further down) still
+    # catches the result on the very next read, since both copies carry
+    # a quantity - so this ends up as ONE "Salami" with combined 300g,
+    # not two separate 150g items.
     adapter = FakeAdapter(items=[TodoItem(id="1", title="Salami", completed=False)])
     metadata_store = FakeMetadataStore({"1": ItemPosition(parent_id=None, order=0)})
     manager = TodoManager(adapter=adapter, metadata_store=metadata_store)
@@ -812,8 +817,26 @@ async def test_manager_save_and_load_list_round_trips_quantity():
 
     todo_list = await manager.get_list("todo.shopping")
     salamis = [item for item in todo_list.items if item.title == "Salami"]
-    assert len(salamis) == 2
-    assert all(item.quantity == "150g" for item in salamis)
+    assert len(salamis) == 1
+    assert salamis[0].quantity == "300g"
+
+
+@pytest.mark.asyncio
+async def test_manager_load_list_full_merge_creates_true_duplicates_without_quantity():
+
+    # Without any quantity involved, get_list()'s merge is deliberately
+    # a no-op (see test_manager_get_list_leaves_plain_duplicate_titles_alone),
+    # so full_merge's "duplicates and all, no dedup" behaviour is still
+    # directly observable for plain items.
+    adapter = FakeAdapter(items=[TodoItem(id="1", title="Shopping", completed=False)])
+    metadata_store = FakeMetadataStore({"1": ItemPosition(parent_id=None, order=0)})
+    manager = TodoManager(adapter=adapter, metadata_store=metadata_store)
+
+    await manager.save_list(entity_id="todo.shopping", name="template")
+    await manager.load_list(entity_id="todo.shopping", name="template", mode="full_merge")
+
+    todo_list = await manager.get_list("todo.shopping")
+    assert len([item for item in todo_list.items if item.title == "Shopping"]) == 2
 
 
 @pytest.mark.asyncio
@@ -896,3 +919,81 @@ def test_combine_quantities_none_for_mismatched_units():
 
 def test_combine_quantities_bare_counts():
     assert TodoManager._combine_quantities("2", "3") == "5"
+
+
+@pytest.mark.asyncio
+async def test_manager_get_list_merges_duplicate_titles_with_quantities():
+
+    # Simulates the real-world case: quick-add, the dialog, a voice
+    # assistant, or an automation each independently create a "Salami"
+    # item - regardless of path, get_list() should present them as one.
+    adapter = FakeAdapter(items=[
+        TodoItem(id="1", title="Salami", completed=False),
+        TodoItem(id="2", title="Salami", completed=False),
+    ])
+
+    metadata_store = FakeMetadataStore({
+        "1": ItemPosition(parent_id=None, order=0),
+        "2": ItemPosition(parent_id=None, order=1),
+    })
+    metadata_store._quantities = {"1": "150g", "2": "200g"}
+
+    manager = TodoManager(adapter=adapter, metadata_store=metadata_store)
+
+    todo_list = await manager.get_list("todo.shopping")
+
+    assert len(todo_list.items) == 1
+    assert todo_list.items[0].id == "1"
+    assert todo_list.items[0].quantity == "350g"
+    assert adapter.remove_item_calls == [("todo.shopping", "2")]
+
+
+@pytest.mark.asyncio
+async def test_manager_get_list_leaves_plain_duplicate_titles_alone():
+
+    # Neither has a quantity - nothing to combine, and no shopping-list
+    # signal that these are "the same thing" rather than two unrelated
+    # reminders that happen to share a title - so both survive untouched.
+    adapter = FakeAdapter(items=[
+        TodoItem(id="1", title="Call mom", completed=False),
+        TodoItem(id="2", title="Call mom", completed=False),
+    ])
+
+    metadata_store = FakeMetadataStore({
+        "1": ItemPosition(parent_id=None, order=0),
+        "2": ItemPosition(parent_id=None, order=1),
+    })
+
+    manager = TodoManager(adapter=adapter, metadata_store=metadata_store)
+
+    todo_list = await manager.get_list("todo.shopping")
+
+    assert len(todo_list.items) == 2
+    assert adapter.remove_item_calls == []
+
+
+@pytest.mark.asyncio
+async def test_manager_get_list_merge_reparents_duplicate_children():
+
+    adapter = FakeAdapter(items=[
+        TodoItem(id="1", title="Groceries", completed=False),
+        TodoItem(id="2", title="Groceries", completed=False),
+        TodoItem(id="3", title="Salami", completed=False),
+    ])
+
+    metadata_store = FakeMetadataStore({
+        "1": ItemPosition(parent_id=None, order=0),
+        "2": ItemPosition(parent_id=None, order=1),
+        "3": ItemPosition(parent_id="2", order=0),
+    })
+    metadata_store._quantities = {"1": "1 trip", "2": "1 trip"}
+
+    manager = TodoManager(adapter=adapter, metadata_store=metadata_store)
+
+    todo_list = await manager.get_list("todo.shopping")
+
+    # "2" (the duplicate "Groceries") is removed, and its child "Salami"
+    # is reparented onto the surviving "1" rather than being lost.
+    assert len(todo_list.items) == 1
+    assert todo_list.items[0].id == "1"
+    assert [child.id for child in todo_list.items[0].children] == ["3"]
