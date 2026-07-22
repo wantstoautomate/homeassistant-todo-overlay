@@ -608,12 +608,13 @@ async function getList(hass, entityId) {
     entity_id: entityId
   });
 }
-async function setParent(hass, entityId, childId, parentId) {
+async function moveItem(hass, entityId, childId, referenceId, placement) {
   await hass.connection.sendMessagePromise({
-    type: "todo_overlay/set_parent",
+    type: "todo_overlay/move_item",
     entity_id: entityId,
     child_id: childId,
-    parent_id: parentId
+    reference_id: referenceId,
+    placement
   });
 }
 
@@ -662,6 +663,7 @@ var e6 = e5(class extends i5 {
 });
 
 // src/components/todo-tree-item.ts
+var BEFORE_AFTER_ZONE = 0.3;
 var TodoTreeItem = class extends i4 {
   constructor() {
     super(...arguments);
@@ -686,10 +688,20 @@ var TodoTreeItem = class extends i4 {
       })
     );
   }
-  pointerEnter() {
+  pointerEnterOrMove(e7) {
+    const rect = e7.currentTarget.getBoundingClientRect();
+    const relativeY = (e7.clientY - rect.top) / rect.height;
+    let placement;
+    if (relativeY < BEFORE_AFTER_ZONE) {
+      placement = "before";
+    } else if (relativeY > 1 - BEFORE_AFTER_ZONE) {
+      placement = "after";
+    } else {
+      placement = "inside";
+    }
     this.dispatchEvent(
       new CustomEvent("tree-pointer-enter", {
-        detail: { id: this.item.id },
+        detail: { id: this.item.id, placement },
         bubbles: true,
         composed: true
       })
@@ -708,11 +720,14 @@ var TodoTreeItem = class extends i4 {
     );
   }
   render() {
+    const isDropTarget = this.isDropTarget;
     const rowClasses = {
       row: true,
       pressed: this.isPressed && !this.isDragging,
       dragging: this.isDragging,
-      "drop-target": this.isDropTarget,
+      "drop-before": isDropTarget && this.hoverPlacement === "before",
+      "drop-after": isDropTarget && this.hoverPlacement === "after",
+      "drop-inside": isDropTarget && this.hoverPlacement === "inside",
       completed: this.item.completed
     };
     return b2`
@@ -722,7 +737,8 @@ var TodoTreeItem = class extends i4 {
                     class=${e6(rowClasses)}
 
                     @pointerdown=${this.pointerDown}
-                    @pointerenter=${this.pointerEnter}
+                    @pointerenter=${this.pointerEnterOrMove}
+                    @pointermove=${this.pointerEnterOrMove}
                     @pointerup=${this.pointerUp}
                 >
                     <ha-checkbox .checked=${this.item.completed}></ha-checkbox>
@@ -737,6 +753,7 @@ var TodoTreeItem = class extends i4 {
                                             .item=${child}
                                             .draggedId=${this.draggedId}
                                             .hoverId=${this.hoverId}
+                                            .hoverPlacement=${this.hoverPlacement}
                                         ></todo-overlay-tree-item>
                                     `
     )}
@@ -759,6 +776,7 @@ TodoTreeItem.styles = i`
         }
 
         .row {
+            position: relative;
             display: flex;
             align-items: center;
             gap: 12px;
@@ -790,9 +808,28 @@ TodoTreeItem.styles = i`
             box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
         }
 
-        .row.drop-target {
+        .row.drop-inside {
             outline-color: var(--accent-color, var(--primary-color));
             background: rgba(var(--rgb-accent-color, 255, 152, 0), 0.08);
+        }
+
+        .row.drop-before::before,
+        .row.drop-after::after {
+            content: "";
+            position: absolute;
+            left: 20px;
+            right: 20px;
+            height: 2px;
+            border-radius: 1px;
+            background: var(--accent-color, var(--primary-color));
+        }
+
+        .row.drop-before::before {
+            top: -1px;
+        }
+
+        .row.drop-after::after {
+            bottom: -1px;
         }
 
         .row.completed .summary {
@@ -821,6 +858,9 @@ __decorateClass([
 __decorateClass([
   n4({ attribute: false })
 ], TodoTreeItem.prototype, "hoverId", 2);
+__decorateClass([
+  n4({ attribute: false })
+], TodoTreeItem.prototype, "hoverPlacement", 2);
 TodoTreeItem = __decorateClass([
   t3("todo-overlay-tree-item")
 ], TodoTreeItem);
@@ -840,6 +880,7 @@ var TodoTree = class extends i4 {
                             .item=${item}
                             .draggedId=${this.draggedId}
                             .hoverId=${this.hoverId}
+                            .hoverPlacement=${this.hoverPlacement}
                         ></todo-overlay-tree-item>
                     `
     )}
@@ -863,6 +904,9 @@ __decorateClass([
 __decorateClass([
   n4({ attribute: false })
 ], TodoTree.prototype, "hoverId", 2);
+__decorateClass([
+  n4({ attribute: false })
+], TodoTree.prototype, "hoverPlacement", 2);
 TodoTree = __decorateClass([
   t3("todo-overlay-tree")
 ], TodoTree);
@@ -916,15 +960,17 @@ var TodoOverlayCard = class extends i4 {
       return;
     }
     this.hoverId = e7.detail.id;
+    this.hoverPlacement = e7.detail.placement;
   }
   async onPointerUp(e7) {
     if (this.draggedId && this.hoverId && this.draggedId !== this.hoverId) {
       try {
-        await setParent(
+        await moveItem(
           this.hass,
           this.config.entity,
           this.draggedId,
-          this.hoverId
+          this.hoverId,
+          this.hoverPlacement ?? "inside"
         );
         await this.load();
       } catch (err) {
@@ -943,6 +989,7 @@ var TodoOverlayCard = class extends i4 {
     }
     this.draggedId = void 0;
     this.hoverId = void 0;
+    this.hoverPlacement = void 0;
   }
   async toggleComplete(item) {
     try {
@@ -995,6 +1042,7 @@ var TodoOverlayCard = class extends i4 {
                                     .items=${this.list.items}
                                     .draggedId=${this.draggedId}
                                     .hoverId=${this.hoverId}
+                                    .hoverPlacement=${this.hoverPlacement}
 
                                     @tree-pointer-down=${this.onPointerDown}
                                     @tree-pointer-enter=${this.onPointerEnter}
@@ -1050,6 +1098,9 @@ __decorateClass([
 __decorateClass([
   r5()
 ], TodoOverlayCard.prototype, "hoverId", 2);
+__decorateClass([
+  r5()
+], TodoOverlayCard.prototype, "hoverPlacement", 2);
 __decorateClass([
   r5()
 ], TodoOverlayCard.prototype, "editingItem", 2);

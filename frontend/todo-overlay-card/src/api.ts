@@ -1,5 +1,5 @@
 import type { HassLike } from "./hass";
-import type { TodoList } from "./models";
+import type { Placement, TodoList } from "./models";
 
 export async function getList(
     hass: HassLike,
@@ -13,18 +13,20 @@ export async function getList(
 
 }
 
-export async function setParent(
+export async function moveItem(
     hass: HassLike,
     entityId: string,
     childId: string,
-    parentId: string | null,
+    referenceId: string,
+    placement: Placement,
 ): Promise<void> {
 
     await hass.connection.sendMessagePromise<void>({
-        type: "todo_overlay/set_parent",
+        type: "todo_overlay/move_item",
         entity_id: entityId,
         child_id: childId,
-        parent_id: parentId,
+        reference_id: referenceId,
+        placement,
     });
 
 }

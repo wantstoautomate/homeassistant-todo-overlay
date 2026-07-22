@@ -2,7 +2,9 @@ from __future__ import annotations
 
 from homeassistant.helpers.storage import Store
 
-STORAGE_VERSION = 1
+from .models import ItemPosition
+
+STORAGE_VERSION = 2
 STORAGE_KEY = "todo_overlay"
 
 
@@ -11,7 +13,7 @@ class MetadataStore:
 
     def __init__(self, hass) -> None:
         self._store = Store(hass, STORAGE_VERSION, STORAGE_KEY)
-        self._cache: dict[str, dict[str, str | None]] | None = None
+        self._cache: dict[str, dict[str, dict]] | None = None
 
     async def _load(self) -> None:
         if self._cache is None:
@@ -20,28 +22,33 @@ class MetadataStore:
     async def get_relationships(
         self,
         entity_id: str,
-    ) -> dict[str, str | None]:
+    ) -> dict[str, ItemPosition]:
         await self._load()
 
         assert self._cache is not None
 
-        return dict(self._cache.get(entity_id, {}))
+        return {
+            item_id: ItemPosition(parent_id=data["parent"], order=data["order"])
+            for item_id, data in self._cache.get(entity_id, {}).items()
+        }
 
-    async def set_parent(
+    async def set_positions(
         self,
         entity_id: str,
-        child_id: str,
-        parent_id: str | None,
+        positions: dict[str, ItemPosition],
     ) -> None:
+        """Write positions for one or more items in a single save."""
+
         await self._load()
 
         assert self._cache is not None
 
-        relationships = self._cache.setdefault(entity_id, {})
+        entity_positions = self._cache.setdefault(entity_id, {})
 
-        if parent_id is None:
-            relationships.pop(child_id, None)
-        else:
-            relationships[child_id] = parent_id
+        for item_id, position in positions.items():
+            entity_positions[item_id] = {
+                "parent": position.parent_id,
+                "order": position.order,
+            }
 
         await self._store.async_save(self._cache)

@@ -1,9 +1,9 @@
 import {LitElement, html} from "lit";
 import {customElement, property, state} from "lit/decorators.js";
 
-import {getList, setParent} from "./api";
+import {getList, moveItem} from "./api";
 import type {HassLike} from "./hass";
-import type {TodoItem, TodoList} from "./models";
+import type {Placement, TodoItem, TodoList} from "./models";
 
 import "./components/todo-tree";
 
@@ -51,6 +51,9 @@ export class TodoOverlayCard extends LitElement {
     private hoverId?: string;
 
     @state()
+    private hoverPlacement?: Placement;
+
+    @state()
     private editingItem?: TodoItem;
 
     @state()
@@ -93,6 +96,7 @@ export class TodoOverlayCard extends LitElement {
         }
 
         this.hoverId = e.detail.id;
+        this.hoverPlacement = e.detail.placement;
     }
 
     private async onPointerUp(e: CustomEvent) {
@@ -104,11 +108,12 @@ export class TodoOverlayCard extends LitElement {
         ) {
 
             try {
-                await setParent(
+                await moveItem(
                     this.hass,
                     this.config.entity,
                     this.draggedId,
                     this.hoverId,
+                    this.hoverPlacement ?? "inside",
                 );
 
                 await this.load();
@@ -131,6 +136,7 @@ export class TodoOverlayCard extends LitElement {
 
         this.draggedId = undefined;
         this.hoverId = undefined;
+        this.hoverPlacement = undefined;
     }
 
     private async toggleComplete(item: TodoItem) {
@@ -197,6 +203,7 @@ export class TodoOverlayCard extends LitElement {
                                     .items=${this.list.items}
                                     .draggedId=${this.draggedId}
                                     .hoverId=${this.hoverId}
+                                    .hoverPlacement=${this.hoverPlacement}
 
                                     @tree-pointer-down=${this.onPointerDown}
                                     @tree-pointer-enter=${this.onPointerEnter}

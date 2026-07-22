@@ -4,6 +4,14 @@ from dataclasses import dataclass, field
 
 
 @dataclass(slots=True)
+class ItemPosition:
+    """Where a Todo item sits in the overlay hierarchy."""
+
+    parent_id: str | None
+    order: int
+
+
+@dataclass(slots=True)
 class TodoItem:
     """A single Todo item exposed by the Todo Overlay API."""
 

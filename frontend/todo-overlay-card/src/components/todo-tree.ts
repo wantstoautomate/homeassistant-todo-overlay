@@ -1,7 +1,7 @@
 import {LitElement, html, css} from "lit";
 import {customElement, property} from "lit/decorators.js";
 
-import type {TodoItem} from "../models";
+import type {Placement, TodoItem} from "../models";
 
 import "./todo-tree-item";
 
@@ -25,6 +25,9 @@ export class TodoTree extends LitElement {
     @property({attribute: false})
     hoverId?: string;
 
+    @property({attribute: false})
+    hoverPlacement?: Placement;
+
     render() {
         return html`
             <ul>
@@ -34,6 +37,7 @@ export class TodoTree extends LitElement {
                             .item=${item}
                             .draggedId=${this.draggedId}
                             .hoverId=${this.hoverId}
+                            .hoverPlacement=${this.hoverPlacement}
                         ></todo-overlay-tree-item>
                     `,
                 )}

@@ -2,7 +2,9 @@ import {LitElement, html, css} from "lit";
 import {customElement, property} from "lit/decorators.js";
 import {classMap} from "lit/directives/class-map.js";
 
-import type {TodoItem} from "../models";
+import type {Placement, TodoItem} from "../models";
+
+const BEFORE_AFTER_ZONE = 0.3;
 
 @customElement("todo-overlay-tree-item")
 export class TodoTreeItem extends LitElement {
@@ -19,6 +21,7 @@ export class TodoTreeItem extends LitElement {
         }
 
         .row {
+            position: relative;
             display: flex;
             align-items: center;
             gap: 12px;
@@ -50,9 +53,28 @@ export class TodoTreeItem extends LitElement {
             box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
         }
 
-        .row.drop-target {
+        .row.drop-inside {
             outline-color: var(--accent-color, var(--primary-color));
             background: rgba(var(--rgb-accent-color, 255, 152, 0), 0.08);
+        }
+
+        .row.drop-before::before,
+        .row.drop-after::after {
+            content: "";
+            position: absolute;
+            left: 20px;
+            right: 20px;
+            height: 2px;
+            border-radius: 1px;
+            background: var(--accent-color, var(--primary-color));
+        }
+
+        .row.drop-before::before {
+            top: -1px;
+        }
+
+        .row.drop-after::after {
+            bottom: -1px;
         }
 
         .row.completed .summary {
@@ -81,6 +103,9 @@ export class TodoTreeItem extends LitElement {
 
     @property({attribute: false})
     hoverId?: string;
+
+    @property({attribute: false})
+    hoverPlacement?: Placement;
 
     private pointerDownAt = 0;
 
@@ -116,10 +141,23 @@ export class TodoTreeItem extends LitElement {
         );
     }
 
-    private pointerEnter() {
+    private pointerEnterOrMove(e: PointerEvent) {
+        const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+        const relativeY = (e.clientY - rect.top) / rect.height;
+
+        let placement: Placement;
+
+        if (relativeY < BEFORE_AFTER_ZONE) {
+            placement = "before";
+        } else if (relativeY > 1 - BEFORE_AFTER_ZONE) {
+            placement = "after";
+        } else {
+            placement = "inside";
+        }
+
         this.dispatchEvent(
             new CustomEvent("tree-pointer-enter", {
-                detail: {id: this.item.id},
+                detail: {id: this.item.id, placement},
                 bubbles: true,
                 composed: true,
             }),
@@ -140,11 +178,15 @@ export class TodoTreeItem extends LitElement {
     }
 
     render() {
+        const isDropTarget = this.isDropTarget;
+
         const rowClasses = {
             row: true,
             pressed: this.isPressed && !this.isDragging,
             dragging: this.isDragging,
-            "drop-target": this.isDropTarget,
+            "drop-before": isDropTarget && this.hoverPlacement === "before",
+            "drop-after": isDropTarget && this.hoverPlacement === "after",
+            "drop-inside": isDropTarget && this.hoverPlacement === "inside",
             completed: this.item.completed,
         };
 
@@ -155,7 +197,8 @@ export class TodoTreeItem extends LitElement {
                     class=${classMap(rowClasses)}
 
                     @pointerdown=${this.pointerDown}
-                    @pointerenter=${this.pointerEnter}
+                    @pointerenter=${this.pointerEnterOrMove}
+                    @pointermove=${this.pointerEnterOrMove}
                     @pointerup=${this.pointerUp}
                 >
                     <ha-checkbox .checked=${this.item.completed}></ha-checkbox>
@@ -172,6 +215,7 @@ export class TodoTreeItem extends LitElement {
                                             .item=${child}
                                             .draggedId=${this.draggedId}
                                             .hoverId=${this.hoverId}
+                                            .hoverPlacement=${this.hoverPlacement}
                                         ></todo-overlay-tree-item>
                                     `,
                                 )}

@@ -4,7 +4,7 @@ from homeassistant.components import websocket_api
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import config_validation as cv
 
-from .const import DATA_MANAGER, DOMAIN, WS_TYPE_GET_LIST, WS_TYPE_SET_PARENT
+from .const import DATA_MANAGER, DOMAIN, WS_TYPE_GET_LIST, WS_TYPE_MOVE_ITEM
 
 
 @websocket_api.websocket_command(
@@ -35,27 +35,29 @@ async def websocket_get_list(
 
 @websocket_api.websocket_command(
     {
-        vol.Required("type"): WS_TYPE_SET_PARENT,
+        vol.Required("type"): WS_TYPE_MOVE_ITEM,
         vol.Required("entity_id"): cv.entity_id,
         vol.Required("child_id"): str,
-        vol.Optional("parent_id"): vol.Any(str, None),
+        vol.Required("reference_id"): str,
+        vol.Required("placement"): vol.In(["before", "after", "inside"]),
     }
 )
 @websocket_api.async_response
-async def websocket_set_parent(
+async def websocket_move_item(
     hass: HomeAssistant,
     connection: websocket_api.ActiveConnection,
     msg,
 ) -> None:
-    """Set the parent of a todo item."""
+    """Move an item before, after, or inside another item."""
 
     manager = hass.data[DOMAIN][DATA_MANAGER]
 
     try:
-        await manager.set_parent(
+        await manager.move_item(
             entity_id=msg["entity_id"],
             child_id=msg["child_id"],
-            parent_id=msg.get("parent_id"),
+            reference_id=msg["reference_id"],
+            placement=msg["placement"],
         )
     except ValueError as err:
         connection.send_error(msg["id"], "cycle_detected", str(err))
@@ -72,5 +74,5 @@ def async_register_websocket(hass: HomeAssistant) -> None:
 
     websocket_api.async_register_command(
         hass,
-        websocket_set_parent,
+        websocket_move_item,
     )

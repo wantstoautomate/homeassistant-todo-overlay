@@ -9,3 +9,5 @@ export interface TodoList {
     entity_id: string;
     items: TodoItem[];
 }
+
+export type Placement = "before" | "after" | "inside";

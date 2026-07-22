@@ -53,6 +53,11 @@ async def _async_register_lovelace_resource(hass: HomeAssistant) -> None:
 
     resources = hass.data[LOVELACE_DATA].resources
 
+    # async_items() doesn't itself guarantee the collection has loaded from
+    # storage - without this, an empty read here would look like "no
+    # existing resource" and create a duplicate entry on every restart.
+    await resources.async_get_info()
+
     if not hasattr(resources, "async_create_item"):
         # YAML-mode dashboards manage resources themselves; nothing to register.
         return
