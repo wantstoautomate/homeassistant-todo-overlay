@@ -801,6 +801,9 @@ TodoItemDialog.styles = i`
             border-bottom: 1px solid var(--divider-color);
             padding: 8px 0;
             outline: none;
+            /* Without this, the native calendar/clock picker icons render
+               black-on-transparent and vanish against a dark theme. */
+            color-scheme: light dark;
         }
 
         input:focus,
@@ -931,6 +934,43 @@ var o6 = e5(class extends i5 {
 var BEFORE_AFTER_ZONE = 0.3;
 var HOLD_RIPPLE_SIZE = 72;
 var holdRippleSizePx = r(`${HOLD_RIPPLE_SIZE}px`);
+var CLICK_DEBOUNCE_MS = 250;
+var CLOCK_ICON = b2`
+    <svg viewBox="0 0 24 24">
+        <path
+            d="M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20zm.5 5v5.4l4.2 2.5-.8 1.3-5-3V7h1.6z"
+        ></path>
+    </svg>
+`;
+function formatDue(item) {
+  const raw = item.due_datetime ?? (item.due_date ? `${item.due_date}T00:00:00` : null);
+  if (!raw) {
+    return void 0;
+  }
+  const due = new Date(raw);
+  const now = /* @__PURE__ */ new Date();
+  const dueDay = new Date(due.getFullYear(), due.getMonth(), due.getDate());
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const diffDays = Math.round((dueDay.getTime() - today.getTime()) / 864e5);
+  let label;
+  if (diffDays === 0) {
+    label = "Today";
+  } else if (diffDays === 1) {
+    label = "Tomorrow";
+  } else if (diffDays === -1) {
+    label = "Yesterday";
+  } else {
+    label = due.toLocaleDateString(void 0, {
+      month: "short",
+      day: "numeric",
+      year: dueDay.getFullYear() !== today.getFullYear() ? "numeric" : void 0
+    });
+  }
+  return {
+    label,
+    overdue: !item.completed && dueDay.getTime() < today.getTime()
+  };
+}
 var TodoTreeItem = class extends i4 {
   constructor() {
     super(...arguments);
@@ -987,18 +1027,38 @@ var TodoTreeItem = class extends i4 {
       })
     );
   }
-  pointerUp() {
-    this.clearHoldRipple();
+  emitPointerUp(pressDurationMs) {
     this.dispatchEvent(
       new CustomEvent("tree-pointer-up", {
-        detail: {
-          id: this.item.id,
-          pressDurationMs: Date.now() - this.pointerDownAt
-        },
+        detail: { id: this.item.id, pressDurationMs },
         bubbles: true,
         composed: true
       })
     );
+  }
+  pointerUp() {
+    this.clearHoldRipple();
+    const pressDurationMs = Date.now() - this.pointerDownAt;
+    const wasDragging = this.hoverId !== void 0 && this.hoverId !== this.item.id;
+    if (pressDurationMs >= LONG_PRESS_MS || wasDragging) {
+      this.emitPointerUp(pressDurationMs);
+      return;
+    }
+    window.clearTimeout(this.clickTimer);
+    this.clickTimer = window.setTimeout(() => {
+      this.emitPointerUp(pressDurationMs);
+    }, CLICK_DEBOUNCE_MS);
+  }
+  onDoubleClick() {
+    window.clearTimeout(this.clickTimer);
+    this.dispatchEvent(
+      new CustomEvent("tree-pointer-down", {
+        detail: { id: this.item.id },
+        bubbles: true,
+        composed: true
+      })
+    );
+    this.emitPointerUp(LONG_PRESS_MS);
   }
   render() {
     const isDropTarget = this.isDropTarget;
@@ -1011,6 +1071,8 @@ var TodoTreeItem = class extends i4 {
       "drop-inside": isDropTarget && this.hoverPlacement === "inside",
       completed: this.item.completed
     };
+    const due = formatDue(this.item);
+    const hasMeta = due || this.item.description;
     return b2`
             <li>
 
@@ -1021,9 +1083,23 @@ var TodoTreeItem = class extends i4 {
                     @pointerenter=${this.pointerEnterOrMove}
                     @pointermove=${this.pointerEnterOrMove}
                     @pointerup=${this.pointerUp}
+                    @dblclick=${this.onDoubleClick}
                 >
-                    <ha-checkbox .checked=${this.item.completed}></ha-checkbox>
-                    <span class="summary">${this.item.title}</span>
+                    <div class="row-main">
+                        <ha-checkbox .checked=${this.item.completed}></ha-checkbox>
+                        <span class="summary">${this.item.title}</span>
+                    </div>
+
+                    ${hasMeta ? b2`
+                                <div class="row-meta">
+                                    ${due ? b2`
+                                                <span class=${e6({ "due-chip": true, overdue: due.overdue })}>
+                                                    ${CLOCK_ICON}${due.label}
+                                                </span>
+                                            ` : ""}
+                                    ${this.item.description ? b2`<span class="description-text">${this.item.description}</span>` : ""}
+                                </div>
+                            ` : ""}
 
                     ${this.holdRippleOrigin ? b2`
                                 <div
@@ -1069,20 +1145,13 @@ TodoTreeItem.styles = i`
         .row {
             position: relative;
             display: flex;
-            align-items: center;
-            gap: 12px;
-            min-height: 40px;
+            flex-direction: column;
             padding: 0 20px;
             border-radius: 4px;
             outline: 2px solid transparent;
             outline-offset: -2px;
             user-select: none;
             cursor: pointer;
-            font-family: Roboto, "Noto Sans", sans-serif;
-            font-size: 14px;
-            font-weight: 400;
-            line-height: 21px;
-            color: var(--primary-text-color);
             transition: background-color 0.15s ease, outline-color 0.15s ease;
         }
 
@@ -1123,9 +1192,71 @@ TodoTreeItem.styles = i`
             bottom: -1px;
         }
 
+        .row-main {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            min-height: 40px;
+            font-family: Roboto, "Noto Sans", sans-serif;
+            font-size: 14px;
+            font-weight: 400;
+            line-height: 21px;
+            color: var(--primary-text-color);
+        }
+
         .row.completed .summary {
             text-decoration: line-through;
             color: var(--secondary-text-color);
+        }
+
+        ha-checkbox {
+            pointer-events: none;
+            flex-shrink: 0;
+        }
+
+        .summary {
+            flex: 1;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        /* Secondary metadata line: due date + description today, with
+           room to append more chips (e.g. tags) here later without
+           restructuring the row. Indented to align under the title,
+           past the checkbox (28px) and its gap (12px). */
+        .row-meta {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 0 0 8px 40px;
+            font-family: Roboto, "Noto Sans", sans-serif;
+            font-size: 12px;
+            color: var(--secondary-text-color);
+        }
+
+        .due-chip {
+            display: flex;
+            align-items: center;
+            gap: 4px;
+            flex-shrink: 0;
+            white-space: nowrap;
+        }
+
+        .due-chip.overdue {
+            color: var(--error-color);
+        }
+
+        .due-chip svg {
+            width: 14px;
+            height: 14px;
+            fill: currentColor;
+        }
+
+        .description-text {
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
         }
 
         .hold-ripple {
@@ -1144,18 +1275,6 @@ TodoTreeItem.styles = i`
 
         .hold-ripple.active {
             transform: scale(1);
-        }
-
-        ha-checkbox {
-            pointer-events: none;
-            flex-shrink: 0;
-        }
-
-        .summary {
-            flex: 1;
-            overflow: hidden;
-            text-overflow: ellipsis;
-            white-space: nowrap;
         }
     `;
 __decorateClass([

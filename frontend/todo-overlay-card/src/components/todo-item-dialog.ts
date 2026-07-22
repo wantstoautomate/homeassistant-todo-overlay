@@ -67,6 +67,9 @@ export class TodoItemDialog extends LitElement {
             border-bottom: 1px solid var(--divider-color);
             padding: 8px 0;
             outline: none;
+            /* Without this, the native calendar/clock picker icons render
+               black-on-transparent and vanish against a dark theme. */
+            color-scheme: light dark;
         }
 
         input:focus,

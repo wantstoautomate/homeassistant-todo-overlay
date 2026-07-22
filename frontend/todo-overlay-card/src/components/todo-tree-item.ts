@@ -9,6 +9,56 @@ const BEFORE_AFTER_ZONE = 0.3;
 const HOLD_RIPPLE_SIZE = 72;
 const holdRippleSizePx = unsafeCSS(`${HOLD_RIPPLE_SIZE}px`);
 
+// A plain tap is delayed this long before it commits to toggling
+// completion, so a following second click can still cancel it and open
+// the edit dialog instead (see onDoubleClick). Skipped entirely for
+// drags and holds, which are unambiguous the moment they happen.
+const CLICK_DEBOUNCE_MS = 250;
+
+const CLOCK_ICON = html`
+    <svg viewBox="0 0 24 24">
+        <path
+            d="M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20zm.5 5v5.4l4.2 2.5-.8 1.3-5-3V7h1.6z"
+        ></path>
+    </svg>
+`;
+
+function formatDue(item: TodoItem): {label: string; overdue: boolean} | undefined {
+    const raw = item.due_datetime ?? (item.due_date ? `${item.due_date}T00:00:00` : null);
+
+    if (!raw) {
+        return undefined;
+    }
+
+    const due = new Date(raw);
+    const now = new Date();
+
+    const dueDay = new Date(due.getFullYear(), due.getMonth(), due.getDate());
+    const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const diffDays = Math.round((dueDay.getTime() - today.getTime()) / 86_400_000);
+
+    let label: string;
+
+    if (diffDays === 0) {
+        label = "Today";
+    } else if (diffDays === 1) {
+        label = "Tomorrow";
+    } else if (diffDays === -1) {
+        label = "Yesterday";
+    } else {
+        label = due.toLocaleDateString(undefined, {
+            month: "short",
+            day: "numeric",
+            year: dueDay.getFullYear() !== today.getFullYear() ? "numeric" : undefined,
+        });
+    }
+
+    return {
+        label,
+        overdue: !item.completed && dueDay.getTime() < today.getTime(),
+    };
+}
+
 @customElement("todo-overlay-tree-item")
 export class TodoTreeItem extends LitElement {
 
@@ -26,20 +76,13 @@ export class TodoTreeItem extends LitElement {
         .row {
             position: relative;
             display: flex;
-            align-items: center;
-            gap: 12px;
-            min-height: 40px;
+            flex-direction: column;
             padding: 0 20px;
             border-radius: 4px;
             outline: 2px solid transparent;
             outline-offset: -2px;
             user-select: none;
             cursor: pointer;
-            font-family: Roboto, "Noto Sans", sans-serif;
-            font-size: 14px;
-            font-weight: 400;
-            line-height: 21px;
-            color: var(--primary-text-color);
             transition: background-color 0.15s ease, outline-color 0.15s ease;
         }
 
@@ -80,9 +123,71 @@ export class TodoTreeItem extends LitElement {
             bottom: -1px;
         }
 
+        .row-main {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            min-height: 40px;
+            font-family: Roboto, "Noto Sans", sans-serif;
+            font-size: 14px;
+            font-weight: 400;
+            line-height: 21px;
+            color: var(--primary-text-color);
+        }
+
         .row.completed .summary {
             text-decoration: line-through;
             color: var(--secondary-text-color);
+        }
+
+        ha-checkbox {
+            pointer-events: none;
+            flex-shrink: 0;
+        }
+
+        .summary {
+            flex: 1;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        /* Secondary metadata line: due date + description today, with
+           room to append more chips (e.g. tags) here later without
+           restructuring the row. Indented to align under the title,
+           past the checkbox (28px) and its gap (12px). */
+        .row-meta {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 0 0 8px 40px;
+            font-family: Roboto, "Noto Sans", sans-serif;
+            font-size: 12px;
+            color: var(--secondary-text-color);
+        }
+
+        .due-chip {
+            display: flex;
+            align-items: center;
+            gap: 4px;
+            flex-shrink: 0;
+            white-space: nowrap;
+        }
+
+        .due-chip.overdue {
+            color: var(--error-color);
+        }
+
+        .due-chip svg {
+            width: 14px;
+            height: 14px;
+            fill: currentColor;
+        }
+
+        .description-text {
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
         }
 
         .hold-ripple {
@@ -101,18 +206,6 @@ export class TodoTreeItem extends LitElement {
 
         .hold-ripple.active {
             transform: scale(1);
-        }
-
-        ha-checkbox {
-            pointer-events: none;
-            flex-shrink: 0;
-        }
-
-        .summary {
-            flex: 1;
-            overflow: hidden;
-            text-overflow: ellipsis;
-            white-space: nowrap;
         }
     `;
 
@@ -133,6 +226,7 @@ export class TodoTreeItem extends LitElement {
 
     private pointerDownAt = 0;
     private holdTimer?: number;
+    private clickTimer?: number;
 
     private get isPressed(): boolean {
         return this.draggedId === this.item.id;
@@ -209,19 +303,47 @@ export class TodoTreeItem extends LitElement {
         );
     }
 
-    private pointerUp() {
-        this.clearHoldRipple();
-
+    private emitPointerUp(pressDurationMs: number) {
         this.dispatchEvent(
             new CustomEvent("tree-pointer-up", {
-                detail: {
-                    id: this.item.id,
-                    pressDurationMs: Date.now() - this.pointerDownAt,
-                },
+                detail: {id: this.item.id, pressDurationMs},
                 bubbles: true,
                 composed: true,
             }),
         );
+    }
+
+    private pointerUp() {
+        this.clearHoldRipple();
+
+        const pressDurationMs = Date.now() - this.pointerDownAt;
+        const wasDragging = this.hoverId !== undefined && this.hoverId !== this.item.id;
+
+        if (pressDurationMs >= LONG_PRESS_MS || wasDragging) {
+            this.emitPointerUp(pressDurationMs);
+            return;
+        }
+
+        // Might be the first click of a double-click - give it a brief
+        // window to arrive before committing to a plain toggle.
+        window.clearTimeout(this.clickTimer);
+        this.clickTimer = window.setTimeout(() => {
+            this.emitPointerUp(pressDurationMs);
+        }, CLICK_DEBOUNCE_MS);
+    }
+
+    private onDoubleClick() {
+        window.clearTimeout(this.clickTimer);
+
+        this.dispatchEvent(
+            new CustomEvent("tree-pointer-down", {
+                detail: {id: this.item.id},
+                bubbles: true,
+                composed: true,
+            }),
+        );
+
+        this.emitPointerUp(LONG_PRESS_MS);
     }
 
     render() {
@@ -237,6 +359,9 @@ export class TodoTreeItem extends LitElement {
             completed: this.item.completed,
         };
 
+        const due = formatDue(this.item);
+        const hasMeta = due || this.item.description;
+
         return html`
             <li>
 
@@ -247,9 +372,35 @@ export class TodoTreeItem extends LitElement {
                     @pointerenter=${this.pointerEnterOrMove}
                     @pointermove=${this.pointerEnterOrMove}
                     @pointerup=${this.pointerUp}
+                    @dblclick=${this.onDoubleClick}
                 >
-                    <ha-checkbox .checked=${this.item.completed}></ha-checkbox>
-                    <span class="summary">${this.item.title}</span>
+                    <div class="row-main">
+                        <ha-checkbox .checked=${this.item.completed}></ha-checkbox>
+                        <span class="summary">${this.item.title}</span>
+                    </div>
+
+                    ${
+                        hasMeta
+                            ? html`
+                                <div class="row-meta">
+                                    ${
+                                        due
+                                            ? html`
+                                                <span class=${classMap({"due-chip": true, overdue: due.overdue})}>
+                                                    ${CLOCK_ICON}${due.label}
+                                                </span>
+                                            `
+                                            : ""
+                                    }
+                                    ${
+                                        this.item.description
+                                            ? html`<span class="description-text">${this.item.description}</span>`
+                                            : ""
+                                    }
+                                </div>
+                            `
+                            : ""
+                    }
 
                     ${
                         this.holdRippleOrigin
