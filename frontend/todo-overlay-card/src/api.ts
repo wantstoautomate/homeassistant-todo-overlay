@@ -67,3 +67,17 @@ export async function restoreCompleted(
     });
 
 }
+
+export async function clearCompleted(
+    hass: HassLike,
+    entityId: string,
+): Promise<string[]> {
+
+    const result = await hass.connection.sendMessagePromise<{removed: string[]}>({
+        type: "todo_overlay/clear_completed",
+        entity_id: entityId,
+    });
+
+    return result.removed;
+
+}

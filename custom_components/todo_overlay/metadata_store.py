@@ -52,3 +52,25 @@ class MetadataStore:
             }
 
         await self._store.async_save(self._cache)
+
+    async def remove_positions(
+        self,
+        entity_id: str,
+        item_ids: list[str],
+    ) -> None:
+        """Drop stored positions for items that no longer exist, e.g.
+        after a clear-completed removal."""
+
+        await self._load()
+
+        assert self._cache is not None
+
+        entity_positions = self._cache.get(entity_id)
+
+        if not entity_positions:
+            return
+
+        for item_id in item_ids:
+            entity_positions.pop(item_id, None)
+
+        await self._store.async_save(self._cache)

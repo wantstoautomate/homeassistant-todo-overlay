@@ -76,3 +76,18 @@ class HomeAssistantTodoProvider:
             },
             blocking=True,
         )
+
+    async def remove_item(
+        self,
+        entity_id: str,
+        item_id: str,
+    ) -> None:
+        await self._hass.services.async_call(
+            "todo",
+            "remove_item",
+            {
+                "entity_id": entity_id,
+                "item": item_id,
+            },
+            blocking=True,
+        )

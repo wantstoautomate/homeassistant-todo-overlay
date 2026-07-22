@@ -255,6 +255,50 @@ class TodoManager:
                 change["completed"],
             )
 
+    async def clear_completed(
+        self,
+        entity_id: str,
+    ) -> list[str]:
+        """Remove every top-level item that's complete, along with all of
+        its descendants (which must themselves all be complete too,
+        since that's exactly how a parent's completion is derived).
+
+        Only top-level items are considered for removal - a completed
+        subtree nested under an still-incomplete ancestor is left alone,
+        matching the native card's "clear completed" behaviour of
+        operating on the list as a whole rather than on nested groups.
+
+        Returns the ids of everything removed.
+        """
+
+        items = await self._adapter.get_items(entity_id)
+        positions = await self._metadata_store.get_relationships(entity_id)
+
+        derived = self._derived_completed(items, positions)
+
+        root_ids = [
+            item.id
+            for item in items
+            if self._parent_id_of(item.id, positions) is None
+        ]
+
+        removed_ids: list[str] = []
+
+        for root_id in root_ids:
+            if not derived[root_id]:
+                continue
+
+            removed_ids.append(root_id)
+            removed_ids.extend(self._descendants(root_id, positions, items))
+
+        for removed_id in removed_ids:
+            await self._adapter.remove_item(entity_id, removed_id)
+
+        if removed_ids:
+            await self._metadata_store.remove_positions(entity_id, removed_ids)
+
+        return removed_ids
+
     @staticmethod
     def _descendants(
         item_id: str,

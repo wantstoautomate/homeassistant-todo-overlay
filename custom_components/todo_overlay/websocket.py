@@ -7,6 +7,7 @@ from homeassistant.helpers import config_validation as cv
 from .const import (
     DATA_MANAGER,
     DOMAIN,
+    WS_TYPE_CLEAR_COMPLETED,
     WS_TYPE_GET_LIST,
     WS_TYPE_MOVE_ITEM,
     WS_TYPE_RESTORE_COMPLETED,
@@ -130,11 +131,35 @@ async def websocket_restore_completed(
     connection.send_result(msg["id"])
 
 
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): WS_TYPE_CLEAR_COMPLETED,
+        vol.Required("entity_id"): cv.entity_id,
+    }
+)
+@websocket_api.async_response
+async def websocket_clear_completed(
+    hass: HomeAssistant,
+    connection: websocket_api.ActiveConnection,
+    msg,
+) -> None:
+    """Remove every completed top-level item (and its descendants)."""
+
+    manager = hass.data[DOMAIN][DATA_MANAGER]
+
+    removed = await manager.clear_completed(
+        entity_id=msg["entity_id"],
+    )
+
+    connection.send_result(msg["id"], {"removed": removed})
+
+
 def async_register_websocket(hass: HomeAssistant) -> None:
     for handler in (
         websocket_get_list,
         websocket_move_item,
         websocket_set_completed,
         websocket_restore_completed,
+        websocket_clear_completed,
     ):
         websocket_api.async_register_command(hass, handler)

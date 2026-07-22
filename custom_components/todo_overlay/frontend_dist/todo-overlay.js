@@ -633,6 +633,13 @@ async function restoreCompleted(hass, entityId, changes) {
     changes
   });
 }
+async function clearCompleted(hass, entityId) {
+  const result = await hass.connection.sendMessagePromise({
+    type: "todo_overlay/clear_completed",
+    entity_id: entityId
+  });
+  return result.removed;
+}
 
 // src/models.ts
 var LONG_PRESS_MS = 500;
@@ -1490,6 +1497,14 @@ var TodoOverlayCard = class extends i4 {
     }
     this.undoState = void 0;
   }
+  async onClearCompleted() {
+    try {
+      await clearCompleted(this.hass, this.config.entity);
+      await this.load();
+    } catch (err) {
+      this.error = err instanceof Error ? err.message : String(err);
+    }
+  }
   // --- add / edit / delete dialog --------------------------------------
   openEditDialog(item) {
     this.dialogMode = "edit";
@@ -1588,6 +1603,59 @@ var TodoOverlayCard = class extends i4 {
       this.error = err instanceof Error ? err.message : String(err);
     }
   }
+  renderTree(list) {
+    const completedItems = list.items.filter((item) => item.completed);
+    if (completedItems.length === 0) {
+      return b2`
+                <todo-overlay-tree
+                    .items=${list.items}
+                    .draggedId=${this.draggedId}
+                    .hoverId=${this.hoverId}
+                    .hoverPlacement=${this.hoverPlacement}
+
+                    @tree-pointer-down=${this.onPointerDown}
+                    @tree-pointer-enter=${this.onPointerEnter}
+                    @tree-pointer-up=${this.onPointerUp}
+
+                ></todo-overlay-tree>
+            `;
+    }
+    const activeItems = list.items.filter((item) => !item.completed);
+    return b2`
+            ${activeItems.length ? b2`
+                        <div class="section-header">Active</div>
+                        <todo-overlay-tree
+                            .items=${activeItems}
+                            .draggedId=${this.draggedId}
+                            .hoverId=${this.hoverId}
+                            .hoverPlacement=${this.hoverPlacement}
+
+                            @tree-pointer-down=${this.onPointerDown}
+                            @tree-pointer-enter=${this.onPointerEnter}
+                            @tree-pointer-up=${this.onPointerUp}
+
+                        ></todo-overlay-tree>
+                    ` : ""}
+
+            <div class="section-header">
+                <span>Completed</span>
+                <button class="clear-completed" @click=${this.onClearCompleted}>
+                    Clear completed
+                </button>
+            </div>
+            <todo-overlay-tree
+                .items=${completedItems}
+                .draggedId=${this.draggedId}
+                .hoverId=${this.hoverId}
+                .hoverPlacement=${this.hoverPlacement}
+
+                @tree-pointer-down=${this.onPointerDown}
+                @tree-pointer-enter=${this.onPointerEnter}
+                @tree-pointer-up=${this.onPointerUp}
+
+            ></todo-overlay-tree>
+        `;
+  }
   render() {
     return b2`
             <ha-card header="Todo Overlay">
@@ -1612,19 +1680,7 @@ var TodoOverlayCard = class extends i4 {
                             <div style="padding:16px; color: var(--error-color)">
                                 ${this.error}
                             </div>
-                        ` : this.list ? b2`
-                                <todo-overlay-tree
-                                    .items=${this.list.items}
-                                    .draggedId=${this.draggedId}
-                                    .hoverId=${this.hoverId}
-                                    .hoverPlacement=${this.hoverPlacement}
-
-                                    @tree-pointer-down=${this.onPointerDown}
-                                    @tree-pointer-enter=${this.onPointerEnter}
-                                    @tree-pointer-up=${this.onPointerUp}
-
-                                ></todo-overlay-tree>
-                            ` : b2`
+                        ` : this.list ? this.renderTree(this.list) : b2`
                                 <div style="padding:16px">
                                     Loading...
                                 </div>
@@ -1724,6 +1780,28 @@ TodoOverlayCard.styles = i`
             font-weight: 600;
             text-transform: uppercase;
             cursor: pointer;
+        }
+
+        .section-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 16px 20px 4px;
+            font-family: Roboto, "Noto Sans", sans-serif;
+            font-size: 14px;
+            font-weight: 500;
+            color: var(--secondary-text-color);
+        }
+
+        .section-header .clear-completed {
+            border: none;
+            background: none;
+            color: var(--primary-color);
+            font-family: inherit;
+            font-size: 12px;
+            font-weight: 500;
+            cursor: pointer;
+            padding: 4px;
         }
     `;
 __decorateClass([

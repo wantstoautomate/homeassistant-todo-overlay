@@ -12,6 +12,7 @@ class FakeAdapter:
             TodoItem(id="2", title="Milk", completed=False),
         ]
         self.set_completed_calls: list[tuple[str, str, bool]] = []
+        self.remove_item_calls: list[tuple[str, str]] = []
 
     async def get_items(
         self,
@@ -31,6 +32,14 @@ class FakeAdapter:
             if item.id == item_id:
                 item.completed = completed
 
+    async def remove_item(
+        self,
+        entity_id: str,
+        item_id: str,
+    ) -> None:
+        self.remove_item_calls.append((entity_id, item_id))
+        self._items = [item for item in self._items if item.id != item_id]
+
 
 class FakeMetadataStore:
 
@@ -48,6 +57,14 @@ class FakeMetadataStore:
     ) -> None:
         self.set_positions_calls.append((entity_id, dict(positions)))
         self._positions.update(positions)
+
+    async def remove_positions(
+        self,
+        entity_id: str,
+        item_ids: list[str],
+    ) -> None:
+        for item_id in item_ids:
+            self._positions.pop(item_id, None)
 
 
 @pytest.mark.asyncio
@@ -359,6 +376,72 @@ async def test_manager_reposition_uses_derived_not_raw_completed_for_siblings():
     assert [item.id for item in todo_list.items] == ["milk", "shopping"]
     assert todo_list.items[0].completed is True
     assert todo_list.items[1].completed is True
+
+
+@pytest.mark.asyncio
+async def test_manager_clear_completed_removes_completed_top_level_items_and_children():
+
+    adapter = FakeAdapter(items=[
+        TodoItem(id="1", title="Shopping", completed=True),
+        TodoItem(id="2", title="Item", completed=True),
+        TodoItem(id="3", title="asdf", completed=True),
+        TodoItem(id="4", title="Milk", completed=False),
+        TodoItem(id="5", title="Eggs", completed=False),
+        TodoItem(id="6", title="Bananas", completed=True),
+    ])
+
+    metadata_store = FakeMetadataStore({
+        "1": ItemPosition(parent_id=None, order=0),
+        "2": ItemPosition(parent_id="1", order=0),
+        "3": ItemPosition(parent_id="1", order=1),
+        "4": ItemPosition(parent_id=None, order=1),
+        "5": ItemPosition(parent_id="4", order=0),
+        "6": ItemPosition(parent_id=None, order=2),
+    })
+
+    manager = TodoManager(adapter=adapter, metadata_store=metadata_store)
+
+    removed = await manager.clear_completed(entity_id="todo.shopping")
+
+    # "Shopping" (root, derived complete via its children) and its
+    # children "Item"/"asdf" are removed together, as is standalone
+    # "Bananas" - but "Milk" survives (root, incomplete) along with its
+    # child "Eggs" (which must survive too, since it's not top-level and
+    # its own ancestor - Milk - isn't complete).
+    assert set(removed) == {"1", "2", "3", "6"}
+
+    remaining_ids = {item.id for item in adapter._items}
+    assert remaining_ids == {"4", "5"}
+
+    # Stale position entries for removed items are cleaned up too.
+    assert metadata_store._positions.keys() == {"4", "5"}
+
+
+@pytest.mark.asyncio
+async def test_manager_clear_completed_leaves_incomplete_nested_completed_subtree_alone():
+
+    # "2" is a fully-complete subtree, but it's nested under an
+    # incomplete root ("1") - clear_completed only considers top-level
+    # items, so this nested group is left untouched even though it
+    # would qualify if it were a root itself.
+    adapter = FakeAdapter(items=[
+        TodoItem(id="1", title="Root", completed=False),
+        TodoItem(id="2", title="Nested done", completed=True),
+        TodoItem(id="3", title="Nested pending", completed=False),
+    ])
+
+    metadata_store = FakeMetadataStore({
+        "1": ItemPosition(parent_id=None, order=0),
+        "2": ItemPosition(parent_id="1", order=0),
+        "3": ItemPosition(parent_id="1", order=1),
+    })
+
+    manager = TodoManager(adapter=adapter, metadata_store=metadata_store)
+
+    removed = await manager.clear_completed(entity_id="todo.shopping")
+
+    assert removed == []
+    assert {item.id for item in adapter._items} == {"1", "2", "3"}
 
 
 @pytest.mark.asyncio

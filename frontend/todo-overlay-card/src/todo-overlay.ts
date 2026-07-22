@@ -3,6 +3,7 @@ import {customElement, property, state} from "lit/decorators.js";
 
 import {
     type CompletionChange,
+    clearCompleted,
     getList,
     moveItem,
     restoreCompleted,
@@ -127,6 +128,28 @@ export class TodoOverlayCard extends LitElement {
             font-weight: 600;
             text-transform: uppercase;
             cursor: pointer;
+        }
+
+        .section-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 16px 20px 4px;
+            font-family: Roboto, "Noto Sans", sans-serif;
+            font-size: 14px;
+            font-weight: 500;
+            color: var(--secondary-text-color);
+        }
+
+        .section-header .clear-completed {
+            border: none;
+            background: none;
+            color: var(--primary-color);
+            font-family: inherit;
+            font-size: 12px;
+            font-weight: 500;
+            cursor: pointer;
+            padding: 4px;
         }
     `;
 
@@ -324,6 +347,15 @@ export class TodoOverlayCard extends LitElement {
         this.undoState = undefined;
     }
 
+    private async onClearCompleted() {
+        try {
+            await clearCompleted(this.hass, this.config.entity);
+            await this.load();
+        } catch (err) {
+            this.error = err instanceof Error ? err.message : String(err);
+        }
+    }
+
     // --- add / edit / delete dialog --------------------------------------
 
     private openEditDialog(item: TodoItem) {
@@ -450,6 +482,67 @@ export class TodoOverlayCard extends LitElement {
         }
     }
 
+    private renderTree(list: TodoList) {
+        const completedItems = list.items.filter(item => item.completed);
+
+        if (completedItems.length === 0) {
+            return html`
+                <todo-overlay-tree
+                    .items=${list.items}
+                    .draggedId=${this.draggedId}
+                    .hoverId=${this.hoverId}
+                    .hoverPlacement=${this.hoverPlacement}
+
+                    @tree-pointer-down=${this.onPointerDown}
+                    @tree-pointer-enter=${this.onPointerEnter}
+                    @tree-pointer-up=${this.onPointerUp}
+
+                ></todo-overlay-tree>
+            `;
+        }
+
+        const activeItems = list.items.filter(item => !item.completed);
+
+        return html`
+            ${
+                activeItems.length
+                    ? html`
+                        <div class="section-header">Active</div>
+                        <todo-overlay-tree
+                            .items=${activeItems}
+                            .draggedId=${this.draggedId}
+                            .hoverId=${this.hoverId}
+                            .hoverPlacement=${this.hoverPlacement}
+
+                            @tree-pointer-down=${this.onPointerDown}
+                            @tree-pointer-enter=${this.onPointerEnter}
+                            @tree-pointer-up=${this.onPointerUp}
+
+                        ></todo-overlay-tree>
+                    `
+                    : ""
+            }
+
+            <div class="section-header">
+                <span>Completed</span>
+                <button class="clear-completed" @click=${this.onClearCompleted}>
+                    Clear completed
+                </button>
+            </div>
+            <todo-overlay-tree
+                .items=${completedItems}
+                .draggedId=${this.draggedId}
+                .hoverId=${this.hoverId}
+                .hoverPlacement=${this.hoverPlacement}
+
+                @tree-pointer-down=${this.onPointerDown}
+                @tree-pointer-enter=${this.onPointerEnter}
+                @tree-pointer-up=${this.onPointerUp}
+
+            ></todo-overlay-tree>
+        `;
+    }
+
     render() {
         return html`
             <ha-card header="Todo Overlay">
@@ -478,19 +571,7 @@ export class TodoOverlayCard extends LitElement {
                             </div>
                         `
                         : this.list
-                            ? html`
-                                <todo-overlay-tree
-                                    .items=${this.list.items}
-                                    .draggedId=${this.draggedId}
-                                    .hoverId=${this.hoverId}
-                                    .hoverPlacement=${this.hoverPlacement}
-
-                                    @tree-pointer-down=${this.onPointerDown}
-                                    @tree-pointer-enter=${this.onPointerEnter}
-                                    @tree-pointer-up=${this.onPointerUp}
-
-                                ></todo-overlay-tree>
-                            `
+                            ? this.renderTree(this.list)
                             : html`
                                 <div style="padding:16px">
                                     Loading...
