@@ -1,5 +1,5 @@
 import type { HassLike } from "./hass";
-import type { Placement, TodoList } from "./models";
+import type { LoadMode, Placement, TodoList } from "./models";
 
 export async function getList(
     hass: HassLike,
@@ -123,5 +123,61 @@ export async function clearCompleted(
     });
 
     return result.removed;
+
+}
+
+export async function saveList(
+    hass: HassLike,
+    entityId: string,
+    name: string,
+    persistStates: boolean,
+): Promise<void> {
+
+    await hass.connection.sendMessagePromise<void>({
+        type: "todo_overlay/save_list",
+        entity_id: entityId,
+        name,
+        persist_states: persistStates,
+    });
+
+}
+
+export async function loadList(
+    hass: HassLike,
+    entityId: string,
+    name: string,
+    mode: LoadMode,
+): Promise<void> {
+
+    await hass.connection.sendMessagePromise<void>({
+        type: "todo_overlay/load_list",
+        entity_id: entityId,
+        name,
+        mode,
+    });
+
+}
+
+export async function listSaved(
+    hass: HassLike,
+): Promise<string[]> {
+
+    const result = await hass.connection.sendMessagePromise<{names: string[]}>({
+        type: "todo_overlay/list_saved",
+    });
+
+    return result.names;
+
+}
+
+export async function deleteSavedList(
+    hass: HassLike,
+    name: string,
+): Promise<void> {
+
+    await hass.connection.sendMessagePromise<void>({
+        type: "todo_overlay/delete_saved_list",
+        name,
+    });
 
 }

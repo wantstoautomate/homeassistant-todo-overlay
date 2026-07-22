@@ -5,9 +5,13 @@ import {
     type CompletionChange,
     clearCompleted,
     createItem,
+    deleteSavedList,
     getList,
+    listSaved,
+    loadList,
     moveItem,
     restoreCompleted,
+    saveList,
     setCompleted,
     setQuantity,
 } from "./api";
@@ -22,9 +26,12 @@ import {
 } from "./models";
 import type {TodoItemDialogFieldSupport, TodoItemFormValue} from "./components/todo-item-dialog";
 import {EMPTY_FORM_VALUE} from "./components/todo-item-dialog";
+import type {SaveLoadFormValue} from "./components/todo-save-load-dialog";
+import {EMPTY_SAVE_LOAD_VALUE} from "./components/todo-save-load-dialog";
 
 import "./components/todo-tree";
 import "./components/todo-item-dialog";
+import "./components/todo-save-load-dialog";
 
 export interface TodoOverlayCardConfig {
     entity: string;
@@ -93,6 +100,23 @@ export class TodoOverlayCard extends LitElement {
             background: none;
             font-family: inherit;
             cursor: pointer;
+        }
+
+        .list-actions {
+            display: flex;
+            justify-content: flex-end;
+            gap: 16px;
+            padding: 8px 20px 0;
+        }
+
+        .list-actions button {
+            border: none;
+            background: none;
+            font-family: Roboto, "Noto Sans", sans-serif;
+            font-size: 12px;
+            color: var(--secondary-text-color);
+            cursor: pointer;
+            padding: 4px;
         }
 
         .quick-add .add {
@@ -187,6 +211,15 @@ export class TodoOverlayCard extends LitElement {
 
     @state()
     private undoState?: {message: string; changes: CompletionChange[]};
+
+    @state()
+    private saveLoadAction?: "save" | "load";
+
+    @state()
+    private saveLoadValue: SaveLoadFormValue = EMPTY_SAVE_LOAD_VALUE;
+
+    @state()
+    private savedNames: string[] = [];
 
     private undoTimer?: number;
     private lastEntityUpdate?: string;
@@ -357,6 +390,64 @@ export class TodoOverlayCard extends LitElement {
         try {
             await clearCompleted(this.hass, this.config.entity);
             await this.load();
+        } catch (err) {
+            this.error = err instanceof Error ? err.message : String(err);
+        }
+    }
+
+    // --- save / load ---------------------------------------------------
+
+    private async openSaveDialog() {
+        try {
+            this.savedNames = await listSaved(this.hass);
+        } catch (err) {
+            this.error = err instanceof Error ? err.message : String(err);
+            return;
+        }
+
+        this.saveLoadValue = EMPTY_SAVE_LOAD_VALUE;
+        this.saveLoadAction = "save";
+    }
+
+    private async openLoadDialog() {
+        try {
+            this.savedNames = await listSaved(this.hass);
+        } catch (err) {
+            this.error = err instanceof Error ? err.message : String(err);
+            return;
+        }
+
+        this.saveLoadValue = EMPTY_SAVE_LOAD_VALUE;
+        this.saveLoadAction = "load";
+    }
+
+    private closeSaveLoadDialog() {
+        this.saveLoadAction = undefined;
+    }
+
+    private async onSaveLoadConfirm(e: CustomEvent<SaveLoadFormValue>) {
+        const value = e.detail;
+
+        try {
+            if (this.saveLoadAction === "save") {
+                await saveList(this.hass, this.config.entity, value.name, value.persistStates);
+            } else {
+                await loadList(this.hass, this.config.entity, value.name, value.mode);
+            }
+
+            await this.load();
+        } catch (err) {
+            this.error = err instanceof Error ? err.message : String(err);
+        }
+
+        this.closeSaveLoadDialog();
+    }
+
+    private async onSaveLoadDeleteSaved(e: CustomEvent<{name: string}>) {
+        try {
+            await deleteSavedList(this.hass, e.detail.name);
+            this.savedNames = await listSaved(this.hass);
+            this.saveLoadValue = {...this.saveLoadValue, name: ""};
         } catch (err) {
             this.error = err instanceof Error ? err.message : String(err);
         }
@@ -569,6 +660,11 @@ export class TodoOverlayCard extends LitElement {
         return html`
             <ha-card header="Todo Overlay">
 
+                <div class="list-actions">
+                    <button @click=${this.openSaveDialog}>Save list</button>
+                    <button @click=${this.openLoadDialog}>Load list</button>
+                </div>
+
                 <div class="quick-add">
                     <input
                         type="text"
@@ -629,6 +725,22 @@ export class TodoOverlayCard extends LitElement {
                             @dialog-save=${this.onDialogSave}
                             @dialog-delete=${this.onDialogDelete}
                         ></todo-overlay-item-dialog>
+                    `
+                    : ""
+            }
+
+            ${
+                this.saveLoadAction
+                    ? html`
+                        <todo-overlay-save-load-dialog
+                            .action=${this.saveLoadAction}
+                            .value=${this.saveLoadValue}
+                            .savedNames=${this.savedNames}
+
+                            @dialog-close=${this.closeSaveLoadDialog}
+                            @dialog-confirm=${this.onSaveLoadConfirm}
+                            @dialog-delete-saved=${this.onSaveLoadDeleteSaved}
+                        ></todo-overlay-save-load-dialog>
                     `
                     : ""
             }

@@ -660,6 +660,34 @@ async function clearCompleted(hass, entityId) {
   });
   return result.removed;
 }
+async function saveList(hass, entityId, name, persistStates) {
+  await hass.connection.sendMessagePromise({
+    type: "todo_overlay/save_list",
+    entity_id: entityId,
+    name,
+    persist_states: persistStates
+  });
+}
+async function loadList(hass, entityId, name, mode) {
+  await hass.connection.sendMessagePromise({
+    type: "todo_overlay/load_list",
+    entity_id: entityId,
+    name,
+    mode
+  });
+}
+async function listSaved(hass) {
+  const result = await hass.connection.sendMessagePromise({
+    type: "todo_overlay/list_saved"
+  });
+  return result.names;
+}
+async function deleteSavedList(hass, name) {
+  await hass.connection.sendMessagePromise({
+    type: "todo_overlay/delete_saved_list",
+    name
+  });
+}
 
 // src/models.ts
 var LONG_PRESS_MS = 500;
@@ -912,6 +940,249 @@ __decorateClass([
 TodoItemDialog = __decorateClass([
   t3("todo-overlay-item-dialog")
 ], TodoItemDialog);
+
+// src/components/todo-save-load-dialog.ts
+var EMPTY_SAVE_LOAD_VALUE = {
+  name: "",
+  persistStates: false,
+  mode: "merge"
+};
+var MODE_LABELS = {
+  merge: "Merge (skip items already there)",
+  full_merge: "Add all (allow duplicates)",
+  replace: "Replace (clear the list first)"
+};
+var TodoSaveLoadDialog = class extends i4 {
+  constructor() {
+    super(...arguments);
+    this.action = "save";
+    this.value = EMPTY_SAVE_LOAD_VALUE;
+    this.savedNames = [];
+  }
+  close() {
+    this.dispatchEvent(
+      new CustomEvent("dialog-close", { bubbles: true, composed: true })
+    );
+  }
+  confirm() {
+    this.dispatchEvent(
+      new CustomEvent("dialog-confirm", {
+        detail: this.value,
+        bubbles: true,
+        composed: true
+      })
+    );
+  }
+  requestDeleteSaved() {
+    this.dispatchEvent(
+      new CustomEvent("dialog-delete-saved", {
+        detail: { name: this.value.name },
+        bubbles: true,
+        composed: true
+      })
+    );
+  }
+  updateName(name) {
+    this.value = { ...this.value, name };
+  }
+  updatePersistStates(persistStates) {
+    this.value = { ...this.value, persistStates };
+  }
+  updateMode(mode) {
+    this.value = { ...this.value, mode };
+  }
+  render() {
+    const isSave = this.action === "save";
+    return b2`
+            <ha-dialog open .heading=${isSave ? "Save list" : "Load list"} @closed=${this.close}>
+                ${isSave ? b2`
+                            <div class="field">
+                                <label for="save-load-name">Name</label>
+                                <input
+                                    id="save-load-name"
+                                    type="text"
+                                    list="save-load-existing-names"
+                                    placeholder="e.g. weekly_groceries"
+                                    .value=${this.value.name}
+                                    @input=${(e7) => this.updateName(e7.target.value)}
+                                />
+                                <datalist id="save-load-existing-names">
+                                    ${this.savedNames.map((name) => b2`<option value=${name}></option>`)}
+                                </datalist>
+                            </div>
+
+                            <div class="field checkbox-field">
+                                <input
+                                    id="save-load-persist"
+                                    type="checkbox"
+                                    .checked=${this.value.persistStates}
+                                    @change=${(e7) => this.updatePersistStates(e7.target.checked)}
+                                />
+                                <label for="save-load-persist">Persist completion states</label>
+                            </div>
+                        ` : b2`
+                            <div class="field">
+                                <label for="save-load-select">Saved list</label>
+                                <select
+                                    id="save-load-select"
+                                    .value=${this.value.name}
+                                    @change=${(e7) => this.updateName(e7.target.value)}
+                                >
+                                    <option value="" disabled ?selected=${!this.value.name}>
+                                        Choose a saved list…
+                                    </option>
+                                    ${this.savedNames.map(
+      (name) => b2`
+                                            <option value=${name} ?selected=${this.value.name === name}>
+                                                ${name}
+                                            </option>
+                                        `
+    )}
+                                </select>
+                            </div>
+
+                            ${this.value.name ? b2`
+                                        <div class="delete-row">
+                                            <button @click=${this.requestDeleteSaved}>
+                                                Delete "${this.value.name}"
+                                            </button>
+                                        </div>
+                                    ` : ""}
+
+                            <div class="field">
+                                <label for="save-load-mode">Mode</label>
+                                <select
+                                    id="save-load-mode"
+                                    .value=${this.value.mode}
+                                    @change=${(e7) => this.updateMode(e7.target.value)}
+                                >
+                                    ${Object.keys(MODE_LABELS).map(
+      (mode) => b2`
+                                            <option value=${mode} ?selected=${this.value.mode === mode}>
+                                                ${MODE_LABELS[mode]}
+                                            </option>
+                                        `
+    )}
+                                </select>
+                            </div>
+                        `}
+
+                <div class="actions" slot="footer">
+                    <button @click=${this.close}>Cancel</button>
+                    <button @click=${this.confirm} ?disabled=${!this.value.name}>
+                        ${isSave ? "Save" : "Load"}
+                    </button>
+                </div>
+            </ha-dialog>
+        `;
+  }
+};
+TodoSaveLoadDialog.styles = i`
+        .field {
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+            margin-bottom: 16px;
+            font-family: Roboto, "Noto Sans", sans-serif;
+        }
+
+        label {
+            font-size: 12px;
+            color: var(--secondary-text-color);
+        }
+
+        input,
+        select {
+            box-sizing: border-box;
+            width: 100%;
+            font-family: inherit;
+            font-size: 16px;
+            color: var(--primary-text-color);
+            background: none;
+            border: none;
+            border-bottom: 1px solid var(--divider-color);
+            padding: 8px 0;
+            outline: none;
+            color-scheme: light dark;
+        }
+
+        input:focus,
+        select:focus {
+            border-bottom: 2px solid var(--primary-color);
+            padding-bottom: 7px;
+        }
+
+        .checkbox-field {
+            flex-direction: row;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .checkbox-field input {
+            width: auto;
+            border: none;
+        }
+
+        .checkbox-field label {
+            font-size: 14px;
+            color: var(--primary-text-color);
+        }
+
+        .delete-row {
+            display: flex;
+            justify-content: flex-end;
+            margin-top: -8px;
+            margin-bottom: 16px;
+        }
+
+        .delete-row button {
+            font-family: inherit;
+            font-size: 12px;
+            color: var(--error-color);
+            background: none;
+            border: none;
+            cursor: pointer;
+            padding: 4px;
+        }
+
+        .actions {
+            display: flex;
+            align-items: center;
+            justify-content: flex-end;
+            width: 100%;
+            gap: 8px;
+        }
+
+        button {
+            font-family: Roboto, "Noto Sans", sans-serif;
+            font-size: 14px;
+            font-weight: 500;
+            text-transform: uppercase;
+            border: none;
+            background: none;
+            cursor: pointer;
+            padding: 8px 12px;
+            border-radius: 4px;
+            color: var(--primary-color);
+        }
+
+        button:disabled {
+            color: var(--disabled-text-color);
+            cursor: default;
+        }
+    `;
+__decorateClass([
+  n4({ attribute: false })
+], TodoSaveLoadDialog.prototype, "action", 2);
+__decorateClass([
+  n4({ attribute: false })
+], TodoSaveLoadDialog.prototype, "value", 2);
+__decorateClass([
+  n4({ attribute: false })
+], TodoSaveLoadDialog.prototype, "savedNames", 2);
+TodoSaveLoadDialog = __decorateClass([
+  t3("todo-overlay-save-load-dialog")
+], TodoSaveLoadDialog);
 
 // node_modules/lit-html/directive.js
 var t4 = { ATTRIBUTE: 1, CHILD: 2, PROPERTY: 3, BOOLEAN_ATTRIBUTE: 4, EVENT: 5, ELEMENT: 6 };
@@ -1485,6 +1756,8 @@ var TodoOverlayCard = class extends i4 {
   constructor() {
     super(...arguments);
     this.quickAddValue = "";
+    this.saveLoadValue = EMPTY_SAVE_LOAD_VALUE;
+    this.savedNames = [];
   }
   setConfig(config) {
     if (!config.entity) {
@@ -1608,6 +1881,53 @@ var TodoOverlayCard = class extends i4 {
     try {
       await clearCompleted(this.hass, this.config.entity);
       await this.load();
+    } catch (err) {
+      this.error = err instanceof Error ? err.message : String(err);
+    }
+  }
+  // --- save / load ---------------------------------------------------
+  async openSaveDialog() {
+    try {
+      this.savedNames = await listSaved(this.hass);
+    } catch (err) {
+      this.error = err instanceof Error ? err.message : String(err);
+      return;
+    }
+    this.saveLoadValue = EMPTY_SAVE_LOAD_VALUE;
+    this.saveLoadAction = "save";
+  }
+  async openLoadDialog() {
+    try {
+      this.savedNames = await listSaved(this.hass);
+    } catch (err) {
+      this.error = err instanceof Error ? err.message : String(err);
+      return;
+    }
+    this.saveLoadValue = EMPTY_SAVE_LOAD_VALUE;
+    this.saveLoadAction = "load";
+  }
+  closeSaveLoadDialog() {
+    this.saveLoadAction = void 0;
+  }
+  async onSaveLoadConfirm(e7) {
+    const value = e7.detail;
+    try {
+      if (this.saveLoadAction === "save") {
+        await saveList(this.hass, this.config.entity, value.name, value.persistStates);
+      } else {
+        await loadList(this.hass, this.config.entity, value.name, value.mode);
+      }
+      await this.load();
+    } catch (err) {
+      this.error = err instanceof Error ? err.message : String(err);
+    }
+    this.closeSaveLoadDialog();
+  }
+  async onSaveLoadDeleteSaved(e7) {
+    try {
+      await deleteSavedList(this.hass, e7.detail.name);
+      this.savedNames = await listSaved(this.hass);
+      this.saveLoadValue = { ...this.saveLoadValue, name: "" };
     } catch (err) {
       this.error = err instanceof Error ? err.message : String(err);
     }
@@ -1779,6 +2099,11 @@ var TodoOverlayCard = class extends i4 {
     return b2`
             <ha-card header="Todo Overlay">
 
+                <div class="list-actions">
+                    <button @click=${this.openSaveDialog}>Save list</button>
+                    <button @click=${this.openLoadDialog}>Load list</button>
+                </div>
+
                 <div class="quick-add">
                     <input
                         type="text"
@@ -1828,6 +2153,18 @@ var TodoOverlayCard = class extends i4 {
                             @dialog-delete=${this.onDialogDelete}
                         ></todo-overlay-item-dialog>
                     ` : ""}
+
+            ${this.saveLoadAction ? b2`
+                        <todo-overlay-save-load-dialog
+                            .action=${this.saveLoadAction}
+                            .value=${this.saveLoadValue}
+                            .savedNames=${this.savedNames}
+
+                            @dialog-close=${this.closeSaveLoadDialog}
+                            @dialog-confirm=${this.onSaveLoadConfirm}
+                            @dialog-delete-saved=${this.onSaveLoadDeleteSaved}
+                        ></todo-overlay-save-load-dialog>
+                    ` : ""}
         `;
   }
 };
@@ -1862,6 +2199,23 @@ TodoOverlayCard.styles = i`
             background: none;
             font-family: inherit;
             cursor: pointer;
+        }
+
+        .list-actions {
+            display: flex;
+            justify-content: flex-end;
+            gap: 16px;
+            padding: 8px 20px 0;
+        }
+
+        .list-actions button {
+            border: none;
+            background: none;
+            font-family: Roboto, "Noto Sans", sans-serif;
+            font-size: 12px;
+            color: var(--secondary-text-color);
+            cursor: pointer;
+            padding: 4px;
         }
 
         .quick-add .add {
@@ -1956,6 +2310,15 @@ __decorateClass([
 __decorateClass([
   r5()
 ], TodoOverlayCard.prototype, "undoState", 2);
+__decorateClass([
+  r5()
+], TodoOverlayCard.prototype, "saveLoadAction", 2);
+__decorateClass([
+  r5()
+], TodoOverlayCard.prototype, "saveLoadValue", 2);
+__decorateClass([
+  r5()
+], TodoOverlayCard.prototype, "savedNames", 2);
 TodoOverlayCard = __decorateClass([
   t3("todo-overlay-card")
 ], TodoOverlayCard);

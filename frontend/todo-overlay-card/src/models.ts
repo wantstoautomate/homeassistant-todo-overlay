@@ -16,6 +16,8 @@ export interface TodoList {
 
 export type Placement = "before" | "after" | "inside";
 
+export type LoadMode = "replace" | "merge" | "full_merge";
+
 // How long a press must be held before release opens the edit dialog
 // instead of toggling completion. Matches Home Assistant's own hold
 // threshold (see homeassistant/frontend's action-handler-directive.ts).
