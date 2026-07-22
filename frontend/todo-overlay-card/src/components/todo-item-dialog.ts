@@ -5,7 +5,7 @@ export interface TodoItemFormValue {
     title: string;
     description: string;
     dueDate: string;
-    dueDateTime: string;
+    dueTime: string;
 }
 
 export interface TodoItemDialogFieldSupport {
@@ -18,7 +18,7 @@ export const EMPTY_FORM_VALUE: TodoItemFormValue = {
     title: "",
     description: "",
     dueDate: "",
-    dueDateTime: "",
+    dueTime: "",
 };
 
 // The dialog only knows about the fields above today. Extending it for a
@@ -39,6 +39,17 @@ export class TodoItemDialog extends LitElement {
             font-family: Roboto, "Noto Sans", sans-serif;
         }
 
+        .due-row {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 16px;
+        }
+
+        .due-row .field {
+            flex: 1;
+            min-width: 140px;
+        }
+
         label {
             font-size: 12px;
             color: var(--secondary-text-color);
@@ -46,6 +57,8 @@ export class TodoItemDialog extends LitElement {
 
         input,
         textarea {
+            box-sizing: border-box;
+            width: 100%;
             font-family: inherit;
             font-size: 16px;
             color: var(--primary-text-color);
@@ -67,6 +80,12 @@ export class TodoItemDialog extends LitElement {
             min-height: 48px;
         }
 
+        .actions {
+            display: flex;
+            align-items: center;
+            width: 100%;
+        }
+
         button {
             font-family: Roboto, "Noto Sans", sans-serif;
             font-size: 14px;
@@ -82,6 +101,7 @@ export class TodoItemDialog extends LitElement {
 
         button.destructive {
             color: var(--error-color);
+            margin-inline-end: auto;
         }
     `;
 
@@ -128,8 +148,10 @@ export class TodoItemDialog extends LitElement {
     }
 
     render() {
+        const showDue = this.fieldSupport.dueDate || this.fieldSupport.dueDateTime;
+
         return html`
-            <ha-dialog open heading=${this.heading} @closed=${this.close}>
+            <ha-dialog open .heading=${this.heading} @closed=${this.close}>
                 <div class="field">
                     <label for="todo-item-title">Title</label>
                     <input
@@ -161,28 +183,13 @@ export class TodoItemDialog extends LitElement {
                 }
 
                 ${
-                    this.fieldSupport.dueDateTime
+                    showDue
                         ? html`
-                            <div class="field">
-                                <label for="todo-item-due">Due</label>
-                                <input
-                                    id="todo-item-due"
-                                    type="datetime-local"
-                                    .value=${this.value.dueDateTime}
-                                    @input=${(e: InputEvent) =>
-                                        this.updateField(
-                                            "dueDateTime",
-                                            (e.target as HTMLInputElement).value,
-                                        )}
-                                />
-                            </div>
-                        `
-                        : this.fieldSupport.dueDate
-                            ? html`
+                            <div class="due-row">
                                 <div class="field">
-                                    <label for="todo-item-due">Due</label>
+                                    <label for="todo-item-due-date">Due date</label>
                                     <input
-                                        id="todo-item-due"
+                                        id="todo-item-due-date"
                                         type="date"
                                         .value=${this.value.dueDate}
                                         @input=${(e: InputEvent) =>
@@ -192,26 +199,45 @@ export class TodoItemDialog extends LitElement {
                                             )}
                                     />
                                 </div>
-                            `
-                            : ""
-                }
 
-                ${
-                    this.showDelete
-                        ? html`
-                            <button
-                                class="destructive"
-                                slot="secondaryAction"
-                                @click=${this.requestDelete}
-                            >
-                                Delete
-                            </button>
+                                ${
+                                    this.fieldSupport.dueDateTime
+                                        ? html`
+                                            <div class="field">
+                                                <label for="todo-item-due-time">Due time</label>
+                                                <input
+                                                    id="todo-item-due-time"
+                                                    type="time"
+                                                    .value=${this.value.dueTime}
+                                                    @input=${(e: InputEvent) =>
+                                                        this.updateField(
+                                                            "dueTime",
+                                                            (e.target as HTMLInputElement).value,
+                                                        )}
+                                                />
+                                            </div>
+                                        `
+                                        : ""
+                                }
+                            </div>
                         `
                         : ""
                 }
-                <button slot="primaryAction" @click=${this.save}>
-                    Save
-                </button>
+
+                <div class="actions" slot="footer">
+                    ${
+                        this.showDelete
+                            ? html`
+                                <button class="destructive" @click=${this.requestDelete}>
+                                    Delete
+                                </button>
+                            `
+                            : ""
+                    }
+                    <button @click=${this.save}>
+                        Save
+                    </button>
+                </div>
             </ha-dialog>
         `;
     }

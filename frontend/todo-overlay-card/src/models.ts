@@ -15,6 +15,11 @@ export interface TodoList {
 
 export type Placement = "before" | "after" | "inside";
 
+// How long a press must be held before release opens the edit dialog
+// instead of toggling completion. Matches Home Assistant's own hold
+// threshold (see homeassistant/frontend's action-handler-directive.ts).
+export const LONG_PRESS_MS = 500;
+
 // Matches homeassistant.components.todo.TodoListEntityFeature's bit values.
 export const TodoListEntityFeature = {
     CREATE_TODO_ITEM: 1,

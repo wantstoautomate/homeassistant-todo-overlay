@@ -10,6 +10,7 @@ import {
 } from "./api";
 import type {HassLike} from "./hass";
 import {
+    LONG_PRESS_MS,
     type Placement,
     type TodoItem,
     type TodoList,
@@ -26,7 +27,6 @@ export interface TodoOverlayCardConfig {
     entity: string;
 }
 
-const LONG_PRESS_MS = 500;
 const UNDO_TIMEOUT_MS = 8000;
 
 function findItem(items: TodoItem[], id: string): TodoItem | undefined {
@@ -45,13 +45,15 @@ function findItem(items: TodoItem[], id: string): TodoItem | undefined {
     return undefined;
 }
 
-function toDateTimeLocalValue(iso: string | null): string {
+function splitDueDateTime(iso: string | null): {date: string; time: string} {
     if (!iso) {
-        return "";
+        return {date: "", time: ""};
     }
 
-    // datetime-local inputs need "YYYY-MM-DDTHH:mm", no seconds/timezone.
-    return iso.slice(0, 16);
+    // "YYYY-MM-DDTHH:mm[:ss...]" -> date/time <input> values, no seconds.
+    const [date, time] = iso.split("T");
+
+    return {date: date ?? "", time: (time ?? "").slice(0, 5)};
 }
 
 @customElement("todo-overlay-card")
@@ -62,7 +64,7 @@ export class TodoOverlayCard extends LitElement {
             display: flex;
             align-items: center;
             gap: 8px;
-            padding: 8px 20px 16px;
+            padding: 4px 20px 12px;
             font-family: Roboto, "Noto Sans", sans-serif;
         }
 
@@ -326,11 +328,15 @@ export class TodoOverlayCard extends LitElement {
 
     private dialogValue(): TodoItemFormValue {
         if (this.dialogMode === "edit" && this.dialogItem) {
+            const due = this.dialogItem.due_datetime
+                ? splitDueDateTime(this.dialogItem.due_datetime)
+                : {date: this.dialogItem.due_date ?? "", time: ""};
+
             return {
                 title: this.dialogItem.title,
                 description: this.dialogItem.description ?? "",
-                dueDate: this.dialogItem.due_date ?? "",
-                dueDateTime: toDateTimeLocalValue(this.dialogItem.due_datetime),
+                dueDate: due.date,
+                dueTime: due.time,
             };
         }
 
@@ -349,8 +355,8 @@ export class TodoOverlayCard extends LitElement {
             serviceData.description = value.description;
         }
 
-        if (support.dueDateTime && value.dueDateTime) {
-            serviceData.due_datetime = value.dueDateTime;
+        if (support.dueDateTime && value.dueDate && value.dueTime) {
+            serviceData.due_datetime = `${value.dueDate}T${value.dueTime}:00`;
         } else if (support.dueDate && value.dueDate) {
             serviceData.due_date = value.dueDate;
         }
@@ -433,6 +439,22 @@ export class TodoOverlayCard extends LitElement {
         return html`
             <ha-card header="Todo Overlay">
 
+                <div class="quick-add">
+                    <input
+                        type="text"
+                        placeholder="Add item"
+                        .value=${this.quickAddValue}
+                        @input=${this.onQuickAddInput}
+                        @keydown=${this.onQuickAddKeydown}
+                    />
+                    <button class="add" @click=${this.submitQuickAdd}>
+                        Add
+                    </button>
+                    <button class="details" @click=${this.openCreateDialog}>
+                        Details…
+                    </button>
+                </div>
+
                 ${
                     this.error
                         ? html`
@@ -460,22 +482,6 @@ export class TodoOverlayCard extends LitElement {
                                 </div>
                             `
                 }
-
-                <div class="quick-add">
-                    <input
-                        type="text"
-                        placeholder="Add item"
-                        .value=${this.quickAddValue}
-                        @input=${this.onQuickAddInput}
-                        @keydown=${this.onQuickAddKeydown}
-                    />
-                    <button class="add" @click=${this.submitQuickAdd}>
-                        Add
-                    </button>
-                    <button class="details" @click=${this.openCreateDialog}>
-                        Details…
-                    </button>
-                </div>
 
             </ha-card>
 

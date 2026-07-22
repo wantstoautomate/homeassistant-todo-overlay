@@ -1,10 +1,13 @@
-import {LitElement, html, css} from "lit";
-import {customElement, property} from "lit/decorators.js";
+import {LitElement, html, css, unsafeCSS} from "lit";
+import {customElement, property, state} from "lit/decorators.js";
 import {classMap} from "lit/directives/class-map.js";
+import {styleMap} from "lit/directives/style-map.js";
 
-import type {Placement, TodoItem} from "../models";
+import {LONG_PRESS_MS, type Placement, type TodoItem} from "../models";
 
 const BEFORE_AFTER_ZONE = 0.3;
+const HOLD_RIPPLE_SIZE = 72;
+const holdRippleSizePx = unsafeCSS(`${HOLD_RIPPLE_SIZE}px`);
 
 @customElement("todo-overlay-tree-item")
 export class TodoTreeItem extends LitElement {
@@ -82,6 +85,24 @@ export class TodoTreeItem extends LitElement {
             color: var(--secondary-text-color);
         }
 
+        .hold-ripple {
+            position: absolute;
+            width: ${holdRippleSizePx};
+            height: ${holdRippleSizePx};
+            margin-left: calc(${holdRippleSizePx} / -2);
+            margin-top: calc(${holdRippleSizePx} / -2);
+            border-radius: 50%;
+            background: var(--primary-color);
+            opacity: 0.2;
+            pointer-events: none;
+            transform: scale(0);
+            transition: transform 180ms ease-in-out;
+        }
+
+        .hold-ripple.active {
+            transform: scale(1);
+        }
+
         ha-checkbox {
             pointer-events: none;
             flex-shrink: 0;
@@ -107,7 +128,11 @@ export class TodoTreeItem extends LitElement {
     @property({attribute: false})
     hoverPlacement?: Placement;
 
+    @state()
+    private holdRippleOrigin?: {x: number; y: number};
+
     private pointerDownAt = 0;
+    private holdTimer?: number;
 
     private get isPressed(): boolean {
         return this.draggedId === this.item.id;
@@ -129,8 +154,16 @@ export class TodoTreeItem extends LitElement {
         );
     }
 
-    private pointerDown() {
+    private pointerDown(e: PointerEvent) {
         this.pointerDownAt = Date.now();
+
+        const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+        this.holdRippleOrigin = {x: e.clientX - rect.left, y: e.clientY - rect.top};
+
+        window.clearTimeout(this.holdTimer);
+        this.holdTimer = window.setTimeout(() => {
+            this.requestUpdate();
+        }, LONG_PRESS_MS);
 
         this.dispatchEvent(
             new CustomEvent("tree-pointer-down", {
@@ -139,6 +172,18 @@ export class TodoTreeItem extends LitElement {
                 composed: true,
             }),
         );
+    }
+
+    private get holdReady(): boolean {
+        return (
+            this.isPressed &&
+            Date.now() - this.pointerDownAt >= LONG_PRESS_MS
+        );
+    }
+
+    private clearHoldRipple() {
+        window.clearTimeout(this.holdTimer);
+        this.holdRippleOrigin = undefined;
     }
 
     private pointerEnterOrMove(e: PointerEvent) {
@@ -165,6 +210,8 @@ export class TodoTreeItem extends LitElement {
     }
 
     private pointerUp() {
+        this.clearHoldRipple();
+
         this.dispatchEvent(
             new CustomEvent("tree-pointer-up", {
                 detail: {
@@ -203,6 +250,20 @@ export class TodoTreeItem extends LitElement {
                 >
                     <ha-checkbox .checked=${this.item.completed}></ha-checkbox>
                     <span class="summary">${this.item.title}</span>
+
+                    ${
+                        this.holdRippleOrigin
+                            ? html`
+                                <div
+                                    class=${classMap({"hold-ripple": true, active: this.holdReady})}
+                                    style=${styleMap({
+                                        left: `${this.holdRippleOrigin.x}px`,
+                                        top: `${this.holdRippleOrigin.y}px`,
+                                    })}
+                                ></div>
+                            `
+                            : ""
+                    }
                 </div>
 
                 ${
