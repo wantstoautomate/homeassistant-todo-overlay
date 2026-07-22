@@ -1,5 +1,6 @@
 import {LitElement, html, css} from "lit";
 import {customElement, property, state} from "lit/decorators.js";
+import {styleMap} from "lit/directives/style-map.js";
 
 import {
     type CompletionChange,
@@ -29,10 +30,82 @@ import type {TodoItemDialogFieldSupport, TodoItemFormValue} from "./components/t
 import {EMPTY_FORM_VALUE} from "./components/todo-item-dialog";
 import type {SaveLoadFormValue} from "./components/todo-save-load-dialog";
 import {EMPTY_SAVE_LOAD_VALUE} from "./components/todo-save-load-dialog";
+import {BEFORE_AFTER_ZONE} from "./components/todo-tree-item";
 
 import "./components/todo-tree";
 import "./components/todo-item-dialog";
 import "./components/todo-save-load-dialog";
+
+// Hit-testing pierces shadow roots manually - elementFromPoint alone
+// only reliably returns the outermost custom element in every browser,
+// and .closest() doesn't cross shadow boundaries either. This is what
+// makes drag-and-drop actually work on touch: a touch pointer is
+// implicitly captured to whichever element it started on, so relying
+// on pointerenter/pointermove firing on OTHER rows (the old approach)
+// never worked for a real finger drag - only for a mouse, which
+// doesn't get that implicit capture. Doing our own hit-test from
+// scratch on every pointermove sidesteps the whole issue.
+function deepElementFromPoint(x: number, y: number): Element | null {
+    let el: Element | null = document.elementFromPoint(x, y);
+
+    while (el && el.shadowRoot) {
+        const inner = el.shadowRoot.elementFromPoint(x, y);
+
+        if (!inner || inner === el) {
+            break;
+        }
+
+        el = inner;
+    }
+
+    return el;
+}
+
+function closestAcrossShadowRoots(start: Element | null, selector: string): Element | null {
+    let current: Element | null = start;
+
+    while (current) {
+        const found = current.closest(selector);
+
+        if (found) {
+            return found;
+        }
+
+        const root = current.getRootNode();
+        current = root instanceof ShadowRoot ? (root.host as Element) : null;
+    }
+
+    return null;
+}
+
+interface TreeItemElement extends Element {
+    item?: TodoItem;
+}
+
+function hitTestRow(x: number, y: number): {id: string; placement: Placement} | undefined {
+    const el = deepElementFromPoint(x, y);
+    const itemEl = closestAcrossShadowRoots(el, "todo-overlay-tree-item") as TreeItemElement | null;
+
+    if (!itemEl?.item) {
+        return undefined;
+    }
+
+    const rowEl = itemEl.shadowRoot?.querySelector(".row");
+    const rect = (rowEl ?? itemEl).getBoundingClientRect();
+    const relativeY = (y - rect.top) / rect.height;
+
+    let placement: Placement;
+
+    if (relativeY < BEFORE_AFTER_ZONE) {
+        placement = "before";
+    } else if (relativeY > 1 - BEFORE_AFTER_ZONE) {
+        placement = "after";
+    } else {
+        placement = "inside";
+    }
+
+    return {id: itemEl.item.id, placement};
+}
 
 export interface TodoOverlayCardConfig {
     entity: string;
@@ -178,6 +251,44 @@ export class TodoOverlayCard extends LitElement {
             cursor: pointer;
             padding: 4px;
         }
+
+        /* Follows the pointer while an item is being dragged (see
+           onDragStart/onGlobalPointerMove) - pointer-events:none is
+           essential, not just cosmetic: without it, this element would
+           itself be hit by our own elementFromPoint-based hit-testing,
+           since it's rendered on top of everything else. */
+        .drag-ghost {
+            position: fixed;
+            z-index: 10;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            padding: 8px 20px;
+            border-radius: 4px;
+            background: var(--card-background-color, var(--primary-background-color));
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+            pointer-events: none;
+            font-family: Roboto, "Noto Sans", sans-serif;
+            font-size: 14px;
+            color: var(--primary-text-color);
+        }
+
+        .drag-ghost-title {
+            flex: 1;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        .drag-ghost-quantity {
+            flex-shrink: 0;
+            font-size: 12px;
+            font-weight: 600;
+            color: var(--primary-color);
+            background: rgba(var(--rgb-primary-color, 3, 169, 244), 0.12);
+            padding: 1px 7px;
+            border-radius: 10px;
+        }
     `;
 
     @property({attribute: false})
@@ -200,6 +311,12 @@ export class TodoOverlayCard extends LitElement {
 
     @state()
     private hoverPlacement?: Placement;
+
+    @state()
+    private ghostPosition?: {x: number; y: number};
+
+    private dragGhostOffset = {x: 0, y: 0};
+    private dragGhostSize?: {width: number; height: number};
 
     @state()
     private dialogMode?: "create" | "edit";
@@ -278,46 +395,89 @@ export class TodoOverlayCard extends LitElement {
     }
 
     // --- drag / tap / hold ---------------------------------------------
+    //
+    // A drag only ever reaches the "live" ghost-follow stage below once
+    // the item's own hold threshold has been reached AND the pointer
+    // then moves (see todo-tree-item.ts) - so a quick swipe on mobile
+    // still scrolls the page normally, and only a sustained hold-then-
+    // move actually picks an item up. Once that happens, this component
+    // takes over entirely via window-level listeners and its own
+    // hit-testing (hitTestRow), rather than relying on the dragged
+    // item's own bubbled events for hover detection.
 
     private onPointerDown(e: CustomEvent) {
         this.draggedId = e.detail.id;
     }
 
-    private onPointerEnter(e: CustomEvent) {
-        if (!this.draggedId) {
-            return;
-        }
+    private onDragStart(e: CustomEvent) {
+        const {rect, pointerX, pointerY} = e.detail;
 
-        this.hoverId = e.detail.id;
-        this.hoverPlacement = e.detail.placement;
+        this.dragGhostOffset = rect
+            ? {x: pointerX - rect.x, y: pointerY - rect.y}
+            : {x: 0, y: 0};
+        this.dragGhostSize = rect ? {width: rect.width, height: rect.height} : undefined;
+        this.ghostPosition = {x: pointerX, y: pointerY};
+
+        // Capture phase: HA's own frontend has various touch/gesture
+        // handling that can call stopPropagation() on the way back up,
+        // which would otherwise silently swallow these before a
+        // bubble-phase window listener ever saw them.
+        window.addEventListener("pointermove", this.onGlobalPointerMove, {capture: true});
+        window.addEventListener("pointerup", this.onGlobalPointerUp, {capture: true});
+        // Touch gestures often end with pointercancel rather than
+        // pointerup - both need to finalize the drag the same way, or
+        // it gets stuck with dangling listeners. Removed explicitly in
+        // onGlobalPointerUp (rather than {once: true} on just one of
+        // them) so exactly one clean-up always happens regardless of
+        // which event actually fired.
+        window.addEventListener("pointercancel", this.onGlobalPointerUp, {capture: true});
     }
 
-    private async onPointerUp(e: CustomEvent) {
+    private onGlobalPointerMove = (e: PointerEvent) => {
+        this.ghostPosition = {x: e.clientX, y: e.clientY};
 
-        if (
-            this.draggedId &&
-            this.hoverId &&
-            this.draggedId !== this.hoverId
-        ) {
+        const hit = hitTestRow(e.clientX, e.clientY);
 
+        this.hoverId = hit && hit.id !== this.draggedId ? hit.id : undefined;
+        this.hoverPlacement = hit && hit.id !== this.draggedId ? hit.placement : undefined;
+    };
+
+    private onGlobalPointerUp = async () => {
+        window.removeEventListener("pointermove", this.onGlobalPointerMove, {capture: true});
+        window.removeEventListener("pointerup", this.onGlobalPointerUp, {capture: true});
+        window.removeEventListener("pointercancel", this.onGlobalPointerUp, {capture: true});
+
+        const draggedId = this.draggedId;
+        const hoverId = this.hoverId;
+        const hoverPlacement = this.hoverPlacement;
+
+        this.ghostPosition = undefined;
+        this.draggedId = undefined;
+        this.hoverId = undefined;
+        this.hoverPlacement = undefined;
+
+        if (draggedId && hoverId && draggedId !== hoverId) {
             try {
                 await moveItem(
                     this.hass,
                     this.config.entity,
-                    this.draggedId,
-                    this.hoverId,
-                    this.hoverPlacement ?? "inside",
+                    draggedId,
+                    hoverId,
+                    hoverPlacement ?? "inside",
                 );
 
                 await this.load();
             } catch (err) {
                 this.error = err instanceof Error ? err.message : String(err);
             }
-        } else if (!e.detail.moved && this.draggedId && this.list) {
-            // Hold-to-edit and drag are mutually exclusive: if the
-            // pointer moved but didn't land on a valid drop target
-            // (e.g. dragged out and back over itself), this is neither
-            // a tap nor a hold - do nothing, rather than guessing.
+        }
+    };
+
+    private async onPointerUp(e: CustomEvent) {
+        // A real drag never reaches this handler at all (see
+        // todo-tree-item.ts's pointerUp) - only a genuine tap, hold, or
+        // an ambiguous "moved but never engaged a drag" release do.
+        if (!e.detail.moved && this.draggedId && this.list) {
             const item = findItem(this.list.items, this.draggedId);
 
             if (item) {
@@ -332,8 +492,13 @@ export class TodoOverlayCard extends LitElement {
         }
 
         this.draggedId = undefined;
-        this.hoverId = undefined;
-        this.hoverPlacement = undefined;
+    }
+
+    disconnectedCallback() {
+        super.disconnectedCallback();
+        window.removeEventListener("pointermove", this.onGlobalPointerMove, {capture: true});
+        window.removeEventListener("pointerup", this.onGlobalPointerUp, {capture: true});
+        window.removeEventListener("pointercancel", this.onGlobalPointerUp, {capture: true});
     }
 
     // --- completion + cascade undo --------------------------------------
@@ -615,7 +780,7 @@ export class TodoOverlayCard extends LitElement {
                     .hoverPlacement=${this.hoverPlacement}
 
                     @tree-pointer-down=${this.onPointerDown}
-                    @tree-pointer-enter=${this.onPointerEnter}
+                    @tree-drag-start=${this.onDragStart}
                     @tree-pointer-up=${this.onPointerUp}
 
                 ></todo-overlay-tree>
@@ -636,7 +801,7 @@ export class TodoOverlayCard extends LitElement {
                             .hoverPlacement=${this.hoverPlacement}
 
                             @tree-pointer-down=${this.onPointerDown}
-                            @tree-pointer-enter=${this.onPointerEnter}
+                            @tree-drag-start=${this.onDragStart}
                             @tree-pointer-up=${this.onPointerUp}
 
                         ></todo-overlay-tree>
@@ -657,10 +822,44 @@ export class TodoOverlayCard extends LitElement {
                 .hoverPlacement=${this.hoverPlacement}
 
                 @tree-pointer-down=${this.onPointerDown}
-                @tree-pointer-enter=${this.onPointerEnter}
+                @tree-drag-start=${this.onDragStart}
                 @tree-pointer-up=${this.onPointerUp}
 
             ></todo-overlay-tree>
+        `;
+    }
+
+    private renderDragGhost() {
+        if (!this.ghostPosition || !this.draggedId || !this.list) {
+            return "";
+        }
+
+        const item = findItem(this.list.items, this.draggedId);
+
+        if (!item) {
+            return "";
+        }
+
+        const left = this.ghostPosition.x - this.dragGhostOffset.x;
+        const top = this.ghostPosition.y - this.dragGhostOffset.y;
+
+        return html`
+            <div
+                class="drag-ghost"
+                style=${styleMap({
+                    left: `${left}px`,
+                    top: `${top}px`,
+                    width: this.dragGhostSize ? `${this.dragGhostSize.width}px` : undefined,
+                })}
+            >
+                <ha-checkbox .checked=${item.completed}></ha-checkbox>
+                <span class="drag-ghost-title">${item.title}</span>
+                ${
+                    item.quantity
+                        ? html`<span class="drag-ghost-quantity">${item.quantity}</span>`
+                        : ""
+                }
+            </div>
         `;
     }
 
@@ -752,6 +951,8 @@ export class TodoOverlayCard extends LitElement {
                     `
                     : ""
             }
+
+            ${this.renderDragGhost()}
         `;
     }
 }

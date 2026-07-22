@@ -601,6 +601,55 @@ function r5(r6) {
   return n4({ ...r6, state: true, attribute: false });
 }
 
+// node_modules/lit-html/directive.js
+var t4 = { ATTRIBUTE: 1, CHILD: 2, PROPERTY: 3, BOOLEAN_ATTRIBUTE: 4, EVENT: 5, ELEMENT: 6 };
+var e5 = (t5) => (...e7) => ({ _$litDirective$: t5, values: e7 });
+var i5 = class {
+  constructor(t5) {
+  }
+  get _$AU() {
+    return this._$AM._$AU;
+  }
+  _$AT(t5, e7, i7) {
+    this._$Ct = t5, this._$AM = e7, this._$Ci = i7;
+  }
+  _$AS(t5, e7) {
+    return this.update(t5, e7);
+  }
+  update(t5, e7) {
+    return this.render(...e7);
+  }
+};
+
+// node_modules/lit-html/directives/style-map.js
+var n5 = "important";
+var i6 = " !" + n5;
+var o6 = e5(class extends i5 {
+  constructor(t5) {
+    if (super(t5), t5.type !== t4.ATTRIBUTE || "style" !== t5.name || t5.strings?.length > 2) throw Error("The `styleMap` directive must be used in the `style` attribute and must be the only part in the attribute.");
+  }
+  render(t5) {
+    return Object.keys(t5).reduce((e7, r6) => {
+      const s4 = t5[r6];
+      return null == s4 ? e7 : e7 + `${r6 = r6.includes("-") ? r6 : r6.replace(/(?:^(webkit|moz|ms|o)|)(?=[A-Z])/g, "-$&").toLowerCase()}:${s4};`;
+    }, "");
+  }
+  update(e7, [r6]) {
+    const { style: s4 } = e7.element;
+    if (void 0 === this.ft) return this.ft = new Set(Object.keys(r6)), this.render(r6);
+    for (const t5 of this.ft) null == r6[t5] && (this.ft.delete(t5), t5.includes("-") ? s4.removeProperty(t5) : s4[t5] = null);
+    for (const t5 in r6) {
+      const e8 = r6[t5];
+      if (null != e8) {
+        this.ft.add(t5);
+        const r7 = "string" == typeof e8 && e8.endsWith(i6);
+        t5.includes("-") || r7 ? s4.setProperty(t5, r7 ? e8.slice(0, -11) : e8, r7 ? n5 : "") : s4[t5] = e8;
+      }
+    }
+    return E;
+  }
+});
+
 // src/api.ts
 async function getList(hass, entityId) {
   return await hass.connection.sendMessagePromise({
@@ -1205,26 +1254,6 @@ TodoSaveLoadDialog = __decorateClass([
   t3("todo-overlay-save-load-dialog")
 ], TodoSaveLoadDialog);
 
-// node_modules/lit-html/directive.js
-var t4 = { ATTRIBUTE: 1, CHILD: 2, PROPERTY: 3, BOOLEAN_ATTRIBUTE: 4, EVENT: 5, ELEMENT: 6 };
-var e5 = (t5) => (...e7) => ({ _$litDirective$: t5, values: e7 });
-var i5 = class {
-  constructor(t5) {
-  }
-  get _$AU() {
-    return this._$AM._$AU;
-  }
-  _$AT(t5, e7, i7) {
-    this._$Ct = t5, this._$AM = e7, this._$Ci = i7;
-  }
-  _$AS(t5, e7) {
-    return this.update(t5, e7);
-  }
-  update(t5, e7) {
-    return this.render(...e7);
-  }
-};
-
 // node_modules/lit-html/directives/class-map.js
 var e6 = e5(class extends i5 {
   constructor(t5) {
@@ -1244,35 +1273,6 @@ var e6 = e5(class extends i5 {
     for (const t5 in i7) {
       const s5 = !!i7[t5];
       s5 === this.st.has(t5) || this.nt?.has(t5) || (s5 ? (r6.add(t5), this.st.add(t5)) : (r6.remove(t5), this.st.delete(t5)));
-    }
-    return E;
-  }
-});
-
-// node_modules/lit-html/directives/style-map.js
-var n5 = "important";
-var i6 = " !" + n5;
-var o6 = e5(class extends i5 {
-  constructor(t5) {
-    if (super(t5), t5.type !== t4.ATTRIBUTE || "style" !== t5.name || t5.strings?.length > 2) throw Error("The `styleMap` directive must be used in the `style` attribute and must be the only part in the attribute.");
-  }
-  render(t5) {
-    return Object.keys(t5).reduce((e7, r6) => {
-      const s4 = t5[r6];
-      return null == s4 ? e7 : e7 + `${r6 = r6.includes("-") ? r6 : r6.replace(/(?:^(webkit|moz|ms|o)|)(?=[A-Z])/g, "-$&").toLowerCase()}:${s4};`;
-    }, "");
-  }
-  update(e7, [r6]) {
-    const { style: s4 } = e7.element;
-    if (void 0 === this.ft) return this.ft = new Set(Object.keys(r6)), this.render(r6);
-    for (const t5 of this.ft) null == r6[t5] && (this.ft.delete(t5), t5.includes("-") ? s4.removeProperty(t5) : s4[t5] = null);
-    for (const t5 in r6) {
-      const e8 = r6[t5];
-      if (null != e8) {
-        this.ft.add(t5);
-        const r7 = "string" == typeof e8 && e8.endsWith(i6);
-        t5.includes("-") || r7 ? s4.setProperty(t5, r7 ? e8.slice(0, -11) : e8, r7 ? n5 : "") : s4[t5] = e8;
-      }
     }
     return E;
   }
@@ -1323,14 +1323,49 @@ function formatDue(item) {
 var TodoTreeItem = class extends i4 {
   constructor() {
     super(...arguments);
+    this.dragEngaged = false;
     this.pointerDownAt = 0;
     this.hasMoved = false;
+    this.onWindowPointerMove = (e7) => {
+      if (!this.pointerDownScreenPos || this.dragEngaged) {
+        return;
+      }
+      const dx = e7.clientX - this.pointerDownScreenPos.x;
+      const dy = e7.clientY - this.pointerDownScreenPos.y;
+      if (Math.hypot(dx, dy) <= MOVE_CANCEL_THRESHOLD_PX) {
+        return;
+      }
+      if (this.holdReady) {
+        this.hasMoved = true;
+        this.dragEngaged = true;
+        this.clearHoldRipple();
+        const rowEl = this.shadowRoot?.querySelector(".row");
+        const rect = rowEl?.getBoundingClientRect();
+        this.dispatchEvent(
+          new CustomEvent("tree-drag-start", {
+            detail: {
+              id: this.item.id,
+              rect: rect ? { x: rect.left, y: rect.top, width: rect.width, height: rect.height } : void 0,
+              pointerX: e7.clientX,
+              pointerY: e7.clientY
+            },
+            bubbles: true,
+            composed: true
+          })
+        );
+      } else {
+        this.cancelHoldForMovement();
+      }
+    };
+    this.onWindowPointerUp = () => {
+      this.pointerUp();
+    };
   }
   get isPressed() {
     return this.draggedId === this.item.id;
   }
-  get isDragging() {
-    return this.isPressed && this.hoverId !== void 0 && this.hoverId !== this.item.id;
+  get isBeingDragged() {
+    return this.isPressed && this.dragEngaged;
   }
   get isDropTarget() {
     return this.hoverId === this.item.id && this.draggedId !== void 0 && this.draggedId !== this.item.id;
@@ -1339,12 +1374,16 @@ var TodoTreeItem = class extends i4 {
     this.pointerDownAt = Date.now();
     this.pointerDownScreenPos = { x: e7.clientX, y: e7.clientY };
     this.hasMoved = false;
+    this.dragEngaged = false;
     const rect = e7.currentTarget.getBoundingClientRect();
     this.holdRippleOrigin = { x: e7.clientX - rect.left, y: e7.clientY - rect.top };
     window.clearTimeout(this.holdTimer);
     this.holdTimer = window.setTimeout(() => {
       this.requestUpdate();
     }, LONG_PRESS_MS);
+    window.addEventListener("pointermove", this.onWindowPointerMove, { capture: true });
+    window.addEventListener("pointerup", this.onWindowPointerUp, { capture: true });
+    window.addEventListener("pointercancel", this.onWindowPointerUp, { capture: true });
     this.dispatchEvent(
       new CustomEvent("tree-pointer-down", {
         detail: { id: this.item.id },
@@ -1353,23 +1392,6 @@ var TodoTreeItem = class extends i4 {
       })
     );
   }
-  // Hold and drag are mutually exclusive - once the pointer has moved
-  // meaningfully, this permanently cancels the hold for the rest of
-  // the gesture (the visual ripple disappears immediately, and
-  // pointerUp will treat it as a drag/no-op rather than a hold).
-  cancelHoldForMovement() {
-    if (this.hasMoved) {
-      return;
-    }
-    this.hasMoved = true;
-    this.clearHoldRipple();
-  }
-  updated(changed) {
-    super.updated(changed);
-    if ((changed.has("hoverId") || changed.has("draggedId")) && this.isDragging) {
-      this.cancelHoldForMovement();
-    }
-  }
   get holdReady() {
     return this.isPressed && Date.now() - this.pointerDownAt >= LONG_PRESS_MS;
   }
@@ -1377,31 +1399,21 @@ var TodoTreeItem = class extends i4 {
     window.clearTimeout(this.holdTimer);
     this.holdRippleOrigin = void 0;
   }
-  pointerEnterOrMove(e7) {
-    if (this.isPressed && this.pointerDownScreenPos) {
-      const dx = e7.clientX - this.pointerDownScreenPos.x;
-      const dy = e7.clientY - this.pointerDownScreenPos.y;
-      if (Math.hypot(dx, dy) > MOVE_CANCEL_THRESHOLD_PX) {
-        this.cancelHoldForMovement();
-      }
+  // Hold and drag are mutually exclusive - once the pointer has moved
+  // meaningfully before the hold threshold, this permanently cancels
+  // the hold for the rest of the gesture (the ripple disappears, and
+  // pointerUp will treat it as an ambiguous no-op rather than a hold).
+  cancelHoldForMovement() {
+    if (this.hasMoved) {
+      return;
     }
-    const rect = e7.currentTarget.getBoundingClientRect();
-    const relativeY = (e7.clientY - rect.top) / rect.height;
-    let placement;
-    if (relativeY < BEFORE_AFTER_ZONE) {
-      placement = "before";
-    } else if (relativeY > 1 - BEFORE_AFTER_ZONE) {
-      placement = "after";
-    } else {
-      placement = "inside";
-    }
-    this.dispatchEvent(
-      new CustomEvent("tree-pointer-enter", {
-        detail: { id: this.item.id, placement },
-        bubbles: true,
-        composed: true
-      })
-    );
+    this.hasMoved = true;
+    this.clearHoldRipple();
+  }
+  detachWindowListeners() {
+    window.removeEventListener("pointermove", this.onWindowPointerMove, { capture: true });
+    window.removeEventListener("pointerup", this.onWindowPointerUp, { capture: true });
+    window.removeEventListener("pointercancel", this.onWindowPointerUp, { capture: true });
   }
   emitPointerUp(pressDurationMs, moved = false) {
     this.dispatchEvent(
@@ -1413,12 +1425,15 @@ var TodoTreeItem = class extends i4 {
     );
   }
   pointerUp() {
+    this.detachWindowListeners();
     this.clearHoldRipple();
     const pressDurationMs = Date.now() - this.pointerDownAt;
-    const wasDragging = this.hoverId !== void 0 && this.hoverId !== this.item.id;
-    const moved = wasDragging || this.hasMoved;
-    if (pressDurationMs >= LONG_PRESS_MS || moved) {
-      this.emitPointerUp(pressDurationMs, moved);
+    if (this.dragEngaged) {
+      this.dragEngaged = false;
+      return;
+    }
+    if (this.hasMoved || pressDurationMs >= LONG_PRESS_MS) {
+      this.emitPointerUp(pressDurationMs, this.hasMoved);
       return;
     }
     window.clearTimeout(this.clickTimer);
@@ -1439,13 +1454,14 @@ var TodoTreeItem = class extends i4 {
   }
   render() {
     const isDropTarget = this.isDropTarget;
+    const isBeingDragged = this.isBeingDragged;
     const rowClasses = {
       row: true,
-      pressed: this.isPressed && !this.isDragging,
-      dragging: this.isDragging,
-      "drop-before": isDropTarget && this.hoverPlacement === "before",
-      "drop-after": isDropTarget && this.hoverPlacement === "after",
+      pressed: this.isPressed && !isBeingDragged,
+      lifted: isBeingDragged,
       "drop-inside": isDropTarget && this.hoverPlacement === "inside",
+      "gap-before": isDropTarget && this.hoverPlacement === "before",
+      "gap-after": isDropTarget && this.hoverPlacement === "after",
       completed: this.item.completed
     };
     const due = formatDue(this.item);
@@ -1457,41 +1473,40 @@ var TodoTreeItem = class extends i4 {
                     class=${e6(rowClasses)}
 
                     @pointerdown=${this.pointerDown}
-                    @pointerenter=${this.pointerEnterOrMove}
-                    @pointermove=${this.pointerEnterOrMove}
-                    @pointerup=${this.pointerUp}
                     @dblclick=${this.onDoubleClick}
                 >
-                    <ha-checkbox .checked=${this.item.completed}></ha-checkbox>
+                    ${isBeingDragged ? "" : b2`
+                                <ha-checkbox .checked=${this.item.completed}></ha-checkbox>
 
-                    <div class="content">
-                        <div class="title-line">
-                            <span class="summary">${this.item.title}</span>
-                            ${this.item.quantity ? b2`<span class="quantity-chip">${this.item.quantity}</span>` : ""}
-                        </div>
-
-                        ${hasMeta ? b2`
-                                    <div class="row-meta">
-                                        ${due ? b2`
-                                                    <span class=${e6({ "due-chip": true, overdue: due.overdue })}>
-                                                        ${CLOCK_ICON}${due.label}
-                                                    </span>
-                                                ` : ""}
-                                        ${this.item.tags.map((tag) => b2`<span class="tag-chip">${tag}</span>`)}
-                                        ${this.item.description ? b2`<span class="description-text">${this.item.description}</span>` : ""}
+                                <div class="content">
+                                    <div class="title-line">
+                                        <span class="summary">${this.item.title}</span>
+                                        ${this.item.quantity ? b2`<span class="quantity-chip">${this.item.quantity}</span>` : ""}
                                     </div>
-                                ` : ""}
-                    </div>
 
-                    ${this.holdRippleOrigin ? b2`
-                                <div
-                                    class=${e6({ "hold-ripple": true, active: this.holdReady })}
-                                    style=${o6({
+                                    ${hasMeta ? b2`
+                                                <div class="row-meta">
+                                                    ${due ? b2`
+                                                                <span class=${e6({ "due-chip": true, overdue: due.overdue })}>
+                                                                    ${CLOCK_ICON}${due.label}
+                                                                </span>
+                                                            ` : ""}
+                                                    ${this.item.tags.map((tag) => b2`<span class="tag-chip">${tag}</span>`)}
+                                                    ${this.item.description ? b2`<span class="description-text">${this.item.description}</span>` : ""}
+                                                </div>
+                                            ` : ""}
+                                </div>
+
+                                ${this.holdRippleOrigin ? b2`
+                                            <div
+                                                class=${e6({ "hold-ripple": true, active: this.holdReady })}
+                                                style=${o6({
       left: `${this.holdRippleOrigin.x}px`,
       top: `${this.holdRippleOrigin.y}px`
     })}
-                                ></div>
-                            ` : ""}
+                                            ></div>
+                                        ` : ""}
+                            `}
                 </div>
 
                 ${this.item.children.length ? b2`
@@ -1536,7 +1551,7 @@ TodoTreeItem.styles = i`
             outline-offset: -2px;
             user-select: none;
             cursor: pointer;
-            transition: background-color 0.15s ease, outline-color 0.15s ease;
+            transition: background-color 0.15s ease, outline-color 0.15s ease, margin 150ms ease;
         }
 
         .row:hover {
@@ -1547,9 +1562,13 @@ TodoTreeItem.styles = i`
             background: rgba(var(--rgb-primary-text-color, 0, 0, 0), 0.12);
         }
 
-        .row.dragging {
-            opacity: 0.5;
-            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+        .row.lifted {
+            min-height: 10px;
+            padding: 4px 20px;
+            border-radius: 4px;
+            border: 1px dashed var(--divider-color);
+            background: rgba(var(--rgb-primary-text-color, 0, 0, 0), 0.03);
+            cursor: grabbing;
         }
 
         .row.drop-inside {
@@ -1557,23 +1576,16 @@ TodoTreeItem.styles = i`
             background: rgba(var(--rgb-accent-color, 255, 152, 0), 0.08);
         }
 
-        .row.drop-before::before,
-        .row.drop-after::after {
-            content: "";
-            position: absolute;
-            left: 20px;
-            right: 20px;
-            height: 2px;
-            border-radius: 1px;
-            background: var(--accent-color, var(--primary-color));
+        /* Instead of a static line, the sibling next to the drop point
+           opens a live gap (matching the space a lifted row leaves
+           behind), so the list visibly reflows to show where the item
+           would land rather than just marking the spot. */
+        .row.gap-before {
+            margin-top: 52px;
         }
 
-        .row.drop-before::before {
-            top: -1px;
-        }
-
-        .row.drop-after::after {
-            bottom: -1px;
+        .row.gap-after {
+            margin-bottom: 52px;
         }
 
         .content {
@@ -1592,8 +1604,8 @@ TodoTreeItem.styles = i`
         }
 
         .summary {
-            flex: 1;
             min-width: 0;
+            flex-shrink: 1;
             font-family: Roboto, "Noto Sans", sans-serif;
             font-size: 14px;
             font-weight: 400;
@@ -1711,6 +1723,9 @@ __decorateClass([
 __decorateClass([
   r5()
 ], TodoTreeItem.prototype, "holdRippleOrigin", 2);
+__decorateClass([
+  r5()
+], TodoTreeItem.prototype, "dragEngaged", 2);
 TodoTreeItem = __decorateClass([
   t3("todo-overlay-tree-item")
 ], TodoTreeItem);
@@ -1762,6 +1777,48 @@ TodoTree = __decorateClass([
 ], TodoTree);
 
 // src/todo-overlay.ts
+function deepElementFromPoint(x2, y3) {
+  let el = document.elementFromPoint(x2, y3);
+  while (el && el.shadowRoot) {
+    const inner = el.shadowRoot.elementFromPoint(x2, y3);
+    if (!inner || inner === el) {
+      break;
+    }
+    el = inner;
+  }
+  return el;
+}
+function closestAcrossShadowRoots(start, selector) {
+  let current = start;
+  while (current) {
+    const found = current.closest(selector);
+    if (found) {
+      return found;
+    }
+    const root = current.getRootNode();
+    current = root instanceof ShadowRoot ? root.host : null;
+  }
+  return null;
+}
+function hitTestRow(x2, y3) {
+  const el = deepElementFromPoint(x2, y3);
+  const itemEl = closestAcrossShadowRoots(el, "todo-overlay-tree-item");
+  if (!itemEl?.item) {
+    return void 0;
+  }
+  const rowEl = itemEl.shadowRoot?.querySelector(".row");
+  const rect = (rowEl ?? itemEl).getBoundingClientRect();
+  const relativeY = (y3 - rect.top) / rect.height;
+  let placement;
+  if (relativeY < BEFORE_AFTER_ZONE) {
+    placement = "before";
+  } else if (relativeY > 1 - BEFORE_AFTER_ZONE) {
+    placement = "after";
+  } else {
+    placement = "inside";
+  }
+  return { id: itemEl.item.id, placement };
+}
 var UNDO_TIMEOUT_MS = 8e3;
 function findItem(items, id) {
   for (const item of items) {
@@ -1785,9 +1842,42 @@ function splitDueDateTime(iso) {
 var TodoOverlayCard = class extends i4 {
   constructor() {
     super(...arguments);
+    this.dragGhostOffset = { x: 0, y: 0 };
     this.quickAddValue = "";
     this.saveLoadValue = EMPTY_SAVE_LOAD_VALUE;
     this.savedNames = [];
+    this.onGlobalPointerMove = (e7) => {
+      this.ghostPosition = { x: e7.clientX, y: e7.clientY };
+      const hit = hitTestRow(e7.clientX, e7.clientY);
+      this.hoverId = hit && hit.id !== this.draggedId ? hit.id : void 0;
+      this.hoverPlacement = hit && hit.id !== this.draggedId ? hit.placement : void 0;
+    };
+    this.onGlobalPointerUp = async () => {
+      window.removeEventListener("pointermove", this.onGlobalPointerMove, { capture: true });
+      window.removeEventListener("pointerup", this.onGlobalPointerUp, { capture: true });
+      window.removeEventListener("pointercancel", this.onGlobalPointerUp, { capture: true });
+      const draggedId = this.draggedId;
+      const hoverId = this.hoverId;
+      const hoverPlacement = this.hoverPlacement;
+      this.ghostPosition = void 0;
+      this.draggedId = void 0;
+      this.hoverId = void 0;
+      this.hoverPlacement = void 0;
+      if (draggedId && hoverId && draggedId !== hoverId) {
+        try {
+          await moveItem(
+            this.hass,
+            this.config.entity,
+            draggedId,
+            hoverId,
+            hoverPlacement ?? "inside"
+          );
+          await this.load();
+        } catch (err) {
+          this.error = err instanceof Error ? err.message : String(err);
+        }
+      }
+    };
   }
   setConfig(config) {
     if (!config.entity) {
@@ -1828,31 +1918,29 @@ var TodoOverlayCard = class extends i4 {
     };
   }
   // --- drag / tap / hold ---------------------------------------------
+  //
+  // A drag only ever reaches the "live" ghost-follow stage below once
+  // the item's own hold threshold has been reached AND the pointer
+  // then moves (see todo-tree-item.ts) - so a quick swipe on mobile
+  // still scrolls the page normally, and only a sustained hold-then-
+  // move actually picks an item up. Once that happens, this component
+  // takes over entirely via window-level listeners and its own
+  // hit-testing (hitTestRow), rather than relying on the dragged
+  // item's own bubbled events for hover detection.
   onPointerDown(e7) {
     this.draggedId = e7.detail.id;
   }
-  onPointerEnter(e7) {
-    if (!this.draggedId) {
-      return;
-    }
-    this.hoverId = e7.detail.id;
-    this.hoverPlacement = e7.detail.placement;
+  onDragStart(e7) {
+    const { rect, pointerX, pointerY } = e7.detail;
+    this.dragGhostOffset = rect ? { x: pointerX - rect.x, y: pointerY - rect.y } : { x: 0, y: 0 };
+    this.dragGhostSize = rect ? { width: rect.width, height: rect.height } : void 0;
+    this.ghostPosition = { x: pointerX, y: pointerY };
+    window.addEventListener("pointermove", this.onGlobalPointerMove, { capture: true });
+    window.addEventListener("pointerup", this.onGlobalPointerUp, { capture: true });
+    window.addEventListener("pointercancel", this.onGlobalPointerUp, { capture: true });
   }
   async onPointerUp(e7) {
-    if (this.draggedId && this.hoverId && this.draggedId !== this.hoverId) {
-      try {
-        await moveItem(
-          this.hass,
-          this.config.entity,
-          this.draggedId,
-          this.hoverId,
-          this.hoverPlacement ?? "inside"
-        );
-        await this.load();
-      } catch (err) {
-        this.error = err instanceof Error ? err.message : String(err);
-      }
-    } else if (!e7.detail.moved && this.draggedId && this.list) {
+    if (!e7.detail.moved && this.draggedId && this.list) {
       const item = findItem(this.list.items, this.draggedId);
       if (item) {
         const pressDurationMs = e7.detail.pressDurationMs;
@@ -1864,8 +1952,12 @@ var TodoOverlayCard = class extends i4 {
       }
     }
     this.draggedId = void 0;
-    this.hoverId = void 0;
-    this.hoverPlacement = void 0;
+  }
+  disconnectedCallback() {
+    super.disconnectedCallback();
+    window.removeEventListener("pointermove", this.onGlobalPointerMove, { capture: true });
+    window.removeEventListener("pointerup", this.onGlobalPointerUp, { capture: true });
+    window.removeEventListener("pointercancel", this.onGlobalPointerUp, { capture: true });
   }
   // --- completion + cascade undo --------------------------------------
   async toggleComplete(item) {
@@ -2087,7 +2179,7 @@ var TodoOverlayCard = class extends i4 {
                     .hoverPlacement=${this.hoverPlacement}
 
                     @tree-pointer-down=${this.onPointerDown}
-                    @tree-pointer-enter=${this.onPointerEnter}
+                    @tree-drag-start=${this.onDragStart}
                     @tree-pointer-up=${this.onPointerUp}
 
                 ></todo-overlay-tree>
@@ -2104,7 +2196,7 @@ var TodoOverlayCard = class extends i4 {
                             .hoverPlacement=${this.hoverPlacement}
 
                             @tree-pointer-down=${this.onPointerDown}
-                            @tree-pointer-enter=${this.onPointerEnter}
+                            @tree-drag-start=${this.onDragStart}
                             @tree-pointer-up=${this.onPointerUp}
 
                         ></todo-overlay-tree>
@@ -2123,10 +2215,35 @@ var TodoOverlayCard = class extends i4 {
                 .hoverPlacement=${this.hoverPlacement}
 
                 @tree-pointer-down=${this.onPointerDown}
-                @tree-pointer-enter=${this.onPointerEnter}
+                @tree-drag-start=${this.onDragStart}
                 @tree-pointer-up=${this.onPointerUp}
 
             ></todo-overlay-tree>
+        `;
+  }
+  renderDragGhost() {
+    if (!this.ghostPosition || !this.draggedId || !this.list) {
+      return "";
+    }
+    const item = findItem(this.list.items, this.draggedId);
+    if (!item) {
+      return "";
+    }
+    const left = this.ghostPosition.x - this.dragGhostOffset.x;
+    const top = this.ghostPosition.y - this.dragGhostOffset.y;
+    return b2`
+            <div
+                class="drag-ghost"
+                style=${o6({
+      left: `${left}px`,
+      top: `${top}px`,
+      width: this.dragGhostSize ? `${this.dragGhostSize.width}px` : void 0
+    })}
+            >
+                <ha-checkbox .checked=${item.completed}></ha-checkbox>
+                <span class="drag-ghost-title">${item.title}</span>
+                ${item.quantity ? b2`<span class="drag-ghost-quantity">${item.quantity}</span>` : ""}
+            </div>
         `;
   }
   render() {
@@ -2199,6 +2316,8 @@ var TodoOverlayCard = class extends i4 {
                             @dialog-delete-saved=${this.onSaveLoadDeleteSaved}
                         ></todo-overlay-save-load-dialog>
                     ` : ""}
+
+            ${this.renderDragGhost()}
         `;
   }
 };
@@ -2310,6 +2429,44 @@ TodoOverlayCard.styles = i`
             cursor: pointer;
             padding: 4px;
         }
+
+        /* Follows the pointer while an item is being dragged (see
+           onDragStart/onGlobalPointerMove) - pointer-events:none is
+           essential, not just cosmetic: without it, this element would
+           itself be hit by our own elementFromPoint-based hit-testing,
+           since it's rendered on top of everything else. */
+        .drag-ghost {
+            position: fixed;
+            z-index: 10;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            padding: 8px 20px;
+            border-radius: 4px;
+            background: var(--card-background-color, var(--primary-background-color));
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+            pointer-events: none;
+            font-family: Roboto, "Noto Sans", sans-serif;
+            font-size: 14px;
+            color: var(--primary-text-color);
+        }
+
+        .drag-ghost-title {
+            flex: 1;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        .drag-ghost-quantity {
+            flex-shrink: 0;
+            font-size: 12px;
+            font-weight: 600;
+            color: var(--primary-color);
+            background: rgba(var(--rgb-primary-color, 3, 169, 244), 0.12);
+            padding: 1px 7px;
+            border-radius: 10px;
+        }
     `;
 __decorateClass([
   n4({ attribute: false })
@@ -2332,6 +2489,9 @@ __decorateClass([
 __decorateClass([
   r5()
 ], TodoOverlayCard.prototype, "hoverPlacement", 2);
+__decorateClass([
+  r5()
+], TodoOverlayCard.prototype, "ghostPosition", 2);
 __decorateClass([
   r5()
 ], TodoOverlayCard.prototype, "dialogMode", 2);
@@ -2407,8 +2567,8 @@ lit-html/is-server.js:
    * SPDX-License-Identifier: BSD-3-Clause
    *)
 
-lit-html/directives/class-map.js:
 lit-html/directives/style-map.js:
+lit-html/directives/class-map.js:
   (**
    * @license
    * Copyright 2018 Google LLC

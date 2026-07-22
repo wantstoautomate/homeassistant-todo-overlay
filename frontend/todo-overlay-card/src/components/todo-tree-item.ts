@@ -5,12 +5,19 @@ import {styleMap} from "lit/directives/style-map.js";
 
 import {LONG_PRESS_MS, type Placement, type TodoItem} from "../models";
 
-const BEFORE_AFTER_ZONE = 0.3;
+// How far into a row's top/bottom the pointer needs to be to count as
+// "before"/"after" rather than "inside" (reparent). Exported so the
+// card's own hit-testing (which replaced per-row hover dispatch - see
+// the module docstring below) computes placement the same way.
+export const BEFORE_AFTER_ZONE = 0.3;
 
-// Pointer movement beyond this many pixels cancels the hold-to-edit
-// gesture in favour of a drag - a hold only counts when the pointer
-// stays (roughly) still, matching a small allowance for natural
-// hand/touch jitter rather than a strict zero-tolerance check.
+// Pointer movement beyond this many pixels, while still under the hold
+// threshold, cancels the hold-to-edit gesture rather than engaging a
+// drag - a small allowance for natural hand/touch jitter rather than a
+// strict zero-tolerance check. Movement past the hold threshold instead
+// engages a live drag (see onWindowPointerMove) - the two are gated on
+// timing so a quick swipe on mobile still scrolls the page normally,
+// and only a sustained hold-then-move picks an item up.
 const MOVE_CANCEL_THRESHOLD_PX = 6;
 const HOLD_RIPPLE_SIZE = 72;
 const holdRippleSizePx = unsafeCSS(`${HOLD_RIPPLE_SIZE}px`);
@@ -65,6 +72,17 @@ function formatDue(item: TodoItem): {label: string; overdue: boolean} | undefine
     };
 }
 
+// Drag-and-drop model: a hold (matching the existing hold-to-edit
+// threshold) followed by movement picks an item up - the card then
+// takes over entirely via its own window-level pointermove/pointerup
+// listeners and a floating "ghost" that follows the pointer, since
+// per-row hover listeners don't work on touch (a touch pointer is
+// implicitly captured to whichever element it started on, so
+// pointerenter/pointermove never fire on OTHER rows during a real
+// touch drag - see todo-overlay.ts's hit-testing). Movement BEFORE the
+// hold threshold is left alone entirely (no preventDefault), so a
+// quick swipe still scrolls the page normally instead of fighting a
+// drag that was never actually intended.
 @customElement("todo-overlay-tree-item")
 export class TodoTreeItem extends LitElement {
 
@@ -91,7 +109,7 @@ export class TodoTreeItem extends LitElement {
             outline-offset: -2px;
             user-select: none;
             cursor: pointer;
-            transition: background-color 0.15s ease, outline-color 0.15s ease;
+            transition: background-color 0.15s ease, outline-color 0.15s ease, margin 150ms ease;
         }
 
         .row:hover {
@@ -102,9 +120,13 @@ export class TodoTreeItem extends LitElement {
             background: rgba(var(--rgb-primary-text-color, 0, 0, 0), 0.12);
         }
 
-        .row.dragging {
-            opacity: 0.5;
-            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+        .row.lifted {
+            min-height: 10px;
+            padding: 4px 20px;
+            border-radius: 4px;
+            border: 1px dashed var(--divider-color);
+            background: rgba(var(--rgb-primary-text-color, 0, 0, 0), 0.03);
+            cursor: grabbing;
         }
 
         .row.drop-inside {
@@ -112,23 +134,16 @@ export class TodoTreeItem extends LitElement {
             background: rgba(var(--rgb-accent-color, 255, 152, 0), 0.08);
         }
 
-        .row.drop-before::before,
-        .row.drop-after::after {
-            content: "";
-            position: absolute;
-            left: 20px;
-            right: 20px;
-            height: 2px;
-            border-radius: 1px;
-            background: var(--accent-color, var(--primary-color));
+        /* Instead of a static line, the sibling next to the drop point
+           opens a live gap (matching the space a lifted row leaves
+           behind), so the list visibly reflows to show where the item
+           would land rather than just marking the spot. */
+        .row.gap-before {
+            margin-top: 52px;
         }
 
-        .row.drop-before::before {
-            top: -1px;
-        }
-
-        .row.drop-after::after {
-            bottom: -1px;
+        .row.gap-after {
+            margin-bottom: 52px;
         }
 
         .content {
@@ -147,8 +162,8 @@ export class TodoTreeItem extends LitElement {
         }
 
         .summary {
-            flex: 1;
             min-width: 0;
+            flex-shrink: 1;
             font-family: Roboto, "Noto Sans", sans-serif;
             font-size: 14px;
             font-weight: 400;
@@ -267,6 +282,9 @@ export class TodoTreeItem extends LitElement {
     @state()
     private holdRippleOrigin?: {x: number; y: number};
 
+    @state()
+    private dragEngaged = false;
+
     private pointerDownAt = 0;
     private pointerDownScreenPos?: {x: number; y: number};
     private hasMoved = false;
@@ -277,12 +295,8 @@ export class TodoTreeItem extends LitElement {
         return this.draggedId === this.item.id;
     }
 
-    private get isDragging(): boolean {
-        return (
-            this.isPressed &&
-            this.hoverId !== undefined &&
-            this.hoverId !== this.item.id
-        );
+    private get isBeingDragged(): boolean {
+        return this.isPressed && this.dragEngaged;
     }
 
     private get isDropTarget(): boolean {
@@ -297,6 +311,7 @@ export class TodoTreeItem extends LitElement {
         this.pointerDownAt = Date.now();
         this.pointerDownScreenPos = {x: e.clientX, y: e.clientY};
         this.hasMoved = false;
+        this.dragEngaged = false;
 
         const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
         this.holdRippleOrigin = {x: e.clientX - rect.left, y: e.clientY - rect.top};
@@ -306,6 +321,20 @@ export class TodoTreeItem extends LitElement {
             this.requestUpdate();
         }, LONG_PRESS_MS);
 
+        // Capture phase, not bubble: HA's own frontend has various
+        // touch/gesture handling that can call stopPropagation() on its
+        // way back up, which would otherwise silently swallow these
+        // before a bubble-phase window listener ever saw them -
+        // capturing at the very outermost point sidesteps that entirely.
+        window.addEventListener("pointermove", this.onWindowPointerMove, {capture: true});
+        window.addEventListener("pointerup", this.onWindowPointerUp, {capture: true});
+        // Touch gestures often end with pointercancel rather than
+        // pointerup (the browser treats an ambiguous or interrupted
+        // touch as "cancelled" rather than a deliberate release) - both
+        // need to end the gesture the same way, or a touch drag would
+        // get stuck with dangling listeners and never finalize.
+        window.addEventListener("pointercancel", this.onWindowPointerUp, {capture: true});
+
         this.dispatchEvent(
             new CustomEvent("tree-pointer-down", {
                 detail: {id: this.item.id},
@@ -313,30 +342,6 @@ export class TodoTreeItem extends LitElement {
                 composed: true,
             }),
         );
-    }
-
-    // Hold and drag are mutually exclusive - once the pointer has moved
-    // meaningfully, this permanently cancels the hold for the rest of
-    // the gesture (the visual ripple disappears immediately, and
-    // pointerUp will treat it as a drag/no-op rather than a hold).
-    private cancelHoldForMovement() {
-        if (this.hasMoved) {
-            return;
-        }
-
-        this.hasMoved = true;
-        this.clearHoldRipple();
-    }
-
-    protected updated(changed: Map<string, unknown>) {
-        super.updated(changed);
-
-        if (
-            (changed.has("hoverId") || changed.has("draggedId")) &&
-            this.isDragging
-        ) {
-            this.cancelHoldForMovement();
-        }
     }
 
     private get holdReady(): boolean {
@@ -351,36 +356,66 @@ export class TodoTreeItem extends LitElement {
         this.holdRippleOrigin = undefined;
     }
 
-    private pointerEnterOrMove(e: PointerEvent) {
-        if (this.isPressed && this.pointerDownScreenPos) {
-            const dx = e.clientX - this.pointerDownScreenPos.x;
-            const dy = e.clientY - this.pointerDownScreenPos.y;
-
-            if (Math.hypot(dx, dy) > MOVE_CANCEL_THRESHOLD_PX) {
-                this.cancelHoldForMovement();
-            }
+    // Hold and drag are mutually exclusive - once the pointer has moved
+    // meaningfully before the hold threshold, this permanently cancels
+    // the hold for the rest of the gesture (the ripple disappears, and
+    // pointerUp will treat it as an ambiguous no-op rather than a hold).
+    private cancelHoldForMovement() {
+        if (this.hasMoved) {
+            return;
         }
 
-        const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
-        const relativeY = (e.clientY - rect.top) / rect.height;
+        this.hasMoved = true;
+        this.clearHoldRipple();
+    }
 
-        let placement: Placement;
+    private onWindowPointerMove = (e: PointerEvent) => {
+        if (!this.pointerDownScreenPos || this.dragEngaged) {
+            return;
+        }
 
-        if (relativeY < BEFORE_AFTER_ZONE) {
-            placement = "before";
-        } else if (relativeY > 1 - BEFORE_AFTER_ZONE) {
-            placement = "after";
+        const dx = e.clientX - this.pointerDownScreenPos.x;
+        const dy = e.clientY - this.pointerDownScreenPos.y;
+
+        if (Math.hypot(dx, dy) <= MOVE_CANCEL_THRESHOLD_PX) {
+            return;
+        }
+
+        if (this.holdReady) {
+            this.hasMoved = true;
+            this.dragEngaged = true;
+            this.clearHoldRipple();
+
+            const rowEl = this.shadowRoot?.querySelector(".row");
+            const rect = rowEl?.getBoundingClientRect();
+
+            this.dispatchEvent(
+                new CustomEvent("tree-drag-start", {
+                    detail: {
+                        id: this.item.id,
+                        rect: rect
+                            ? {x: rect.left, y: rect.top, width: rect.width, height: rect.height}
+                            : undefined,
+                        pointerX: e.clientX,
+                        pointerY: e.clientY,
+                    },
+                    bubbles: true,
+                    composed: true,
+                }),
+            );
         } else {
-            placement = "inside";
+            this.cancelHoldForMovement();
         }
+    };
 
-        this.dispatchEvent(
-            new CustomEvent("tree-pointer-enter", {
-                detail: {id: this.item.id, placement},
-                bubbles: true,
-                composed: true,
-            }),
-        );
+    private onWindowPointerUp = () => {
+        this.pointerUp();
+    };
+
+    private detachWindowListeners() {
+        window.removeEventListener("pointermove", this.onWindowPointerMove, {capture: true});
+        window.removeEventListener("pointerup", this.onWindowPointerUp, {capture: true});
+        window.removeEventListener("pointercancel", this.onWindowPointerUp, {capture: true});
     }
 
     private emitPointerUp(pressDurationMs: number, moved = false) {
@@ -394,14 +429,21 @@ export class TodoTreeItem extends LitElement {
     }
 
     private pointerUp() {
+        this.detachWindowListeners();
         this.clearHoldRipple();
 
         const pressDurationMs = Date.now() - this.pointerDownAt;
-        const wasDragging = this.hoverId !== undefined && this.hoverId !== this.item.id;
-        const moved = wasDragging || this.hasMoved;
 
-        if (pressDurationMs >= LONG_PRESS_MS || moved) {
-            this.emitPointerUp(pressDurationMs, moved);
+        if (this.dragEngaged) {
+            // The card's own global pointerup listener (attached when
+            // tree-drag-start fired) owns finalizing this - it already
+            // has the current hover target from its own hit-testing.
+            this.dragEngaged = false;
+            return;
+        }
+
+        if (this.hasMoved || pressDurationMs >= LONG_PRESS_MS) {
+            this.emitPointerUp(pressDurationMs, this.hasMoved);
             return;
         }
 
@@ -429,14 +471,15 @@ export class TodoTreeItem extends LitElement {
 
     render() {
         const isDropTarget = this.isDropTarget;
+        const isBeingDragged = this.isBeingDragged;
 
         const rowClasses = {
             row: true,
-            pressed: this.isPressed && !this.isDragging,
-            dragging: this.isDragging,
-            "drop-before": isDropTarget && this.hoverPlacement === "before",
-            "drop-after": isDropTarget && this.hoverPlacement === "after",
+            pressed: this.isPressed && !isBeingDragged,
+            lifted: isBeingDragged,
             "drop-inside": isDropTarget && this.hoverPlacement === "inside",
+            "gap-before": isDropTarget && this.hoverPlacement === "before",
+            "gap-after": isDropTarget && this.hoverPlacement === "after",
             completed: this.item.completed,
         };
 
@@ -450,60 +493,63 @@ export class TodoTreeItem extends LitElement {
                     class=${classMap(rowClasses)}
 
                     @pointerdown=${this.pointerDown}
-                    @pointerenter=${this.pointerEnterOrMove}
-                    @pointermove=${this.pointerEnterOrMove}
-                    @pointerup=${this.pointerUp}
                     @dblclick=${this.onDoubleClick}
                 >
-                    <ha-checkbox .checked=${this.item.completed}></ha-checkbox>
+                    ${
+                        isBeingDragged
+                            ? ""
+                            : html`
+                                <ha-checkbox .checked=${this.item.completed}></ha-checkbox>
 
-                    <div class="content">
-                        <div class="title-line">
-                            <span class="summary">${this.item.title}</span>
-                            ${
-                                this.item.quantity
-                                    ? html`<span class="quantity-chip">${this.item.quantity}</span>`
-                                    : ""
-                            }
-                        </div>
-
-                        ${
-                            hasMeta
-                                ? html`
-                                    <div class="row-meta">
+                                <div class="content">
+                                    <div class="title-line">
+                                        <span class="summary">${this.item.title}</span>
                                         ${
-                                            due
-                                                ? html`
-                                                    <span class=${classMap({"due-chip": true, overdue: due.overdue})}>
-                                                        ${CLOCK_ICON}${due.label}
-                                                    </span>
-                                                `
-                                                : ""
-                                        }
-                                        ${this.item.tags.map(tag => html`<span class="tag-chip">${tag}</span>`)}
-                                        ${
-                                            this.item.description
-                                                ? html`<span class="description-text">${this.item.description}</span>`
+                                            this.item.quantity
+                                                ? html`<span class="quantity-chip">${this.item.quantity}</span>`
                                                 : ""
                                         }
                                     </div>
-                                `
-                                : ""
-                        }
-                    </div>
 
-                    ${
-                        this.holdRippleOrigin
-                            ? html`
-                                <div
-                                    class=${classMap({"hold-ripple": true, active: this.holdReady})}
-                                    style=${styleMap({
-                                        left: `${this.holdRippleOrigin.x}px`,
-                                        top: `${this.holdRippleOrigin.y}px`,
-                                    })}
-                                ></div>
+                                    ${
+                                        hasMeta
+                                            ? html`
+                                                <div class="row-meta">
+                                                    ${
+                                                        due
+                                                            ? html`
+                                                                <span class=${classMap({"due-chip": true, overdue: due.overdue})}>
+                                                                    ${CLOCK_ICON}${due.label}
+                                                                </span>
+                                                            `
+                                                            : ""
+                                                    }
+                                                    ${this.item.tags.map(tag => html`<span class="tag-chip">${tag}</span>`)}
+                                                    ${
+                                                        this.item.description
+                                                            ? html`<span class="description-text">${this.item.description}</span>`
+                                                            : ""
+                                                    }
+                                                </div>
+                                            `
+                                            : ""
+                                    }
+                                </div>
+
+                                ${
+                                    this.holdRippleOrigin
+                                        ? html`
+                                            <div
+                                                class=${classMap({"hold-ripple": true, active: this.holdReady})}
+                                                style=${styleMap({
+                                                    left: `${this.holdRippleOrigin.x}px`,
+                                                    top: `${this.holdRippleOrigin.y}px`,
+                                                })}
+                                            ></div>
+                                        `
+                                        : ""
+                                }
                             `
-                            : ""
                     }
                 </div>
 
