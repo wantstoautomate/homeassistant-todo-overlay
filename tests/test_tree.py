@@ -114,3 +114,49 @@ def test_build_tree_grandparent_completion_derives_through_parent():
 
     assert tree[0].children[0].completed is True
     assert tree[0].completed is True
+
+
+def test_build_tree_completed_items_sort_after_incomplete_siblings():
+    items = [
+        TodoItem(id="1", title="Done", completed=True),
+        TodoItem(id="2", title="Not done", completed=False),
+    ]
+
+    positions = {
+        # "Done" has a LOWER stored order than "Not done", but being
+        # complete should still push it to the bottom.
+        "1": ItemPosition(parent_id=None, order=0),
+        "2": ItemPosition(parent_id=None, order=1),
+    }
+
+    tree = build_tree(items, positions)
+
+    assert [item.id for item in tree] == ["2", "1"]
+
+
+def test_build_tree_completed_sort_is_independent_per_level():
+    items = [
+        TodoItem(id="1", title="Root A", completed=True),
+        TodoItem(id="2", title="Root B", completed=False),
+        TodoItem(id="3", title="Child of A - done", completed=True),
+        TodoItem(id="4", title="Child of A - not done", completed=False),
+    ]
+
+    positions = {
+        "1": ItemPosition(parent_id=None, order=0),
+        "2": ItemPosition(parent_id=None, order=1),
+        "3": ItemPosition(parent_id="1", order=0),
+        "4": ItemPosition(parent_id="1", order=1),
+    }
+
+    tree = build_tree(items, positions)
+
+    # "Root A" has an incomplete child, so it's computed incomplete and
+    # sorts by order like normal at the root level (order 0 before 1) -
+    # a child being pushed to the bottom of ITS OWN group must not bubble
+    # up and affect its parent's position among its own siblings.
+    assert [item.id for item in tree] == ["1", "2"]
+
+    # Within Root A's own children, completion still sorts independently
+    # of the root level, despite "done" having the lower stored order.
+    assert [child.id for child in tree[0].children] == ["4", "3"]

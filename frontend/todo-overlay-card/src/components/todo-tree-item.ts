@@ -160,9 +160,10 @@ export class TodoTreeItem extends LitElement {
             display: flex;
             align-items: center;
             gap: 8px;
-            padding: 0 0 8px 40px;
+            padding: 0 0 4px 40px;
             font-family: Roboto, "Noto Sans", sans-serif;
             font-size: 12px;
+            line-height: 14px;
             color: var(--secondary-text-color);
         }
 

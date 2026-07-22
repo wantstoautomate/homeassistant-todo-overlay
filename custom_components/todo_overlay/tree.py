@@ -9,6 +9,13 @@ def build_tree(
 
     Items with no stored position (never moved) default to being a root,
     keeping their original relative order via Python's stable sort.
+
+    Completed items sort after incomplete ones within their own parent,
+    regardless of their stored order - so completing an item moves it to
+    the bottom of its own siblings (and only its siblings: this is applied
+    independently at every level), and a drag can still reorder within
+    the completed group but can never place one ahead of an incomplete
+    sibling, since that comparison is decided by completion status first.
     """
 
     item_lookup = {
@@ -32,26 +39,21 @@ def build_tree(
         position = positions.get(item.id)
         return position.order if position else 0
 
-    roots.sort(key=order_of)
+    def sort_key(item: TodoItem) -> tuple[bool, int]:
+        return (item.completed, order_of(item))
 
-    for item in items:
-        item.children.sort(key=order_of)
+    def finalize(item: TodoItem) -> None:
+        for child in item.children:
+            finalize(child)
+
+        if item.children:
+            item.completed = all(child.completed for child in item.children)
+
+        item.children.sort(key=sort_key)
 
     for root in roots:
-        _compute_completed(root)
+        finalize(root)
+
+    roots.sort(key=sort_key)
 
     return roots
-
-
-def _compute_completed(item: TodoItem) -> bool:
-    """An item with children is complete iff all of its children are -
-    computed bottom-up rather than stored, so it can never drift out of
-    sync with the children it's derived from."""
-
-    for child in item.children:
-        _compute_completed(child)
-
-    if item.children:
-        item.completed = all(child.completed for child in item.children)
-
-    return item.completed

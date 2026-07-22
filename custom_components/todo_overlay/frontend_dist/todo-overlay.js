@@ -1229,9 +1229,10 @@ TodoTreeItem.styles = i`
             display: flex;
             align-items: center;
             gap: 8px;
-            padding: 0 0 8px 40px;
+            padding: 0 0 4px 40px;
             font-family: Roboto, "Noto Sans", sans-serif;
             font-size: 12px;
+            line-height: 14px;
             color: var(--secondary-text-color);
         }
 
@@ -1375,7 +1376,15 @@ var TodoOverlayCard = class extends i4 {
     this.config = config;
   }
   updated(changed) {
-    if (changed.has("hass") && this.hass && !this.list && !this.error) {
+    if (!changed.has("hass") || !this.hass || !this.config) {
+      return;
+    }
+    const entityUpdate = this.hass.states[this.config.entity]?.last_updated;
+    const entityChanged = entityUpdate !== void 0 && entityUpdate !== this.lastEntityUpdate;
+    this.lastEntityUpdate = entityUpdate;
+    if (!this.list && !this.error) {
+      this.load();
+    } else if (entityChanged) {
       this.load();
     }
   }

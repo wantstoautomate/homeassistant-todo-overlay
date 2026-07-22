@@ -164,6 +164,7 @@ export class TodoOverlayCard extends LitElement {
     private undoState?: {message: string; changes: CompletionChange[]};
 
     private undoTimer?: number;
+    private lastEntityUpdate?: string;
 
     setConfig(config: TodoOverlayCardConfig) {
         if (!config.entity) {
@@ -174,7 +175,21 @@ export class TodoOverlayCard extends LitElement {
     }
 
     protected updated(changed: Map<string, unknown>) {
-        if (changed.has("hass") && this.hass && !this.list && !this.error) {
+        if (!changed.has("hass") || !this.hass || !this.config) {
+            return;
+        }
+
+        // hass updates on every state change globally, not just for our
+        // entity - only reload when the entity itself actually changed,
+        // so edits made elsewhere (the native card, automations, voice)
+        // show up here too instead of only reacting to our own actions.
+        const entityUpdate = this.hass.states[this.config.entity]?.last_updated;
+        const entityChanged = entityUpdate !== undefined && entityUpdate !== this.lastEntityUpdate;
+        this.lastEntityUpdate = entityUpdate;
+
+        if (!this.list && !this.error) {
+            this.load();
+        } else if (entityChanged) {
             this.load();
         }
     }
