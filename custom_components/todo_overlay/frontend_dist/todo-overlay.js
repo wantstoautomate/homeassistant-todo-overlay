@@ -988,6 +988,7 @@ var o6 = e5(class extends i5 {
 
 // src/components/todo-tree-item.ts
 var BEFORE_AFTER_ZONE = 0.3;
+var MOVE_CANCEL_THRESHOLD_PX = 6;
 var HOLD_RIPPLE_SIZE = 72;
 var holdRippleSizePx = r(`${HOLD_RIPPLE_SIZE}px`);
 var CLICK_DEBOUNCE_MS = 250;
@@ -1031,6 +1032,7 @@ var TodoTreeItem = class extends i4 {
   constructor() {
     super(...arguments);
     this.pointerDownAt = 0;
+    this.hasMoved = false;
   }
   get isPressed() {
     return this.draggedId === this.item.id;
@@ -1043,6 +1045,8 @@ var TodoTreeItem = class extends i4 {
   }
   pointerDown(e7) {
     this.pointerDownAt = Date.now();
+    this.pointerDownScreenPos = { x: e7.clientX, y: e7.clientY };
+    this.hasMoved = false;
     const rect = e7.currentTarget.getBoundingClientRect();
     this.holdRippleOrigin = { x: e7.clientX - rect.left, y: e7.clientY - rect.top };
     window.clearTimeout(this.holdTimer);
@@ -1057,6 +1061,23 @@ var TodoTreeItem = class extends i4 {
       })
     );
   }
+  // Hold and drag are mutually exclusive - once the pointer has moved
+  // meaningfully, this permanently cancels the hold for the rest of
+  // the gesture (the visual ripple disappears immediately, and
+  // pointerUp will treat it as a drag/no-op rather than a hold).
+  cancelHoldForMovement() {
+    if (this.hasMoved) {
+      return;
+    }
+    this.hasMoved = true;
+    this.clearHoldRipple();
+  }
+  updated(changed) {
+    super.updated(changed);
+    if ((changed.has("hoverId") || changed.has("draggedId")) && this.isDragging) {
+      this.cancelHoldForMovement();
+    }
+  }
   get holdReady() {
     return this.isPressed && Date.now() - this.pointerDownAt >= LONG_PRESS_MS;
   }
@@ -1065,6 +1086,13 @@ var TodoTreeItem = class extends i4 {
     this.holdRippleOrigin = void 0;
   }
   pointerEnterOrMove(e7) {
+    if (this.isPressed && this.pointerDownScreenPos) {
+      const dx = e7.clientX - this.pointerDownScreenPos.x;
+      const dy = e7.clientY - this.pointerDownScreenPos.y;
+      if (Math.hypot(dx, dy) > MOVE_CANCEL_THRESHOLD_PX) {
+        this.cancelHoldForMovement();
+      }
+    }
     const rect = e7.currentTarget.getBoundingClientRect();
     const relativeY = (e7.clientY - rect.top) / rect.height;
     let placement;
@@ -1083,10 +1111,10 @@ var TodoTreeItem = class extends i4 {
       })
     );
   }
-  emitPointerUp(pressDurationMs) {
+  emitPointerUp(pressDurationMs, moved = false) {
     this.dispatchEvent(
       new CustomEvent("tree-pointer-up", {
-        detail: { id: this.item.id, pressDurationMs },
+        detail: { id: this.item.id, pressDurationMs, moved },
         bubbles: true,
         composed: true
       })
@@ -1096,13 +1124,14 @@ var TodoTreeItem = class extends i4 {
     this.clearHoldRipple();
     const pressDurationMs = Date.now() - this.pointerDownAt;
     const wasDragging = this.hoverId !== void 0 && this.hoverId !== this.item.id;
-    if (pressDurationMs >= LONG_PRESS_MS || wasDragging) {
-      this.emitPointerUp(pressDurationMs);
+    const moved = wasDragging || this.hasMoved;
+    if (pressDurationMs >= LONG_PRESS_MS || moved) {
+      this.emitPointerUp(pressDurationMs, moved);
       return;
     }
     window.clearTimeout(this.clickTimer);
     this.clickTimer = window.setTimeout(() => {
-      this.emitPointerUp(pressDurationMs);
+      this.emitPointerUp(pressDurationMs, false);
     }, CLICK_DEBOUNCE_MS);
   }
   onDoubleClick() {
@@ -1145,8 +1174,8 @@ var TodoTreeItem = class extends i4 {
 
                     <div class="content">
                         <div class="title-line">
-                            ${this.item.quantity ? b2`<span class="quantity-chip">${this.item.quantity}</span>` : ""}
                             <span class="summary">${this.item.title}</span>
+                            ${this.item.quantity ? b2`<span class="quantity-chip">${this.item.quantity}</span>` : ""}
                         </div>
 
                         ${hasMeta ? b2`
@@ -1270,6 +1299,8 @@ TodoTreeItem.styles = i`
         }
 
         .summary {
+            flex: 1;
+            min-width: 0;
             font-family: Roboto, "Noto Sans", sans-serif;
             font-size: 14px;
             font-weight: 400;
@@ -1518,7 +1549,7 @@ var TodoOverlayCard = class extends i4 {
       } catch (err) {
         this.error = err instanceof Error ? err.message : String(err);
       }
-    } else if (this.draggedId && this.list) {
+    } else if (!e7.detail.moved && this.draggedId && this.list) {
       const item = findItem(this.list.items, this.draggedId);
       if (item) {
         const pressDurationMs = e7.detail.pressDurationMs;

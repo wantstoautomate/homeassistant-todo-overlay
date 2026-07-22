@@ -6,6 +6,12 @@ import {styleMap} from "lit/directives/style-map.js";
 import {LONG_PRESS_MS, type Placement, type TodoItem} from "../models";
 
 const BEFORE_AFTER_ZONE = 0.3;
+
+// Pointer movement beyond this many pixels cancels the hold-to-edit
+// gesture in favour of a drag - a hold only counts when the pointer
+// stays (roughly) still, matching a small allowance for natural
+// hand/touch jitter rather than a strict zero-tolerance check.
+const MOVE_CANCEL_THRESHOLD_PX = 6;
 const HOLD_RIPPLE_SIZE = 72;
 const holdRippleSizePx = unsafeCSS(`${HOLD_RIPPLE_SIZE}px`);
 
@@ -141,6 +147,8 @@ export class TodoTreeItem extends LitElement {
         }
 
         .summary {
+            flex: 1;
+            min-width: 0;
             font-family: Roboto, "Noto Sans", sans-serif;
             font-size: 14px;
             font-weight: 400;
@@ -252,6 +260,8 @@ export class TodoTreeItem extends LitElement {
     private holdRippleOrigin?: {x: number; y: number};
 
     private pointerDownAt = 0;
+    private pointerDownScreenPos?: {x: number; y: number};
+    private hasMoved = false;
     private holdTimer?: number;
     private clickTimer?: number;
 
@@ -277,6 +287,8 @@ export class TodoTreeItem extends LitElement {
 
     private pointerDown(e: PointerEvent) {
         this.pointerDownAt = Date.now();
+        this.pointerDownScreenPos = {x: e.clientX, y: e.clientY};
+        this.hasMoved = false;
 
         const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
         this.holdRippleOrigin = {x: e.clientX - rect.left, y: e.clientY - rect.top};
@@ -295,6 +307,30 @@ export class TodoTreeItem extends LitElement {
         );
     }
 
+    // Hold and drag are mutually exclusive - once the pointer has moved
+    // meaningfully, this permanently cancels the hold for the rest of
+    // the gesture (the visual ripple disappears immediately, and
+    // pointerUp will treat it as a drag/no-op rather than a hold).
+    private cancelHoldForMovement() {
+        if (this.hasMoved) {
+            return;
+        }
+
+        this.hasMoved = true;
+        this.clearHoldRipple();
+    }
+
+    protected updated(changed: Map<string, unknown>) {
+        super.updated(changed);
+
+        if (
+            (changed.has("hoverId") || changed.has("draggedId")) &&
+            this.isDragging
+        ) {
+            this.cancelHoldForMovement();
+        }
+    }
+
     private get holdReady(): boolean {
         return (
             this.isPressed &&
@@ -308,6 +344,15 @@ export class TodoTreeItem extends LitElement {
     }
 
     private pointerEnterOrMove(e: PointerEvent) {
+        if (this.isPressed && this.pointerDownScreenPos) {
+            const dx = e.clientX - this.pointerDownScreenPos.x;
+            const dy = e.clientY - this.pointerDownScreenPos.y;
+
+            if (Math.hypot(dx, dy) > MOVE_CANCEL_THRESHOLD_PX) {
+                this.cancelHoldForMovement();
+            }
+        }
+
         const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
         const relativeY = (e.clientY - rect.top) / rect.height;
 
@@ -330,10 +375,10 @@ export class TodoTreeItem extends LitElement {
         );
     }
 
-    private emitPointerUp(pressDurationMs: number) {
+    private emitPointerUp(pressDurationMs: number, moved = false) {
         this.dispatchEvent(
             new CustomEvent("tree-pointer-up", {
-                detail: {id: this.item.id, pressDurationMs},
+                detail: {id: this.item.id, pressDurationMs, moved},
                 bubbles: true,
                 composed: true,
             }),
@@ -345,9 +390,10 @@ export class TodoTreeItem extends LitElement {
 
         const pressDurationMs = Date.now() - this.pointerDownAt;
         const wasDragging = this.hoverId !== undefined && this.hoverId !== this.item.id;
+        const moved = wasDragging || this.hasMoved;
 
-        if (pressDurationMs >= LONG_PRESS_MS || wasDragging) {
-            this.emitPointerUp(pressDurationMs);
+        if (pressDurationMs >= LONG_PRESS_MS || moved) {
+            this.emitPointerUp(pressDurationMs, moved);
             return;
         }
 
@@ -355,7 +401,7 @@ export class TodoTreeItem extends LitElement {
         // window to arrive before committing to a plain toggle.
         window.clearTimeout(this.clickTimer);
         this.clickTimer = window.setTimeout(() => {
-            this.emitPointerUp(pressDurationMs);
+            this.emitPointerUp(pressDurationMs, false);
         }, CLICK_DEBOUNCE_MS);
     }
 
@@ -405,12 +451,12 @@ export class TodoTreeItem extends LitElement {
 
                     <div class="content">
                         <div class="title-line">
+                            <span class="summary">${this.item.title}</span>
                             ${
                                 this.item.quantity
                                     ? html`<span class="quantity-chip">${this.item.quantity}</span>`
                                     : ""
                             }
-                            <span class="summary">${this.item.title}</span>
                         </div>
 
                         ${

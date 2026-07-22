@@ -279,7 +279,11 @@ export class TodoOverlayCard extends LitElement {
             } catch (err) {
                 this.error = err instanceof Error ? err.message : String(err);
             }
-        } else if (this.draggedId && this.list) {
+        } else if (!e.detail.moved && this.draggedId && this.list) {
+            // Hold-to-edit and drag are mutually exclusive: if the
+            // pointer moved but didn't land on a valid drop target
+            // (e.g. dragged out and back over itself), this is neither
+            // a tap nor a hold - do nothing, rather than guessing.
             const item = findItem(this.list.items, this.draggedId);
 
             if (item) {
