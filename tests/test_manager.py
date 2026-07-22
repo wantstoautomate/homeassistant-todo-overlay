@@ -127,31 +127,27 @@ class FakeMetadataStore:
 
     async def save_snapshot(
         self,
-        entity_id: str,
         name: str,
         snapshot: list[dict],
     ) -> None:
-        self._snapshots.setdefault(entity_id, {})[name] = snapshot
+        self._snapshots[name] = snapshot
 
     async def get_snapshot(
         self,
-        entity_id: str,
         name: str,
     ) -> list[dict] | None:
-        return self._snapshots.get(entity_id, {}).get(name)
+        return self._snapshots.get(name)
 
     async def list_snapshots(
         self,
-        entity_id: str,
     ) -> list[str]:
-        return sorted(self._snapshots.get(entity_id, {}).keys())
+        return sorted(self._snapshots.keys())
 
     async def delete_snapshot(
         self,
-        entity_id: str,
         name: str,
     ) -> None:
-        self._snapshots.get(entity_id, {}).pop(name, None)
+        self._snapshots.pop(name, None)
 
 
 @pytest.mark.asyncio
@@ -574,7 +570,7 @@ async def test_manager_save_list_without_persist_states_omits_completion():
 
     await manager.save_list(entity_id="todo.shopping", name="template")
 
-    snapshot = metadata_store._snapshots["todo.shopping"]["template"]
+    snapshot = metadata_store._snapshots["template"]
 
     assert snapshot[0]["title"] == "Shopping"
     assert snapshot[0]["completed"] is False
@@ -600,7 +596,7 @@ async def test_manager_save_list_with_persist_states_captures_completion():
 
     await manager.save_list(entity_id="todo.shopping", name="template", persist_states=True)
 
-    snapshot = metadata_store._snapshots["todo.shopping"]["template"]
+    snapshot = metadata_store._snapshots["template"]
 
     children_by_title = {c["title"]: c["completed"] for c in snapshot[0]["children"]}
     assert children_by_title == {"Milk": True, "Bread": False}
@@ -613,7 +609,7 @@ async def test_manager_load_list_full_merge_recreates_snapshot_as_new_items():
     metadata_store = FakeMetadataStore({})
     manager = TodoManager(adapter=adapter, metadata_store=metadata_store)
 
-    await metadata_store.save_snapshot("todo.shopping", "template", [
+    await metadata_store.save_snapshot("template", [
         {
             "title": "Shopping",
             "description": None,
@@ -664,7 +660,7 @@ async def test_manager_load_list_merge_skips_existing_and_adds_missing_children(
 
     manager = TodoManager(adapter=adapter, metadata_store=metadata_store)
 
-    await metadata_store.save_snapshot("todo.shopping", "template", [
+    await metadata_store.save_snapshot("template", [
         {
             "title": "Shopping",
             "description": None,
@@ -718,7 +714,7 @@ async def test_manager_load_list_replace_clears_existing_items_first():
 
     manager = TodoManager(adapter=adapter, metadata_store=metadata_store)
 
-    await metadata_store.save_snapshot("todo.shopping", "template", [
+    await metadata_store.save_snapshot("template", [
         {
             "title": "New item",
             "description": None,
@@ -735,6 +731,25 @@ async def test_manager_load_list_replace_clears_existing_items_first():
 
     todo_list = await manager.get_list("todo.shopping")
     assert [item.title for item in todo_list.items] == ["New item"]
+
+
+@pytest.mark.asyncio
+async def test_manager_save_and_load_list_works_across_different_entities():
+
+    # Saved snapshot names are a single global namespace, not scoped to
+    # whichever todo entity they were saved from - so a list saved from
+    # one entity can be loaded onto a completely different one.
+    adapter = FakeAdapter(items=[TodoItem(id="1", title="Bread", completed=False)])
+    metadata_store = FakeMetadataStore({"1": ItemPosition(parent_id=None, order=0)})
+    manager = TodoManager(adapter=adapter, metadata_store=metadata_store)
+
+    await manager.save_list(entity_id="todo.shopping", name="groceries_template")
+
+    await manager.load_list(
+        entity_id="todo.other_list", name="groceries_template", mode="full_merge",
+    )
+
+    assert ("todo.other_list", "Bread") in adapter.add_item_calls
 
 
 @pytest.mark.asyncio
@@ -755,11 +770,11 @@ async def test_manager_list_saved_and_delete_saved():
     await manager.save_list(entity_id="todo.shopping", name="a")
     await manager.save_list(entity_id="todo.shopping", name="b")
 
-    assert await manager.list_saved("todo.shopping") == ["a", "b"]
+    assert await manager.list_saved() == ["a", "b"]
 
-    await manager.delete_saved("todo.shopping", "a")
+    await manager.delete_saved("a")
 
-    assert await manager.list_saved("todo.shopping") == ["b"]
+    assert await manager.list_saved() == ["b"]
 
 
 @pytest.mark.asyncio
@@ -848,7 +863,7 @@ async def test_manager_load_list_merge_combines_matching_quantities():
 
     await manager.set_quantity("todo.shopping", "1", "150g")
 
-    await metadata_store.save_snapshot("todo.shopping", "template", [
+    await metadata_store.save_snapshot("template", [
         {
             "title": "Salami",
             "description": None,
@@ -879,7 +894,7 @@ async def test_manager_load_list_merge_leaves_mismatched_units_untouched():
 
     await manager.set_quantity("todo.shopping", "1", "150g")
 
-    await metadata_store.save_snapshot("todo.shopping", "template", [
+    await metadata_store.save_snapshot("template", [
         {
             "title": "Salami",
             "description": None,

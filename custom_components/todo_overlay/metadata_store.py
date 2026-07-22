@@ -99,52 +99,53 @@ class MetadataStore:
 
     async def save_snapshot(
         self,
-        entity_id: str,
         name: str,
         snapshot: list[dict],
     ) -> None:
-        """Save a named snapshot of an entity's items/hierarchy."""
+        """Save a named snapshot of a list's items/hierarchy.
+
+        Snapshots are entity-agnostic: a name is a single global slot,
+        not scoped to whichever todo entity it was saved from - so it
+        can be loaded onto any entity, including a different one than
+        it came from.
+        """
 
         await self._load()
 
         assert self._cache is not None
 
-        snapshots = self._cache.setdefault(SNAPSHOTS_KEY, {}).setdefault(entity_id, {})
-        snapshots[name] = snapshot
+        self._cache.setdefault(SNAPSHOTS_KEY, {})[name] = snapshot
 
         await self._store.async_save(self._cache)
 
     async def get_snapshot(
         self,
-        entity_id: str,
         name: str,
     ) -> list[dict] | None:
         await self._load()
 
         assert self._cache is not None
 
-        return self._cache.get(SNAPSHOTS_KEY, {}).get(entity_id, {}).get(name)
+        return self._cache.get(SNAPSHOTS_KEY, {}).get(name)
 
     async def list_snapshots(
         self,
-        entity_id: str,
     ) -> list[str]:
         await self._load()
 
         assert self._cache is not None
 
-        return sorted(self._cache.get(SNAPSHOTS_KEY, {}).get(entity_id, {}).keys())
+        return sorted(self._cache.get(SNAPSHOTS_KEY, {}).keys())
 
     async def delete_snapshot(
         self,
-        entity_id: str,
         name: str,
     ) -> None:
         await self._load()
 
         assert self._cache is not None
 
-        self._cache.get(SNAPSHOTS_KEY, {}).get(entity_id, {}).pop(name, None)
+        self._cache.get(SNAPSHOTS_KEY, {}).pop(name, None)
 
         await self._store.async_save(self._cache)
 

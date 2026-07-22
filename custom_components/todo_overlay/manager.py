@@ -462,6 +462,10 @@ class TodoManager:
         Completion status is only captured when persist_states is set -
         otherwise a snapshot is a reusable template that always starts
         fresh (everything incomplete) when loaded.
+
+        Snapshot names are entity-agnostic (a single global namespace),
+        so a list saved from this entity can later be loaded onto any
+        todo entity, not just this one.
         """
 
         todo_list = await self.get_list(entity_id)
@@ -471,7 +475,7 @@ class TodoManager:
             for item in todo_list.items
         ]
 
-        await self._metadata_store.save_snapshot(entity_id, name, snapshot)
+        await self._metadata_store.save_snapshot(name, snapshot)
 
     async def load_list(
         self,
@@ -492,10 +496,10 @@ class TodoManager:
           regardless of what's already on the list, duplicates and all.
         """
 
-        snapshot = await self._metadata_store.get_snapshot(entity_id, name)
+        snapshot = await self._metadata_store.get_snapshot(name)
 
         if snapshot is None:
-            raise ValueError(f"No saved list named {name!r} for {entity_id}")
+            raise ValueError(f"No saved list named {name!r}")
 
         if mode == "replace":
             for item in await self._adapter.get_items(entity_id):
@@ -518,20 +522,16 @@ class TodoManager:
             existing_by_path=existing_by_path,
         )
 
-    async def list_saved(
-        self,
-        entity_id: str,
-    ) -> list[str]:
-        """Names of every snapshot saved for this entity."""
+    async def list_saved(self) -> list[str]:
+        """Names of every saved snapshot, across all entities."""
 
-        return await self._metadata_store.list_snapshots(entity_id)
+        return await self._metadata_store.list_snapshots()
 
     async def delete_saved(
         self,
-        entity_id: str,
         name: str,
     ) -> None:
-        await self._metadata_store.delete_snapshot(entity_id, name)
+        await self._metadata_store.delete_snapshot(name)
 
     @staticmethod
     def _snapshot_node(item: TodoItem, persist_states: bool) -> dict:

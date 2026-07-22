@@ -34,7 +34,6 @@ LOAD_LIST_SCHEMA = vol.Schema(
 
 DELETE_SAVED_LIST_SCHEMA = vol.Schema(
     {
-        vol.Required("entity_id"): cv.entity_id,
         vol.Required(ATTR_NAME): str,
     }
 )
@@ -66,7 +65,6 @@ def async_register_services(hass: HomeAssistant) -> None:
         manager = hass.data[DOMAIN][DATA_MANAGER]
 
         await manager.delete_saved(
-            entity_id=call.data["entity_id"],
             name=call.data[ATTR_NAME],
         )
 

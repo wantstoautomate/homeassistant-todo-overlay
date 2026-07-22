@@ -1,6 +1,10 @@
 import datetime
 
-from homeassistant.components.todo import DATA_COMPONENT, TodoItemStatus
+from homeassistant.components.todo import (
+    DATA_COMPONENT,
+    TodoItemStatus,
+    TodoListEntityFeature,
+)
 
 from .models import TodoItem
 
@@ -92,6 +96,14 @@ class HomeAssistantTodoProvider:
             blocking=True,
         )
 
+    def _supported_features(self, entity_id: str) -> int:
+        state = self._hass.states.get(entity_id)
+
+        if state is None:
+            return 0
+
+        return state.attributes.get("supported_features", 0) or 0
+
     async def add_item(
         self,
         entity_id: str,
@@ -104,18 +116,26 @@ class HomeAssistantTodoProvider:
 
         todo.add_item doesn't return the created item itself, so the
         new uid is found by diffing the item list before and after.
+
+        Fields the target entity doesn't support (e.g. loading a
+        snapshot with due dates onto a list that doesn't support them -
+        saved snapshots are entity-agnostic, so this is a real case,
+        not a hypothetical one) are silently dropped rather than
+        letting the service call fail outright over one field.
         """
 
         before_ids = {item.id for item in await self.get_items(entity_id)}
 
+        supported = self._supported_features(entity_id)
+
         service_data: dict = {"entity_id": entity_id, "item": title}
 
-        if description:
+        if description and supported & TodoListEntityFeature.SET_DESCRIPTION_ON_ITEM:
             service_data["description"] = description
 
-        if due_datetime:
+        if due_datetime and supported & TodoListEntityFeature.SET_DUE_DATETIME_ON_ITEM:
             service_data["due_datetime"] = due_datetime
-        elif due_date:
+        elif due_date and supported & TodoListEntityFeature.SET_DUE_DATE_ON_ITEM:
             service_data["due_date"] = due_date
 
         await self._hass.services.async_call(

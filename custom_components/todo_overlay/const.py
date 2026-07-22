@@ -10,6 +10,7 @@ WS_TYPE_CLEAR_COMPLETED = "todo_overlay/clear_completed"
 WS_TYPE_SAVE_LIST = "todo_overlay/save_list"
 WS_TYPE_LOAD_LIST = "todo_overlay/load_list"
 WS_TYPE_LIST_SAVED = "todo_overlay/list_saved"
+WS_TYPE_DELETE_SAVED_LIST = "todo_overlay/delete_saved_list"
 WS_TYPE_CREATE_ITEM = "todo_overlay/create_item"
 WS_TYPE_SET_QUANTITY = "todo_overlay/set_quantity"
 

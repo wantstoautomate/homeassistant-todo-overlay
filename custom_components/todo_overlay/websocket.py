@@ -9,6 +9,7 @@ from .const import (
     DOMAIN,
     WS_TYPE_CLEAR_COMPLETED,
     WS_TYPE_CREATE_ITEM,
+    WS_TYPE_DELETE_SAVED_LIST,
     WS_TYPE_GET_LIST,
     WS_TYPE_LIST_SAVED,
     WS_TYPE_LOAD_LIST,
@@ -220,7 +221,6 @@ async def websocket_load_list(
 @websocket_api.websocket_command(
     {
         vol.Required("type"): WS_TYPE_LIST_SAVED,
-        vol.Required("entity_id"): cv.entity_id,
     }
 )
 @websocket_api.async_response
@@ -229,15 +229,34 @@ async def websocket_list_saved(
     connection: websocket_api.ActiveConnection,
     msg,
 ) -> None:
-    """Return the names of every snapshot saved for this list."""
+    """Return the names of every saved snapshot, across all entities."""
 
     manager = hass.data[DOMAIN][DATA_MANAGER]
 
-    names = await manager.list_saved(
-        entity_id=msg["entity_id"],
-    )
+    names = await manager.list_saved()
 
     connection.send_result(msg["id"], {"names": names})
+
+
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): WS_TYPE_DELETE_SAVED_LIST,
+        vol.Required("name"): str,
+    }
+)
+@websocket_api.async_response
+async def websocket_delete_saved_list(
+    hass: HomeAssistant,
+    connection: websocket_api.ActiveConnection,
+    msg,
+) -> None:
+    """Delete a saved snapshot by name."""
+
+    manager = hass.data[DOMAIN][DATA_MANAGER]
+
+    await manager.delete_saved(name=msg["name"])
+
+    connection.send_result(msg["id"])
 
 
 @websocket_api.websocket_command(
@@ -310,6 +329,7 @@ def async_register_websocket(hass: HomeAssistant) -> None:
         websocket_save_list,
         websocket_load_list,
         websocket_list_saved,
+        websocket_delete_saved_list,
         websocket_create_item,
         websocket_set_quantity,
     ):

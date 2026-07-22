@@ -40,11 +40,6 @@ load_list:
 
 delete_saved_list:
   fields:
-    entity_id:
-      required: true
-      selector:
-        entity:
-          domain: todo
     name:
       required: true
       example: weekly_groceries
