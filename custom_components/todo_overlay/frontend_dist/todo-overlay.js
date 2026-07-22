@@ -641,7 +641,8 @@ async function createItem(hass, entityId, fields) {
     description: fields.description,
     due_date: fields.dueDate,
     due_datetime: fields.dueDatetime,
-    quantity: fields.quantity
+    quantity: fields.quantity,
+    tags: fields.tags
   });
   return result.id;
 }
@@ -651,6 +652,14 @@ async function setQuantity(hass, entityId, itemId, quantity) {
     entity_id: entityId,
     item_id: itemId,
     quantity
+  });
+}
+async function setTags(hass, entityId, itemId, tags) {
+  await hass.connection.sendMessagePromise({
+    type: "todo_overlay/set_tags",
+    entity_id: entityId,
+    item_id: itemId,
+    tags
   });
 }
 async function clearCompleted(hass, entityId) {
@@ -708,6 +717,7 @@ function supportsFeature(supportedFeatures, feature) {
 var EMPTY_FORM_VALUE = {
   title: "",
   quantity: "",
+  tags: "",
   description: "",
   dueDate: "",
   dueTime: ""
@@ -786,6 +796,17 @@ var TodoItemDialog = class extends i4 {
                                 ></textarea>
                             </div>
                         ` : ""}
+
+                <div class="field">
+                    <label for="todo-item-tags">Tags</label>
+                    <input
+                        id="todo-item-tags"
+                        type="text"
+                        placeholder="e.g. urgent, weekend"
+                        .value=${this.value.tags}
+                        @input=${(e7) => this.updateField("tags", e7.target.value)}
+                    />
+                </div>
 
                 ${showDue ? b2`
                             <div class="due-row">
@@ -1428,7 +1449,7 @@ var TodoTreeItem = class extends i4 {
       completed: this.item.completed
     };
     const due = formatDue(this.item);
-    const hasMeta = due || this.item.description;
+    const hasMeta = due || this.item.description || this.item.tags.length > 0;
     return b2`
             <li>
 
@@ -1456,6 +1477,7 @@ var TodoTreeItem = class extends i4 {
                                                         ${CLOCK_ICON}${due.label}
                                                     </span>
                                                 ` : ""}
+                                        ${this.item.tags.map((tag) => b2`<span class="tag-chip">${tag}</span>`)}
                                         ${this.item.description ? b2`<span class="description-text">${this.item.description}</span>` : ""}
                                     </div>
                                 ` : ""}
@@ -1640,6 +1662,14 @@ TodoTreeItem.styles = i`
             width: 14px;
             height: 14px;
             fill: currentColor;
+        }
+
+        .tag-chip {
+            flex-shrink: 0;
+            padding: 0 6px;
+            border-radius: 8px;
+            border: 1px solid var(--divider-color);
+            white-space: nowrap;
         }
 
         .description-text {
@@ -1951,6 +1981,7 @@ var TodoOverlayCard = class extends i4 {
       return {
         title: this.dialogItem.title,
         quantity: this.dialogItem.quantity ?? "",
+        tags: this.dialogItem.tags.join(", "),
         description: this.dialogItem.description ?? "",
         dueDate: due.date,
         dueTime: due.time
@@ -1970,6 +2001,7 @@ var TodoOverlayCard = class extends i4 {
       dueDate = value.dueDate;
     }
     const quantity = value.quantity.trim() || void 0;
+    const tags = value.tags.split(",").map((tag) => tag.trim()).filter((tag) => tag.length > 0);
     try {
       if (this.dialogMode === "edit" && this.dialogItem) {
         const serviceData = {
@@ -1987,13 +2019,15 @@ var TodoOverlayCard = class extends i4 {
         }
         await this.hass.callService("todo", "update_item", serviceData);
         await setQuantity(this.hass, this.config.entity, this.dialogItem.id, quantity);
+        await setTags(this.hass, this.config.entity, this.dialogItem.id, tags);
       } else {
         await createItem(this.hass, this.config.entity, {
           title: value.title,
           description,
           dueDate,
           dueDatetime,
-          quantity
+          quantity,
+          tags
         });
       }
       await this.load();

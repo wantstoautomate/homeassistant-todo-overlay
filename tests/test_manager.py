@@ -77,6 +77,7 @@ class FakeMetadataStore:
         self.set_positions_calls: list[tuple[str, dict[str, ItemPosition]]] = []
         self._snapshots: dict[str, dict] = {}
         self._quantities: dict[str, str] = {}
+        self._tags: dict[str, list[str]] = {}
 
     async def get_relationships(self, entity_id: str) -> dict[str, ItemPosition]:
         return dict(self._positions)
@@ -102,6 +103,50 @@ class FakeMetadataStore:
     ) -> None:
         for item_id in item_ids:
             self._quantities.pop(item_id, None)
+
+    async def get_tags(self, entity_id: str) -> dict[str, list[str]]:
+        return {k: list(v) for k, v in self._tags.items()}
+
+    async def set_tags(
+        self,
+        entity_id: str,
+        item_id: str,
+        tags: list[str],
+    ) -> None:
+        if tags:
+            self._tags[item_id] = list(tags)
+        else:
+            self._tags.pop(item_id, None)
+
+    async def add_tag(
+        self,
+        entity_id: str,
+        item_id: str,
+        tag: str,
+    ) -> None:
+        tags = self._tags.setdefault(item_id, [])
+        if tag not in tags:
+            tags.append(tag)
+
+    async def remove_tag(
+        self,
+        entity_id: str,
+        item_id: str,
+        tag: str,
+    ) -> None:
+        tags = self._tags.get(item_id)
+        if tags and tag in tags:
+            tags.remove(tag)
+            if not tags:
+                self._tags.pop(item_id, None)
+
+    async def remove_tags_for_items(
+        self,
+        entity_id: str,
+        item_ids: list[str],
+    ) -> None:
+        for item_id in item_ids:
+            self._tags.pop(item_id, None)
 
     async def set_positions(
         self,
@@ -193,6 +238,7 @@ async def test_manager_returns_serialisable_list():
                 "due_date": None,
                 "due_datetime": None,
                 "quantity": None,
+                "tags": [],
                 "children": [
                     {
                         "id": "2",
@@ -202,6 +248,7 @@ async def test_manager_returns_serialisable_list():
                         "due_date": None,
                         "due_datetime": None,
                         "quantity": None,
+                        "tags": [],
                         "children": [],
                     }
                 ],
@@ -1012,3 +1059,121 @@ async def test_manager_get_list_merge_reparents_duplicate_children():
     assert len(todo_list.items) == 1
     assert todo_list.items[0].id == "1"
     assert [child.id for child in todo_list.items[0].children] == ["3"]
+
+
+@pytest.mark.asyncio
+async def test_manager_add_tag_and_remove_tag_by_id():
+
+    adapter = FakeAdapter(items=[TodoItem(id="1", title="Salami", completed=False)])
+    metadata_store = FakeMetadataStore({"1": ItemPosition(parent_id=None, order=0)})
+    manager = TodoManager(adapter=adapter, metadata_store=metadata_store)
+
+    await manager.add_tag(entity_id="todo.shopping", item="1", tag="urgent")
+    await manager.add_tag(entity_id="todo.shopping", item="1", tag="deli")
+
+    todo_list = await manager.get_list("todo.shopping")
+    assert set(todo_list.items[0].tags) == {"urgent", "deli"}
+
+    await manager.remove_tag(entity_id="todo.shopping", item="1", tag="urgent")
+
+    todo_list_after = await manager.get_list("todo.shopping")
+    assert todo_list_after.items[0].tags == ["deli"]
+
+
+@pytest.mark.asyncio
+async def test_manager_add_tag_resolves_by_title():
+
+    adapter = FakeAdapter(items=[TodoItem(id="1", title="Salami", completed=False)])
+    metadata_store = FakeMetadataStore({"1": ItemPosition(parent_id=None, order=0)})
+    manager = TodoManager(adapter=adapter, metadata_store=metadata_store)
+
+    # Automations identify items by title, matching the same
+    # uid-or-summary convention todo.update_item already uses.
+    await manager.add_tag(entity_id="todo.shopping", item="Salami", tag="urgent")
+
+    todo_list = await manager.get_list("todo.shopping")
+    assert todo_list.items[0].tags == ["urgent"]
+
+
+@pytest.mark.asyncio
+async def test_manager_add_tag_raises_for_unknown_item():
+
+    manager = TodoManager(
+        adapter=FakeAdapter(items=[]),
+        metadata_store=FakeMetadataStore(),
+    )
+
+    with pytest.raises(ValueError):
+        await manager.add_tag(entity_id="todo.shopping", item="nope", tag="urgent")
+
+
+@pytest.mark.asyncio
+async def test_manager_set_tags_replaces_full_list():
+
+    adapter = FakeAdapter(items=[TodoItem(id="1", title="Salami", completed=False)])
+    metadata_store = FakeMetadataStore({"1": ItemPosition(parent_id=None, order=0)})
+    manager = TodoManager(adapter=adapter, metadata_store=metadata_store)
+
+    await manager.add_tag(entity_id="todo.shopping", item="1", tag="urgent")
+    await manager.set_tags(entity_id="todo.shopping", item_id="1", tags=["deli", "weekend"])
+
+    todo_list = await manager.get_list("todo.shopping")
+    assert todo_list.items[0].tags == ["deli", "weekend"]
+
+
+@pytest.mark.asyncio
+async def test_manager_create_item_with_initial_tags():
+
+    adapter = FakeAdapter(items=[])
+    metadata_store = FakeMetadataStore()
+    manager = TodoManager(adapter=adapter, metadata_store=metadata_store)
+
+    item_id = await manager.create_item(
+        entity_id="todo.shopping", title="Salami", tags=["deli", "urgent"],
+    )
+
+    todo_list = await manager.get_list("todo.shopping")
+    assert todo_list.items[0].id == item_id
+    assert todo_list.items[0].tags == ["deli", "urgent"]
+
+
+@pytest.mark.asyncio
+async def test_manager_get_list_merge_unions_tags_of_duplicates():
+
+    adapter = FakeAdapter(items=[
+        TodoItem(id="1", title="Salami", completed=False),
+        TodoItem(id="2", title="Salami", completed=False),
+    ])
+
+    metadata_store = FakeMetadataStore({
+        "1": ItemPosition(parent_id=None, order=0),
+        "2": ItemPosition(parent_id=None, order=1),
+    })
+    metadata_store._quantities = {"1": "150g", "2": "200g"}
+    metadata_store._tags = {"1": ["deli"], "2": ["urgent", "deli"]}
+
+    manager = TodoManager(adapter=adapter, metadata_store=metadata_store)
+
+    todo_list = await manager.get_list("todo.shopping")
+
+    assert len(todo_list.items) == 1
+    assert set(todo_list.items[0].tags) == {"deli", "urgent"}
+
+
+@pytest.mark.asyncio
+async def test_manager_save_and_load_list_round_trips_tags():
+
+    adapter = FakeAdapter(items=[TodoItem(id="1", title="Salami", completed=False)])
+    metadata_store = FakeMetadataStore({"1": ItemPosition(parent_id=None, order=0)})
+    manager = TodoManager(adapter=adapter, metadata_store=metadata_store)
+
+    await manager.add_tag(entity_id="todo.shopping", item="1", tag="deli")
+    await manager.save_list(entity_id="todo.shopping", name="template")
+
+    await manager.load_list(entity_id="todo.other_list", name="template", mode="full_merge")
+
+    assert ("todo.other_list", "Salami") in adapter.add_item_calls
+
+    todo_list = await manager.get_list("todo.other_list")
+    matching = [item for item in todo_list.items if item.title == "Salami"]
+    assert any(item.tags == ["deli"] for item in matching)

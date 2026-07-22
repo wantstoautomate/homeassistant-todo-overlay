@@ -4,6 +4,7 @@ import {customElement, property} from "lit/decorators.js";
 export interface TodoItemFormValue {
     title: string;
     quantity: string;
+    tags: string;
     description: string;
     dueDate: string;
     dueTime: string;
@@ -18,6 +19,7 @@ export interface TodoItemDialogFieldSupport {
 export const EMPTY_FORM_VALUE: TodoItemFormValue = {
     title: "",
     quantity: "",
+    tags: "",
     description: "",
     dueDate: "",
     dueTime: "",
@@ -215,6 +217,18 @@ export class TodoItemDialog extends LitElement {
                         `
                         : ""
                 }
+
+                <div class="field">
+                    <label for="todo-item-tags">Tags</label>
+                    <input
+                        id="todo-item-tags"
+                        type="text"
+                        placeholder="e.g. urgent, weekend"
+                        .value=${this.value.tags}
+                        @input=${(e: InputEvent) =>
+                            this.updateField("tags", (e.target as HTMLInputElement).value)}
+                    />
+                </div>
 
                 ${
                     showDue

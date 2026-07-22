@@ -74,6 +74,7 @@ export interface CreateItemFields {
     dueDate?: string;
     dueDatetime?: string;
     quantity?: string;
+    tags?: string[];
 }
 
 export async function createItem(
@@ -90,6 +91,7 @@ export async function createItem(
         due_date: fields.dueDate,
         due_datetime: fields.dueDatetime,
         quantity: fields.quantity,
+        tags: fields.tags,
     });
 
     return result.id;
@@ -108,6 +110,22 @@ export async function setQuantity(
         entity_id: entityId,
         item_id: itemId,
         quantity,
+    });
+
+}
+
+export async function setTags(
+    hass: HassLike,
+    entityId: string,
+    itemId: string,
+    tags: string[],
+): Promise<void> {
+
+    await hass.connection.sendMessagePromise<void>({
+        type: "todo_overlay/set_tags",
+        entity_id: entityId,
+        item_id: itemId,
+        tags,
     });
 
 }

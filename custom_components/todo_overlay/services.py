@@ -4,13 +4,17 @@ from homeassistant.core import HomeAssistant, ServiceCall
 from homeassistant.helpers import config_validation as cv
 
 from .const import (
+    ATTR_ITEM,
     ATTR_MODE,
     ATTR_NAME,
     ATTR_PERSIST_STATES,
+    ATTR_TAG,
     DATA_MANAGER,
     DOMAIN,
+    SERVICE_ADD_TAG,
     SERVICE_DELETE_SAVED_LIST,
     SERVICE_LOAD_LIST,
+    SERVICE_REMOVE_TAG,
     SERVICE_SAVE_LIST,
 )
 
@@ -35,6 +39,14 @@ LOAD_LIST_SCHEMA = vol.Schema(
 DELETE_SAVED_LIST_SCHEMA = vol.Schema(
     {
         vol.Required(ATTR_NAME): str,
+    }
+)
+
+ADD_OR_REMOVE_TAG_SCHEMA = vol.Schema(
+    {
+        vol.Required("entity_id"): cv.entity_id,
+        vol.Required(ATTR_ITEM): str,
+        vol.Required(ATTR_TAG): str,
     }
 )
 
@@ -68,6 +80,24 @@ def async_register_services(hass: HomeAssistant) -> None:
             name=call.data[ATTR_NAME],
         )
 
+    async def handle_add_tag(call: ServiceCall) -> None:
+        manager = hass.data[DOMAIN][DATA_MANAGER]
+
+        await manager.add_tag(
+            entity_id=call.data["entity_id"],
+            item=call.data[ATTR_ITEM],
+            tag=call.data[ATTR_TAG],
+        )
+
+    async def handle_remove_tag(call: ServiceCall) -> None:
+        manager = hass.data[DOMAIN][DATA_MANAGER]
+
+        await manager.remove_tag(
+            entity_id=call.data["entity_id"],
+            item=call.data[ATTR_ITEM],
+            tag=call.data[ATTR_TAG],
+        )
+
     hass.services.async_register(
         DOMAIN, SERVICE_SAVE_LIST, handle_save_list, schema=SAVE_LIST_SCHEMA
     )
@@ -79,4 +109,10 @@ def async_register_services(hass: HomeAssistant) -> None:
         SERVICE_DELETE_SAVED_LIST,
         handle_delete_saved_list,
         schema=DELETE_SAVED_LIST_SCHEMA,
+    )
+    hass.services.async_register(
+        DOMAIN, SERVICE_ADD_TAG, handle_add_tag, schema=ADD_OR_REMOVE_TAG_SCHEMA
+    )
+    hass.services.async_register(
+        DOMAIN, SERVICE_REMOVE_TAG, handle_remove_tag, schema=ADD_OR_REMOVE_TAG_SCHEMA
     )

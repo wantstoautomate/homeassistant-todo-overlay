@@ -45,3 +45,41 @@ delete_saved_list:
       example: weekly_groceries
       selector:
         text:
+
+add_tag:
+  fields:
+    entity_id:
+      required: true
+      selector:
+        entity:
+          domain: todo
+    item:
+      required: true
+      example: Salami
+      description: The item's id or title (same convention as todo.update_item).
+      selector:
+        text:
+    tag:
+      required: true
+      example: urgent
+      selector:
+        text:
+
+remove_tag:
+  fields:
+    entity_id:
+      required: true
+      selector:
+        entity:
+          domain: todo
+    item:
+      required: true
+      example: Salami
+      description: The item's id or title (same convention as todo.update_item).
+      selector:
+        text:
+    tag:
+      required: true
+      example: urgent
+      selector:
+        text:

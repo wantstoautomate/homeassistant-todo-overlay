@@ -14,6 +14,7 @@ import {
     saveList,
     setCompleted,
     setQuantity,
+    setTags,
 } from "./api";
 import type {HassLike} from "./hass";
 import {
@@ -479,6 +480,7 @@ export class TodoOverlayCard extends LitElement {
             return {
                 title: this.dialogItem.title,
                 quantity: this.dialogItem.quantity ?? "",
+                tags: this.dialogItem.tags.join(", "),
                 description: this.dialogItem.description ?? "",
                 dueDate: due.date,
                 dueTime: due.time,
@@ -504,6 +506,10 @@ export class TodoOverlayCard extends LitElement {
         }
 
         const quantity = value.quantity.trim() || undefined;
+        const tags = value.tags
+            .split(",")
+            .map(tag => tag.trim())
+            .filter(tag => tag.length > 0);
 
         try {
             if (this.dialogMode === "edit" && this.dialogItem) {
@@ -525,6 +531,7 @@ export class TodoOverlayCard extends LitElement {
 
                 await this.hass.callService("todo", "update_item", serviceData);
                 await setQuantity(this.hass, this.config.entity, this.dialogItem.id, quantity);
+                await setTags(this.hass, this.config.entity, this.dialogItem.id, tags);
             } else {
                 await createItem(this.hass, this.config.entity, {
                     title: value.title,
@@ -532,6 +539,7 @@ export class TodoOverlayCard extends LitElement {
                     dueDate,
                     dueDatetime,
                     quantity,
+                    tags,
                 });
             }
 

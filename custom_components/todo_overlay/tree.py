@@ -5,6 +5,7 @@ def build_tree(
     items: list[TodoItem],
     positions: dict[str, ItemPosition],
     quantities: dict[str, str] | None = None,
+    tags: dict[str, list[str]] | None = None,
 ) -> list[TodoItem]:
     """Build a hierarchy from a flat list of TodoItems.
 
@@ -29,6 +30,7 @@ def build_tree(
     for item in items:
         item.children.clear()
         item.quantity = (quantities or {}).get(item.id)
+        item.tags = (tags or {}).get(item.id, [])
 
     for item in items:
         position = positions.get(item.id)

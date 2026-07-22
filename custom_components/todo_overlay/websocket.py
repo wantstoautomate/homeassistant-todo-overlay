@@ -7,6 +7,7 @@ from homeassistant.helpers import config_validation as cv
 from .const import (
     DATA_MANAGER,
     DOMAIN,
+    WS_TYPE_ADD_TAG,
     WS_TYPE_CLEAR_COMPLETED,
     WS_TYPE_CREATE_ITEM,
     WS_TYPE_DELETE_SAVED_LIST,
@@ -14,10 +15,12 @@ from .const import (
     WS_TYPE_LIST_SAVED,
     WS_TYPE_LOAD_LIST,
     WS_TYPE_MOVE_ITEM,
+    WS_TYPE_REMOVE_TAG,
     WS_TYPE_RESTORE_COMPLETED,
     WS_TYPE_SAVE_LIST,
     WS_TYPE_SET_COMPLETED,
     WS_TYPE_SET_QUANTITY,
+    WS_TYPE_SET_TAGS,
 )
 
 
@@ -268,6 +271,7 @@ async def websocket_delete_saved_list(
         vol.Optional("due_date"): str,
         vol.Optional("due_datetime"): str,
         vol.Optional("quantity"): str,
+        vol.Optional("tags"): [str],
     }
 )
 @websocket_api.async_response
@@ -287,6 +291,7 @@ async def websocket_create_item(
         due_date=msg.get("due_date"),
         due_datetime=msg.get("due_datetime"),
         quantity=msg.get("quantity"),
+        tags=msg.get("tags"),
     )
 
     connection.send_result(msg["id"], {"id": item_id})
@@ -319,6 +324,95 @@ async def websocket_set_quantity(
     connection.send_result(msg["id"])
 
 
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): WS_TYPE_SET_TAGS,
+        vol.Required("entity_id"): cv.entity_id,
+        vol.Required("item_id"): str,
+        vol.Required("tags"): [str],
+    }
+)
+@websocket_api.async_response
+async def websocket_set_tags(
+    hass: HomeAssistant,
+    connection: websocket_api.ActiveConnection,
+    msg,
+) -> None:
+    """Replace an item's full tag list."""
+
+    manager = hass.data[DOMAIN][DATA_MANAGER]
+
+    await manager.set_tags(
+        entity_id=msg["entity_id"],
+        item_id=msg["item_id"],
+        tags=msg["tags"],
+    )
+
+    connection.send_result(msg["id"])
+
+
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): WS_TYPE_ADD_TAG,
+        vol.Required("entity_id"): cv.entity_id,
+        vol.Required("item"): str,
+        vol.Required("tag"): str,
+    }
+)
+@websocket_api.async_response
+async def websocket_add_tag(
+    hass: HomeAssistant,
+    connection: websocket_api.ActiveConnection,
+    msg,
+) -> None:
+    """Add a tag to an item, identified by uid or title."""
+
+    manager = hass.data[DOMAIN][DATA_MANAGER]
+
+    try:
+        await manager.add_tag(
+            entity_id=msg["entity_id"],
+            item=msg["item"],
+            tag=msg["tag"],
+        )
+    except ValueError as err:
+        connection.send_error(msg["id"], "not_found", str(err))
+        return
+
+    connection.send_result(msg["id"])
+
+
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): WS_TYPE_REMOVE_TAG,
+        vol.Required("entity_id"): cv.entity_id,
+        vol.Required("item"): str,
+        vol.Required("tag"): str,
+    }
+)
+@websocket_api.async_response
+async def websocket_remove_tag(
+    hass: HomeAssistant,
+    connection: websocket_api.ActiveConnection,
+    msg,
+) -> None:
+    """Remove a tag from an item, identified by uid or title."""
+
+    manager = hass.data[DOMAIN][DATA_MANAGER]
+
+    try:
+        await manager.remove_tag(
+            entity_id=msg["entity_id"],
+            item=msg["item"],
+            tag=msg["tag"],
+        )
+    except ValueError as err:
+        connection.send_error(msg["id"], "not_found", str(err))
+        return
+
+    connection.send_result(msg["id"])
+
+
 def async_register_websocket(hass: HomeAssistant) -> None:
     for handler in (
         websocket_get_list,
@@ -332,5 +426,8 @@ def async_register_websocket(hass: HomeAssistant) -> None:
         websocket_delete_saved_list,
         websocket_create_item,
         websocket_set_quantity,
+        websocket_set_tags,
+        websocket_add_tag,
+        websocket_remove_tag,
     ):
         websocket_api.async_register_command(hass, handler)

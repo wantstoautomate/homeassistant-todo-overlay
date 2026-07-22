@@ -53,14 +53,15 @@ class TodoManager:
         )
 
         quantities = await self._metadata_store.get_quantities(entity_id)
+        tags = await self._metadata_store.get_tags(entity_id)
 
-        items, positions, quantities = await self._merge_duplicate_titles(
-            entity_id, items, positions, quantities,
+        items, positions, quantities, tags = await self._merge_duplicate_titles(
+            entity_id, items, positions, quantities, tags,
         )
 
         return TodoList(
             entity_id=entity_id,
-            items=build_tree(items, positions, quantities),
+            items=build_tree(items, positions, quantities, tags),
         )
 
     async def _merge_duplicate_titles(
@@ -69,9 +70,11 @@ class TodoManager:
         items: list[TodoItem],
         positions: dict[str, ItemPosition],
         quantities: dict[str, str],
-    ) -> tuple[list[TodoItem], dict[str, ItemPosition], dict[str, str]]:
+        tags: dict[str, list[str]],
+    ) -> tuple[list[TodoItem], dict[str, ItemPosition], dict[str, str], dict[str, list[str]]]:
         """Collapse sibling items that share a title into one, combining
-        their quantities where possible (see _combine_quantities).
+        their quantities where possible (see _combine_quantities) and
+        unioning their tags.
 
         Only merges a group when at least one member actually carries a
         quantity - two plain same-titled items with no quantity at all
@@ -103,12 +106,17 @@ class TodoManager:
 
             survivor, *duplicates = group
             combined_quantity = quantities.get(survivor.id)
+            combined_tags = list(tags.get(survivor.id, []))
 
             for duplicate in duplicates:
                 combined_quantity = (
                     self._combine_quantities(combined_quantity, quantities.get(duplicate.id))
                     or combined_quantity
                 )
+
+                for tag in tags.get(duplicate.id, []):
+                    if tag not in combined_tags:
+                        combined_tags.append(tag)
 
                 child_ids = self._siblings(items, positions, duplicate.id)
 
@@ -133,21 +141,27 @@ class TodoManager:
                 await self._metadata_store.set_quantity(entity_id, survivor.id, combined_quantity)
                 quantities[survivor.id] = combined_quantity
 
+            if combined_tags:
+                await self._metadata_store.set_tags(entity_id, survivor.id, combined_tags)
+                tags[survivor.id] = combined_tags
+
         if reparented:
             await self._metadata_store.set_positions(entity_id, reparented)
 
         if not removed_ids:
-            return items, positions, quantities
+            return items, positions, quantities, tags
 
         await self._metadata_store.remove_positions(entity_id, removed_ids)
         await self._metadata_store.remove_quantities(entity_id, removed_ids)
+        await self._metadata_store.remove_tags_for_items(entity_id, removed_ids)
 
         removed_id_set = set(removed_ids)
         items = [item for item in items if item.id not in removed_id_set]
         positions = {k: v for k, v in positions.items() if k not in removed_id_set}
         quantities = {k: v for k, v in quantities.items() if k not in removed_id_set}
+        tags = {k: v for k, v in tags.items() if k not in removed_id_set}
 
-        return items, positions, quantities
+        return items, positions, quantities, tags
 
     async def create_item(
         self,
@@ -157,9 +171,11 @@ class TodoManager:
         due_date: str | None = None,
         due_datetime: str | None = None,
         quantity: str | None = None,
+        tags: list[str] | None = None,
     ) -> str:
-        """Create an item, including overlay-only fields (quantity)
-        that Home Assistant's native todo.add_item has no concept of.
+        """Create an item, including overlay-only fields (quantity,
+        tags) that Home Assistant's native todo.add_item has no
+        concept of.
 
         Returns the new item's id.
         """
@@ -175,6 +191,9 @@ class TodoManager:
         if quantity:
             await self._metadata_store.set_quantity(entity_id, item_id, quantity)
 
+        if tags:
+            await self._metadata_store.set_tags(entity_id, item_id, tags)
+
         return item_id
 
     async def set_quantity(
@@ -187,6 +206,51 @@ class TodoManager:
         since native Home Assistant todo items have no such field."""
 
         await self._metadata_store.set_quantity(entity_id, item_id, quantity)
+
+    async def set_tags(
+        self,
+        entity_id: str,
+        item_id: str,
+        tags: list[str],
+    ) -> None:
+        """Replace an item's full tag list - overlay-only metadata."""
+
+        await self._metadata_store.set_tags(entity_id, item_id, tags)
+
+    async def add_tag(
+        self,
+        entity_id: str,
+        item: str,
+        tag: str,
+    ) -> None:
+        """Add a tag to an item, identified by uid or title (matching
+        the same uid-or-summary convention Home Assistant's own
+        todo.update_item service uses for its "item" field)."""
+
+        resolved = await self._resolve_item(entity_id, item)
+        await self._metadata_store.add_tag(entity_id, resolved.id, tag)
+
+    async def remove_tag(
+        self,
+        entity_id: str,
+        item: str,
+        tag: str,
+    ) -> None:
+        resolved = await self._resolve_item(entity_id, item)
+        await self._metadata_store.remove_tag(entity_id, resolved.id, tag)
+
+    async def _resolve_item(
+        self,
+        entity_id: str,
+        item: str,
+    ) -> TodoItem:
+        items = await self._adapter.get_items(entity_id)
+
+        for candidate in items:
+            if item in (candidate.id, candidate.title):
+                return candidate
+
+        raise ValueError(f"No item {item!r} (by id or title) found on {entity_id}")
 
     async def move_item(
         self,
@@ -447,6 +511,7 @@ class TodoManager:
         if removed_ids:
             await self._metadata_store.remove_positions(entity_id, removed_ids)
             await self._metadata_store.remove_quantities(entity_id, removed_ids)
+            await self._metadata_store.remove_tags_for_items(entity_id, removed_ids)
 
         return removed_ids
 
@@ -541,6 +606,7 @@ class TodoManager:
             "due_date": item.due_date,
             "due_datetime": item.due_datetime,
             "quantity": item.quantity,
+            "tags": item.tags,
             "completed": item.completed if persist_states else False,
             "children": [
                 TodoManager._snapshot_node(child, persist_states)
@@ -593,9 +659,9 @@ class TodoManager:
 
                 # Already exists - rather than leaving it untouched
                 # outright, combine quantities when possible (e.g.
-                # "150g" + "200g" -> "350g"), so a merge unifies
-                # matching items instead of just ignoring the incoming
-                # amount.
+                # "150g" + "200g" -> "350g") and union tags, so a merge
+                # unifies matching items instead of just ignoring the
+                # incoming data.
                 existing_quantities = await self._metadata_store.get_quantities(entity_id)
                 combined = self._combine_quantities(
                     existing_quantities.get(target_id), node.get("quantity")
@@ -603,6 +669,18 @@ class TodoManager:
 
                 if combined is not None:
                     await self._metadata_store.set_quantity(entity_id, target_id, combined)
+
+                incoming_tags = node.get("tags") or []
+
+                if incoming_tags:
+                    existing_tags = await self._metadata_store.get_tags(entity_id)
+                    merged_tags = list(existing_tags.get(target_id, []))
+
+                    for tag in incoming_tags:
+                        if tag not in merged_tags:
+                            merged_tags.append(tag)
+
+                    await self._metadata_store.set_tags(entity_id, target_id, merged_tags)
             else:
                 target_id = await self._adapter.add_item(
                     entity_id,
@@ -620,6 +698,9 @@ class TodoManager:
 
                 if node.get("quantity"):
                     await self._metadata_store.set_quantity(entity_id, target_id, node["quantity"])
+
+                if node.get("tags"):
+                    await self._metadata_store.set_tags(entity_id, target_id, node["tags"])
 
                 if node.get("completed"):
                     await self._adapter.set_completed(entity_id, target_id, True)

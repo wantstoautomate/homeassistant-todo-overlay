@@ -219,6 +219,14 @@ export class TodoTreeItem extends LitElement {
             fill: currentColor;
         }
 
+        .tag-chip {
+            flex-shrink: 0;
+            padding: 0 6px;
+            border-radius: 8px;
+            border: 1px solid var(--divider-color);
+            white-space: nowrap;
+        }
+
         .description-text {
             overflow: hidden;
             text-overflow: ellipsis;
@@ -433,7 +441,7 @@ export class TodoTreeItem extends LitElement {
         };
 
         const due = formatDue(this.item);
-        const hasMeta = due || this.item.description;
+        const hasMeta = due || this.item.description || this.item.tags.length > 0;
 
         return html`
             <li>
@@ -472,6 +480,7 @@ export class TodoTreeItem extends LitElement {
                                                 `
                                                 : ""
                                         }
+                                        ${this.item.tags.map(tag => html`<span class="tag-chip">${tag}</span>`)}
                                         ${
                                             this.item.description
                                                 ? html`<span class="description-text">${this.item.description}</span>`

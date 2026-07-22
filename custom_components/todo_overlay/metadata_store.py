@@ -13,6 +13,7 @@ STORAGE_KEY = "todo_overlay"
 # so this can never collide).
 SNAPSHOTS_KEY = "_snapshots"
 QUANTITIES_KEY = "_quantities"
+TAGS_KEY = "_tags"
 
 
 class MetadataStore:
@@ -199,5 +200,102 @@ class MetadataStore:
 
         for item_id in item_ids:
             entity_quantities.pop(item_id, None)
+
+        await self._store.async_save(self._cache)
+
+    async def get_tags(
+        self,
+        entity_id: str,
+    ) -> dict[str, list[str]]:
+        await self._load()
+
+        assert self._cache is not None
+
+        return {
+            item_id: list(tags)
+            for item_id, tags in self._cache.get(TAGS_KEY, {}).get(entity_id, {}).items()
+        }
+
+    async def set_tags(
+        self,
+        entity_id: str,
+        item_id: str,
+        tags: list[str],
+    ) -> None:
+        """Replace an item's full tag list."""
+
+        await self._load()
+
+        assert self._cache is not None
+
+        entity_tags = self._cache.setdefault(TAGS_KEY, {}).setdefault(entity_id, {})
+
+        if tags:
+            entity_tags[item_id] = list(tags)
+        else:
+            entity_tags.pop(item_id, None)
+
+        await self._store.async_save(self._cache)
+
+    async def add_tag(
+        self,
+        entity_id: str,
+        item_id: str,
+        tag: str,
+    ) -> None:
+        await self._load()
+
+        assert self._cache is not None
+
+        entity_tags = self._cache.setdefault(TAGS_KEY, {}).setdefault(entity_id, {})
+        tags = entity_tags.setdefault(item_id, [])
+
+        if tag not in tags:
+            tags.append(tag)
+
+        await self._store.async_save(self._cache)
+
+    async def remove_tag(
+        self,
+        entity_id: str,
+        item_id: str,
+        tag: str,
+    ) -> None:
+        await self._load()
+
+        assert self._cache is not None
+
+        entity_tags = self._cache.get(TAGS_KEY, {}).get(entity_id, {})
+        tags = entity_tags.get(item_id)
+
+        if not tags or tag not in tags:
+            return
+
+        tags.remove(tag)
+
+        if not tags:
+            entity_tags.pop(item_id, None)
+
+        await self._store.async_save(self._cache)
+
+    async def remove_tags_for_items(
+        self,
+        entity_id: str,
+        item_ids: list[str],
+    ) -> None:
+        """Drop stored tags for items that no longer exist, e.g. after
+        a clear-completed removal."""
+
+        await self._load()
+
+        assert self._cache is not None
+
+        entity_tags = self._cache.get(TAGS_KEY, {}).get(entity_id)
+
+        if not entity_tags:
+            return
+
+        for item_id in item_ids:
+            entity_tags.pop(item_id, None)
 
         await self._store.async_save(self._cache)
