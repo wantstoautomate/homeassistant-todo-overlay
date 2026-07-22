@@ -82,18 +82,21 @@ interface TreeItemElement extends Element {
     item?: TodoItem;
 }
 
-function hitTestRow(x: number, y: number): {id: string; placement: Placement} | undefined {
-    const el = deepElementFromPoint(x, y);
-    const itemEl = closestAcrossShadowRoots(el, "todo-overlay-tree-item") as TreeItemElement | null;
-
-    if (!itemEl?.item) {
-        return undefined;
-    }
-
-    const rowEl = itemEl.shadowRoot?.querySelector(".row");
-    const rect = (rowEl ?? itemEl).getBoundingClientRect();
-    const relativeY = (y - rect.top) / rect.height;
-
+// "inside" always appends as the LAST child of the anchor (see manager.py's
+// move_item), and "after" always inserts as the anchor's next sibling at the
+// anchor's OWN level (never as a child of it), regardless of whether that
+// anchor has children of its own. That means hovering the bottom edge of a
+// parent row - which visually sits right above that parent's first child -
+// would otherwise resolve to "after the parent", which the backend renders
+// below the parent's ENTIRE subtree: a drop that lands nowhere near where
+// the pointer actually was. Remapping that case to "before the parent's
+// first child" produces the one sensible interpretation (new first child of
+// the parent) using only the existing placement semantics.
+function resolvePlacement(
+    rowId: string,
+    rowChildren: TodoItem[],
+    relativeY: number,
+): {id: string; placement: Placement} {
     let placement: Placement;
 
     if (relativeY < BEFORE_AFTER_ZONE) {
@@ -104,7 +107,90 @@ function hitTestRow(x: number, y: number): {id: string; placement: Placement} | 
         placement = "inside";
     }
 
-    return {id: itemEl.item.id, placement};
+    if (placement === "after" && rowChildren.length > 0) {
+        return {id: rowChildren[0].id, placement: "before"};
+    }
+
+    return {id: rowId, placement};
+}
+
+// Recursively collects every rendered row across all nested shadow roots,
+// so the "above the top item" / "below the bottom item" fallback below can
+// find the actual topmost/bottommost row rather than giving up. Reaching
+// even the FIRST todo-overlay-tree-item at all means crossing several
+// ancestor shadow roots (ha-card, todo-overlay-card, todo-overlay-tree)
+// that don't themselves match the selector - so this has to walk every
+// element's shadow root, not just the ones that happen to match.
+function collectAllRows(root: ParentNode): {id: string; children: TodoItem[]; rect: DOMRect}[] {
+    const rows: {id: string; children: TodoItem[]; rect: DOMRect}[] = [];
+
+    for (const el of Array.from(root.querySelectorAll("*"))) {
+        const itemEl = el as TreeItemElement;
+
+        if (el.localName === "todo-overlay-tree-item" && itemEl.item) {
+            const rowEl = itemEl.shadowRoot?.querySelector(".row");
+
+            if (rowEl) {
+                rows.push({id: itemEl.item.id, children: itemEl.item.children, rect: rowEl.getBoundingClientRect()});
+            }
+        }
+
+        if (el.shadowRoot) {
+            rows.push(...collectAllRows(el.shadowRoot));
+        }
+    }
+
+    return rows;
+}
+
+// A direct hit-test only recognizes a drop target when the pointer lands
+// exactly on some row's own rectangle - once the pointer moves above the
+// very first row or below the very last one (an easy thing to do, since
+// that's exactly where you'd aim to drop something at either end of the
+// list), elementFromPoint finds nothing, and dragging would silently lose
+// its target. Falling back to the nearest row by vertical distance (rather
+// than requiring literal containment) fixes both ends at once.
+function nearestRowFallback(x: number, y: number, excludeId?: string): {id: string; placement: Placement} | undefined {
+    const rows = collectAllRows(document).filter(r => r.id !== excludeId && r.rect.height > 0);
+
+    if (rows.length === 0) {
+        return undefined;
+    }
+
+    let nearest = rows[0];
+    let nearestDistance = Infinity;
+
+    for (const row of rows) {
+        const distance = y < row.rect.top
+            ? row.rect.top - y
+            : y > row.rect.bottom
+                ? y - row.rect.bottom
+                : 0;
+
+        if (distance < nearestDistance) {
+            nearest = row;
+            nearestDistance = distance;
+        }
+    }
+
+    const relativeY = (y - nearest.rect.top) / nearest.rect.height;
+
+    return resolvePlacement(nearest.id, nearest.children, relativeY);
+}
+
+function hitTestRow(x: number, y: number, excludeId?: string): {id: string; placement: Placement} | undefined {
+    const el = deepElementFromPoint(x, y);
+    const itemEl = closestAcrossShadowRoots(el, "todo-overlay-tree-item") as TreeItemElement | null;
+
+    if (!itemEl?.item || itemEl.item.id === excludeId) {
+        return nearestRowFallback(x, y, excludeId);
+    }
+
+    const rowEl = itemEl.shadowRoot?.querySelector(".row");
+    const rect = (rowEl ?? itemEl).getBoundingClientRect();
+    const relativeY = (y - rect.top) / rect.height;
+
+    return resolvePlacement(itemEl.item.id, itemEl.item.children, relativeY);
 }
 
 export interface TodoOverlayCardConfig {
@@ -436,7 +522,7 @@ export class TodoOverlayCard extends LitElement {
     private onGlobalPointerMove = (e: PointerEvent) => {
         this.ghostPosition = {x: e.clientX, y: e.clientY};
 
-        const hit = hitTestRow(e.clientX, e.clientY);
+        const hit = hitTestRow(e.clientX, e.clientY, this.draggedId);
 
         this.hoverId = hit && hit.id !== this.draggedId ? hit.id : undefined;
         this.hoverPlacement = hit && hit.id !== this.draggedId ? hit.placement : undefined;

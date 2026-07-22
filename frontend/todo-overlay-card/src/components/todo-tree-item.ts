@@ -290,6 +290,11 @@ export class TodoTreeItem extends LitElement {
     private hasMoved = false;
     private holdTimer?: number;
     private clickTimer?: number;
+    // Mouse users have no reason to wait out the hold timer before a drag
+    // picks up - there's no competing "swipe to scroll" gesture to protect
+    // against, unlike touch, where a quick swipe must be left alone (see
+    // onWindowPointerMove) so the page still scrolls normally.
+    private pointerIsMouse = false;
 
     private get isPressed(): boolean {
         return this.draggedId === this.item.id;
@@ -312,6 +317,7 @@ export class TodoTreeItem extends LitElement {
         this.pointerDownScreenPos = {x: e.clientX, y: e.clientY};
         this.hasMoved = false;
         this.dragEngaged = false;
+        this.pointerIsMouse = e.pointerType === "mouse";
 
         const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
         this.holdRippleOrigin = {x: e.clientX - rect.left, y: e.clientY - rect.top};
@@ -381,7 +387,7 @@ export class TodoTreeItem extends LitElement {
             return;
         }
 
-        if (this.holdReady) {
+        if (this.pointerIsMouse || this.holdReady) {
             this.hasMoved = true;
             this.dragEngaged = true;
             this.clearHoldRipple();

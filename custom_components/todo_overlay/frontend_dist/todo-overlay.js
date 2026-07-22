@@ -1326,6 +1326,11 @@ var TodoTreeItem = class extends i4 {
     this.dragEngaged = false;
     this.pointerDownAt = 0;
     this.hasMoved = false;
+    // Mouse users have no reason to wait out the hold timer before a drag
+    // picks up - there's no competing "swipe to scroll" gesture to protect
+    // against, unlike touch, where a quick swipe must be left alone (see
+    // onWindowPointerMove) so the page still scrolls normally.
+    this.pointerIsMouse = false;
     this.onWindowPointerMove = (e7) => {
       if (!this.pointerDownScreenPos || this.dragEngaged) {
         return;
@@ -1335,7 +1340,7 @@ var TodoTreeItem = class extends i4 {
       if (Math.hypot(dx, dy) <= MOVE_CANCEL_THRESHOLD_PX) {
         return;
       }
-      if (this.holdReady) {
+      if (this.pointerIsMouse || this.holdReady) {
         this.hasMoved = true;
         this.dragEngaged = true;
         this.clearHoldRipple();
@@ -1375,6 +1380,7 @@ var TodoTreeItem = class extends i4 {
     this.pointerDownScreenPos = { x: e7.clientX, y: e7.clientY };
     this.hasMoved = false;
     this.dragEngaged = false;
+    this.pointerIsMouse = e7.pointerType === "mouse";
     const rect = e7.currentTarget.getBoundingClientRect();
     this.holdRippleOrigin = { x: e7.clientX - rect.left, y: e7.clientY - rect.top };
     window.clearTimeout(this.holdTimer);
@@ -1800,15 +1806,7 @@ function closestAcrossShadowRoots(start, selector) {
   }
   return null;
 }
-function hitTestRow(x2, y3) {
-  const el = deepElementFromPoint(x2, y3);
-  const itemEl = closestAcrossShadowRoots(el, "todo-overlay-tree-item");
-  if (!itemEl?.item) {
-    return void 0;
-  }
-  const rowEl = itemEl.shadowRoot?.querySelector(".row");
-  const rect = (rowEl ?? itemEl).getBoundingClientRect();
-  const relativeY = (y3 - rect.top) / rect.height;
+function resolvePlacement(rowId, rowChildren, relativeY) {
   let placement;
   if (relativeY < BEFORE_AFTER_ZONE) {
     placement = "before";
@@ -1817,7 +1815,54 @@ function hitTestRow(x2, y3) {
   } else {
     placement = "inside";
   }
-  return { id: itemEl.item.id, placement };
+  if (placement === "after" && rowChildren.length > 0) {
+    return { id: rowChildren[0].id, placement: "before" };
+  }
+  return { id: rowId, placement };
+}
+function collectAllRows(root) {
+  const rows = [];
+  for (const el of Array.from(root.querySelectorAll("*"))) {
+    const itemEl = el;
+    if (el.localName === "todo-overlay-tree-item" && itemEl.item) {
+      const rowEl = itemEl.shadowRoot?.querySelector(".row");
+      if (rowEl) {
+        rows.push({ id: itemEl.item.id, children: itemEl.item.children, rect: rowEl.getBoundingClientRect() });
+      }
+    }
+    if (el.shadowRoot) {
+      rows.push(...collectAllRows(el.shadowRoot));
+    }
+  }
+  return rows;
+}
+function nearestRowFallback(x2, y3, excludeId) {
+  const rows = collectAllRows(document).filter((r6) => r6.id !== excludeId && r6.rect.height > 0);
+  if (rows.length === 0) {
+    return void 0;
+  }
+  let nearest = rows[0];
+  let nearestDistance = Infinity;
+  for (const row of rows) {
+    const distance = y3 < row.rect.top ? row.rect.top - y3 : y3 > row.rect.bottom ? y3 - row.rect.bottom : 0;
+    if (distance < nearestDistance) {
+      nearest = row;
+      nearestDistance = distance;
+    }
+  }
+  const relativeY = (y3 - nearest.rect.top) / nearest.rect.height;
+  return resolvePlacement(nearest.id, nearest.children, relativeY);
+}
+function hitTestRow(x2, y3, excludeId) {
+  const el = deepElementFromPoint(x2, y3);
+  const itemEl = closestAcrossShadowRoots(el, "todo-overlay-tree-item");
+  if (!itemEl?.item || itemEl.item.id === excludeId) {
+    return nearestRowFallback(x2, y3, excludeId);
+  }
+  const rowEl = itemEl.shadowRoot?.querySelector(".row");
+  const rect = (rowEl ?? itemEl).getBoundingClientRect();
+  const relativeY = (y3 - rect.top) / rect.height;
+  return resolvePlacement(itemEl.item.id, itemEl.item.children, relativeY);
 }
 var UNDO_TIMEOUT_MS = 8e3;
 function findItem(items, id) {
@@ -1848,7 +1893,7 @@ var TodoOverlayCard = class extends i4 {
     this.savedNames = [];
     this.onGlobalPointerMove = (e7) => {
       this.ghostPosition = { x: e7.clientX, y: e7.clientY };
-      const hit = hitTestRow(e7.clientX, e7.clientY);
+      const hit = hitTestRow(e7.clientX, e7.clientY, this.draggedId);
       this.hoverId = hit && hit.id !== this.draggedId ? hit.id : void 0;
       this.hoverPlacement = hit && hit.id !== this.draggedId ? hit.placement : void 0;
     };
