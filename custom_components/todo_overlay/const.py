@@ -2,4 +2,5 @@ DOMAIN = "todo_overlay"
 
 DATA_MANAGER = "manager"
 
-SERVICE_GET_TREE = "get_tree"
+WS_TYPE_GET_LIST = "todo_overlay/get_list"
+WS_TYPE_SET_PARENT = "todo_overlay/set_parent"

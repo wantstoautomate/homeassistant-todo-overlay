@@ -18,11 +18,22 @@ class FakeAdapter:
 
 class FakeMetadataStore:
 
-    def get_relationships(self) -> dict[str, str | None]:
+    def __init__(self) -> None:
+        self.set_parent_calls: list[tuple[str, str, str | None]] = []
+
+    async def get_relationships(self, entity_id: str) -> dict[str, str | None]:
         return {
             "1": None,
             "2": "1",
         }
+
+    async def set_parent(
+        self,
+        entity_id: str,
+        child_id: str,
+        parent_id: str | None,
+    ) -> None:
+        self.set_parent_calls.append((entity_id, child_id, parent_id))
 
 
 @pytest.mark.asyncio
@@ -69,3 +80,46 @@ async def test_manager_returns_serialisable_list():
             }
         ],
     }
+
+
+@pytest.mark.asyncio
+async def test_manager_set_parent_rejects_cycle():
+
+    metadata_store = FakeMetadataStore()
+
+    manager = TodoManager(
+        adapter=FakeAdapter(),
+        metadata_store=metadata_store,
+    )
+
+    # Item "2"'s parent is already "1" (per FakeMetadataStore), so setting
+    # "1"'s parent to "2" would close a cycle: 1 -> 2 -> 1.
+    with pytest.raises(ValueError):
+        await manager.set_parent(
+            entity_id="todo.shopping",
+            child_id="1",
+            parent_id="2",
+        )
+
+    assert metadata_store.set_parent_calls == []
+
+
+@pytest.mark.asyncio
+async def test_manager_set_parent_allows_valid_reparent():
+
+    metadata_store = FakeMetadataStore()
+
+    manager = TodoManager(
+        adapter=FakeAdapter(),
+        metadata_store=metadata_store,
+    )
+
+    await manager.set_parent(
+        entity_id="todo.shopping",
+        child_id="2",
+        parent_id=None,
+    )
+
+    assert metadata_store.set_parent_calls == [
+        ("todo.shopping", "2", None),
+    ]

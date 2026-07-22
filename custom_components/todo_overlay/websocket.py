@@ -4,12 +4,12 @@ from homeassistant.components import websocket_api
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import config_validation as cv
 
-from .const import DATA_MANAGER
+from .const import DATA_MANAGER, DOMAIN, WS_TYPE_GET_LIST, WS_TYPE_SET_PARENT
 
 
 @websocket_api.websocket_command(
     {
-        vol.Required("type"): "todo_overlay/get_list",
+        vol.Required("type"): WS_TYPE_GET_LIST,
         vol.Required("entity_id"): cv.entity_id,
     }
 )
@@ -21,7 +21,7 @@ async def websocket_get_list(
 ) -> None:
     """Return a Todo list."""
 
-    manager = hass.data[DATA_MANAGER]
+    manager = hass.data[DOMAIN][DATA_MANAGER]
 
     todo_list = await manager.get_list(
         msg["entity_id"],
@@ -35,7 +35,7 @@ async def websocket_get_list(
 
 @websocket_api.websocket_command(
     {
-        vol.Required("type"): "todo_overlay/set_parent",
+        vol.Required("type"): WS_TYPE_SET_PARENT,
         vol.Required("entity_id"): cv.entity_id,
         vol.Required("child_id"): str,
         vol.Optional("parent_id"): vol.Any(str, None),
@@ -49,13 +49,17 @@ async def websocket_set_parent(
 ) -> None:
     """Set the parent of a todo item."""
 
-    manager = hass.data[DATA_MANAGER]
+    manager = hass.data[DOMAIN][DATA_MANAGER]
 
-    await manager.set_parent(
-        entity_id=msg["entity_id"],
-        child_id=msg["child_id"],
-        parent_id=msg.get("parent_id"),
-    )
+    try:
+        await manager.set_parent(
+            entity_id=msg["entity_id"],
+            child_id=msg["child_id"],
+            parent_id=msg.get("parent_id"),
+        )
+    except ValueError as err:
+        connection.send_error(msg["id"], "cycle_detected", str(err))
+        return
 
     connection.send_result(msg["id"])
 
