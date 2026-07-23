@@ -7,6 +7,21 @@ import type {TodoOverlayCardConfig} from "../todo-overlay";
 
 const EMPTY_CONFIG: TodoOverlayCardConfig = {entity: ""};
 
+// ha-entities-picker (the multi-entity picker this needs) isn't loaded by
+// HA's frontend upfront - it only gets lazily registered the first time
+// something ELSE on the page triggers it, e.g. an entity selector inside
+// the automation editor. On a fresh session where this card's editor is
+// the first thing to need it, using <ha-entities-picker> directly renders
+// an inert, empty custom element with no picker UI at all (confirmed live -
+// this is why the entity field was invisible). Going through <ha-selector>
+// instead avoids that: it's core dashboard-editor infrastructure that's
+// always available, and it lazy-loads whatever picker a given selector
+// config needs as part of its own render, rather than assuming it's
+// already loaded. A module-level constant, not inlined in the template, so
+// its identity stays stable across renders - ha-selector's internal picker
+// can otherwise treat a fresh object every render as a config change.
+const ENTITY_SELECTOR = {entity: {multiple: true, domain: "todo"}};
+
 // Home Assistant's edit-card dialog instantiates this directly (via
 // TodoOverlayCard.getConfigElement()), sets .hass, then calls
 // setConfig() - never a constructor argument - and listens for
@@ -147,13 +162,13 @@ export class TodoOverlayCardEditor extends LitElement {
 
         return html`
             <div class="field">
-                <ha-entities-picker
+                <ha-selector
                     .hass=${this.hass}
+                    .selector=${ENTITY_SELECTOR}
                     .value=${this.entities}
-                    .includeDomains=${["todo"]}
                     label="Todo entities"
                     @value-changed=${this.onEntitiesChanged}
-                ></ha-entities-picker>
+                ></ha-selector>
             </div>
 
             <div class="field text-field">

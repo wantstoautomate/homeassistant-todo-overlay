@@ -2751,6 +2751,7 @@ TodoOverlayList = __decorateClass([
 
 // src/components/todo-overlay-card-editor.ts
 var EMPTY_CONFIG = { entity: "" };
+var ENTITY_SELECTOR = { entity: { multiple: true, domain: "todo" } };
 var TodoOverlayCardEditor = class extends i4 {
   constructor() {
     super(...arguments);
@@ -2810,13 +2811,13 @@ var TodoOverlayCardEditor = class extends i4 {
     const sortBy = this._config.sort_by ?? "manual";
     return b2`
             <div class="field">
-                <ha-entities-picker
+                <ha-selector
                     .hass=${this.hass}
+                    .selector=${ENTITY_SELECTOR}
                     .value=${this.entities}
-                    .includeDomains=${["todo"]}
                     label="Todo entities"
                     @value-changed=${this.onEntitiesChanged}
-                ></ha-entities-picker>
+                ></ha-selector>
             </div>
 
             <div class="field text-field">
