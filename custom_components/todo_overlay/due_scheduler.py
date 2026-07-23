@@ -162,15 +162,31 @@ class DueScheduler:
             return
 
         desired: dict[str, tuple[str, str]] = {}
+        # trigger_on_due can go stale: the toggle is only ever set through
+        # our own dialog (which requires a due_datetime to enable it in
+        # the first place - see DueTimeRequiredError), but the due date
+        # can still be cleared afterwards through a path that bypasses
+        # that check entirely (native card, voice assistant, another
+        # automation calling todo.update_item directly). Left alone, the
+        # flag would sit there forever claiming to be armed while never
+        # actually able to fire again - cleaned up here as part of the
+        # same reconciliation pass, rather than leaving stale state for
+        # someone to eventually notice in the edit dialog.
+        stale_trigger_ids: list[str] = []
 
         def walk(items: list[TodoItem]) -> None:
             for item in items:
-                if not item.completed and item.trigger_on_due and item.due_datetime:
+                if item.trigger_on_due and not item.due_datetime:
+                    stale_trigger_ids.append(item.id)
+                elif not item.completed and item.trigger_on_due and item.due_datetime:
                     desired[item.id] = (item.due_datetime, item.title)
 
                 walk(item.children)
 
         walk(todo_list.items)
+
+        for stale_id in stale_trigger_ids:
+            await self._manager.set_trigger_on_due(entity_id, stale_id, False)
 
         due_fired = await self._manager.get_due_fired(entity_id)
 

@@ -84,7 +84,12 @@ trigger:
 
 ## Development
 
-This repository contains the custom integration (`custom_components/todo_overlay/`), the frontend card (`frontend/todo-overlay-card/`), and an automated backend test suite (`tests/`, run with `uv run pytest`). See `docker/` for a local Home Assistant dev environment.
+This repository contains the custom integration (`custom_components/todo_overlay/`) and the frontend card (`frontend/todo-overlay-card/`), each with its own automated test suite:
+
+- Backend: `uv run pytest` (and `uv run ruff check .` for linting).
+- Frontend: from `frontend/todo-overlay-card/`, `npx tsc --noEmit` to type-check, `npm test` to run the Vitest suite, and `node build.mjs` to produce the bundle committed under `custom_components/todo_overlay/frontend_dist/`.
+
+See `docker/` for a local Home Assistant dev environment, and [CHANGELOG.md](CHANGELOG.md) for release history.
 
 ## License
 

@@ -435,24 +435,31 @@ async def test_item_update_reconciles_entity_after_external_edit():
     hass = FakeHass(entity_ids=[ENTITY_ID])
     manager = make_manager(
         hass,
-        items=[TodoItem(id="1", title="Renew passport", completed=False, due_datetime=None)],
+        items=[TodoItem(id="1", title="Renew passport", completed=False, due_datetime=FUTURE_DUE)],
         positions={"1": ItemPosition(parent_id=None, order=0)},
     )
     manager._metadata_store._trigger_on_due = {"1"}
 
     scheduler, track = make_scheduler(hass, manager, NOW)
     await scheduler.async_start()
-    assert track.scheduled == []
+    assert len(track.scheduled) == 1
+    assert scheduler._scheduled[(ENTITY_ID, "1")][0] == FUTURE_DUE
 
-    # Something outside TodoManager sets a due_datetime directly on the
-    # adapter's own item.
-    manager._adapter._items[0].due_datetime = FUTURE_DUE
+    # Something outside TodoManager changes the due_datetime directly on
+    # the adapter's own item, to a different future value.
+    new_due = "2026-06-02T09:00:00+00:00"
+    manager._adapter._items[0].due_datetime = new_due
 
     hass.todo_entities[ENTITY_ID].trigger_update()
     await hass.drain()
 
-    assert len(track.scheduled) == 1
-    assert scheduler._scheduled[(ENTITY_ID, "1")][0] == FUTURE_DUE
+    # track.scheduled accumulates every call ever made (cancelled or not) -
+    # the real internal state to check is scheduler._scheduled, plus that
+    # the stale first schedule was actually cancelled rather than left
+    # dangling.
+    assert scheduler._scheduled[(ENTITY_ID, "1")][0] == new_due
+    assert track.scheduled[0]["cancelled"] is True
+    assert track.scheduled[1]["cancelled"] is False
 
 
 @pytest.mark.asyncio
@@ -510,3 +517,70 @@ async def test_reconcile_warns_and_skips_unparseable_due_datetime(caplog):
 
     assert track.scheduled == []
     assert hass.bus.fired == []
+
+
+# --- stale trigger_on_due cleanup ----------------------------------------
+
+@pytest.mark.asyncio
+async def test_reconcile_disables_trigger_on_due_when_due_datetime_cleared():
+    """trigger_on_due can only be enabled through our own dialog, which
+    requires a due_datetime to already be set - but the due date can
+    later be cleared through a path that bypasses that check entirely
+    (native card, voice assistant, another automation calling
+    todo.update_item directly). Left alone the flag would sit there
+    forever claiming to be armed while never able to fire again."""
+
+    hass = FakeHass(entity_ids=[ENTITY_ID])
+    manager = make_manager(
+        hass,
+        items=[TodoItem(id="1", title="Renew passport", completed=False, due_datetime=None)],
+        positions={"1": ItemPosition(parent_id=None, order=0)},
+    )
+    manager._metadata_store._trigger_on_due = {"1"}
+
+    scheduler, track = make_scheduler(hass, manager, NOW)
+    await scheduler.async_start()
+
+    assert track.scheduled == []
+    assert manager._metadata_store._trigger_on_due == set()
+
+
+@pytest.mark.asyncio
+async def test_reconcile_disables_trigger_on_due_for_stale_completed_item():
+    """The stale-flag cleanup applies regardless of completion status -
+    a completed item with no due_datetime is just as stale as an active
+    one."""
+
+    hass = FakeHass(entity_ids=[ENTITY_ID])
+    manager = make_manager(
+        hass,
+        items=[TodoItem(id="1", title="Renew passport", completed=True, due_datetime=None)],
+        positions={"1": ItemPosition(parent_id=None, order=0)},
+    )
+    manager._metadata_store._trigger_on_due = {"1"}
+
+    scheduler, track = make_scheduler(hass, manager, NOW)
+    await scheduler.async_start()
+
+    assert manager._metadata_store._trigger_on_due == set()
+
+
+@pytest.mark.asyncio
+async def test_reconcile_leaves_trigger_on_due_alone_when_due_datetime_present():
+    """Sanity check the cleanup only targets the actually-stale case -
+    an item with trigger_on_due and a real due_datetime must survive
+    reconciliation untouched."""
+
+    hass = FakeHass(entity_ids=[ENTITY_ID])
+    manager = make_manager(
+        hass,
+        items=[TodoItem(id="1", title="Renew passport", completed=False, due_datetime=FUTURE_DUE)],
+        positions={"1": ItemPosition(parent_id=None, order=0)},
+    )
+    manager._metadata_store._trigger_on_due = {"1"}
+
+    scheduler, track = make_scheduler(hass, manager, NOW)
+    await scheduler.async_start()
+
+    assert manager._metadata_store._trigger_on_due == {"1"}
+    assert len(track.scheduled) == 1

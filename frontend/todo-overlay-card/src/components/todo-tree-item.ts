@@ -1,4 +1,4 @@
-import {LitElement, html, css, unsafeCSS} from "lit";
+import {LitElement, html, css, nothing, unsafeCSS} from "lit";
 import {customElement, property, state} from "lit/decorators.js";
 import {classMap} from "lit/directives/class-map.js";
 import {styleMap} from "lit/directives/style-map.js";
@@ -42,6 +42,17 @@ const CLOCK_ICON = html`
 const CHEVRON_ICON = html`
     <svg viewBox="0 0 24 24">
         <path d="M8.59 16.59 13.17 12 8.59 7.41 10 6l6 6-6 6z"></path>
+    </svg>
+`;
+
+// Shown next to the due chip for an item with trigger_on_due enabled -
+// the only visual sign an automation is armed against this item's due
+// date, otherwise only visible by opening the edit dialog.
+const BELL_ICON = html`
+    <svg class="trigger-armed-icon" viewBox="0 0 24 24">
+        <path
+            d="M12,22C13.1,22 14,21.1 14,20H10C10,21.1 10.9,22 12,22M18,16V11C18,7.93 16.36,5.36 13.5,4.68V4C13.5,3.17 12.83,2.5 12,2.5C11.17,2.5 10.5,3.17 10.5,4V4.68C7.63,5.36 6,7.92 6,11V16L4,18V19H20V18L18,16Z"
+        ></path>
     </svg>
 `;
 
@@ -309,6 +320,16 @@ export class TodoTreeItem extends LitElement {
         .due-chip svg {
             width: 14px;
             height: 14px;
+            fill: currentColor;
+        }
+
+        .due-chip .trigger-armed-icon {
+            width: 12px;
+            height: 12px;
+            fill: var(--primary-color);
+        }
+
+        .due-chip.overdue .trigger-armed-icon {
             fill: currentColor;
         }
 
@@ -715,8 +736,12 @@ export class TodoTreeItem extends LitElement {
                                                     ${
                                                         due
                                                             ? html`
-                                                                <span class=${classMap({"due-chip": true, overdue: due.overdue})}>
+                                                                <span
+                                                                    class=${classMap({"due-chip": true, overdue: due.overdue})}
+                                                                    title=${this.item.trigger_on_due ? "Triggers an automation when due" : nothing}
+                                                                >
                                                                     ${CLOCK_ICON}${due.label}
+                                                                    ${this.item.trigger_on_due ? BELL_ICON : ""}
                                                                 </span>
                                                             `
                                                             : ""
