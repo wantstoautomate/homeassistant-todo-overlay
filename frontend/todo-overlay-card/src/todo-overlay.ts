@@ -50,6 +50,9 @@ export interface TodoOverlayCardConfig {
     show_clear_completed_button?: boolean;
     show_save_load_buttons?: boolean;
     show_quick_add?: boolean;
+    // Opt-in (unlike the show_* flags above) since it's new UI an existing
+    // card has never shown before, not a pre-existing element being hidden.
+    show_filter_menu?: boolean;
 }
 
 function friendlyName(hass: HassLike, entityId: string): string {
@@ -156,6 +159,7 @@ export class TodoOverlayCard extends LitElement {
                             .showSaveLoadButtons=${this.config.show_save_load_buttons ?? true}
                             .showQuickAdd=${this.config.show_quick_add ?? true}
                             .confirmDelete=${this.config.confirm_delete ?? true}
+                            .showFilterMenu=${this.config.show_filter_menu ?? false}
                         ></todo-overlay-list>
                     </div>
                 `)}

@@ -1,5 +1,6 @@
 import {LitElement, html, css} from "lit";
 import {customElement, property, state} from "lit/decorators.js";
+import {classMap} from "lit/directives/class-map.js";
 import {styleMap} from "lit/directives/style-map.js";
 
 import {
@@ -18,6 +19,8 @@ import {
     setTags,
     setTriggerOnDue,
 } from "../api";
+import type {FilterMode} from "../filter";
+import {filterTree} from "../filter";
 import type {HassLike} from "../hass";
 import {
     LONG_PRESS_MS,
@@ -178,6 +181,15 @@ function splitDueDateTime(iso: string | null): {date: string; time: string} {
 
 const UNDO_TIMEOUT_MS = 8000;
 
+const FILTER_MODES: readonly FilterMode[] = ["all", "active", "completed", "overdue"];
+
+const FILTER_LABELS: Record<FilterMode, string> = {
+    all: "All",
+    active: "Active",
+    completed: "Completed",
+    overdue: "Overdue",
+};
+
 // One entity's worth of everything the card used to do directly: quick-add,
 // the tree(s), drag-and-drop, the item/save-load dialogs, undo. Pulled out
 // of TodoOverlayCard so a single card can host more than one of these side
@@ -233,6 +245,53 @@ export class TodoOverlayList extends LitElement {
             font-weight: 500;
             cursor: pointer;
             padding: 4px 0;
+        }
+
+        .filter-bar {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            padding: 4px 20px 12px;
+            font-family: Roboto, "Noto Sans", sans-serif;
+        }
+
+        .filter-search {
+            font-family: inherit;
+            font-size: 14px;
+            color: var(--primary-text-color);
+            background: none;
+            border: none;
+            border-bottom: 1px solid var(--divider-color);
+            padding: 6px 0;
+            outline: none;
+        }
+
+        .filter-search:focus {
+            border-bottom: 2px solid var(--primary-color);
+            padding-bottom: 5px;
+        }
+
+        .filter-chips {
+            display: flex;
+            gap: 8px;
+            flex-wrap: wrap;
+        }
+
+        .filter-chip {
+            border: 1px solid var(--divider-color);
+            background: none;
+            border-radius: 12px;
+            padding: 4px 12px;
+            font-family: inherit;
+            font-size: 12px;
+            color: var(--secondary-text-color);
+            cursor: pointer;
+        }
+
+        .filter-chip.active {
+            border-color: var(--primary-color);
+            color: var(--primary-color);
+            background: rgba(var(--rgb-primary-color, 3, 169, 244), 0.12);
         }
 
         .list-actions {
@@ -377,8 +436,20 @@ export class TodoOverlayList extends LitElement {
     @property({type: Boolean})
     public confirmDelete = true;
 
+    @property({type: Boolean})
+    public showFilterMenu = false;
+
     @state()
     private list?: TodoList;
+
+    @state()
+    private collapsedIds: Set<string> = new Set();
+
+    @state()
+    private filterMode: FilterMode = "all";
+
+    @state()
+    private searchQuery = "";
 
     @state()
     private error?: string;
@@ -602,6 +673,28 @@ export class TodoOverlayList extends LitElement {
         window.removeEventListener("pointermove", this.onGlobalPointerMove, {capture: true});
         window.removeEventListener("pointerup", this.onGlobalPointerUp, {capture: true});
         window.removeEventListener("pointercancel", this.onGlobalPointerUp, {capture: true});
+    }
+
+    // --- collapse / filter / search --------------------------------------
+
+    private onToggleCollapse(e: CustomEvent<{id: string}>) {
+        const next = new Set(this.collapsedIds);
+
+        if (next.has(e.detail.id)) {
+            next.delete(e.detail.id);
+        } else {
+            next.add(e.detail.id);
+        }
+
+        this.collapsedIds = next;
+    }
+
+    private onFilterModeChanged(mode: FilterMode) {
+        this.filterMode = mode;
+    }
+
+    private onSearchInput(e: InputEvent) {
+        this.searchQuery = (e.target as HTMLInputElement).value;
     }
 
     // --- completion + cascade undo --------------------------------------
@@ -889,7 +982,8 @@ export class TodoOverlayList extends LitElement {
     }
 
     private renderTree(list: TodoList) {
-        const items = sortTree(list.items, this.sortBy, this.sortOrder);
+        const filtered = filterTree(list.items, this.filterMode, this.searchQuery);
+        const items = sortTree(filtered, this.sortBy, this.sortOrder);
         const completedItems = items.filter(item => item.completed);
 
         if (completedItems.length === 0) {
@@ -901,10 +995,12 @@ export class TodoOverlayList extends LitElement {
                     .hoverPlacement=${this.hoverPlacement}
                     .hideCompleteForParents=${this.hideCompleteForParents}
                     .dragDisabled=${this.dragDisabled}
+                    .collapsedIds=${this.collapsedIds}
 
                     @tree-pointer-down=${this.onPointerDown}
                     @tree-drag-start=${this.onDragStart}
                     @tree-pointer-up=${this.onPointerUp}
+                    @tree-toggle-collapse=${this.onToggleCollapse}
 
                 ></todo-overlay-tree>
             `;
@@ -924,10 +1020,12 @@ export class TodoOverlayList extends LitElement {
                             .hoverPlacement=${this.hoverPlacement}
                             .hideCompleteForParents=${this.hideCompleteForParents}
                             .dragDisabled=${this.dragDisabled}
+                            .collapsedIds=${this.collapsedIds}
 
                             @tree-pointer-down=${this.onPointerDown}
                             @tree-drag-start=${this.onDragStart}
                             @tree-pointer-up=${this.onPointerUp}
+                            @tree-toggle-collapse=${this.onToggleCollapse}
 
                         ></todo-overlay-tree>
                     `
@@ -953,10 +1051,12 @@ export class TodoOverlayList extends LitElement {
                 .hoverPlacement=${this.hoverPlacement}
                 .hideCompleteForParents=${this.hideCompleteForParents}
                 .dragDisabled=${this.dragDisabled}
+                .collapsedIds=${this.collapsedIds}
 
                 @tree-pointer-down=${this.onPointerDown}
                 @tree-drag-start=${this.onDragStart}
                 @tree-pointer-up=${this.onPointerUp}
+                @tree-toggle-collapse=${this.onToggleCollapse}
 
             ></todo-overlay-tree>
         `;
@@ -1033,6 +1133,32 @@ export class TodoOverlayList extends LitElement {
                             <button @click=${this.openCreateDialog}>+ Add item</button>
                         </div>
                     `
+            }
+
+            ${
+                this.showFilterMenu
+                    ? html`
+                        <div class="filter-bar">
+                            <input
+                                type="text"
+                                class="filter-search"
+                                placeholder="Search"
+                                .value=${this.searchQuery}
+                                @input=${this.onSearchInput}
+                            />
+                            <div class="filter-chips">
+                                ${FILTER_MODES.map(mode => html`
+                                    <button
+                                        class=${classMap({"filter-chip": true, active: this.filterMode === mode})}
+                                        @click=${() => this.onFilterModeChanged(mode)}
+                                    >
+                                        ${FILTER_LABELS[mode]}
+                                    </button>
+                                `)}
+                            </div>
+                        </div>
+                    `
+                    : ""
             }
 
             ${

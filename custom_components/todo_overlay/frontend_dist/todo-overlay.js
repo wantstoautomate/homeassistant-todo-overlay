@@ -621,6 +621,30 @@ var i5 = class {
   }
 };
 
+// node_modules/lit-html/directives/class-map.js
+var e6 = e5(class extends i5 {
+  constructor(t5) {
+    if (super(t5), t5.type !== t4.ATTRIBUTE || "class" !== t5.name || t5.strings?.length > 2) throw Error("`classMap()` can only be used in the `class` attribute and must be the only part in the attribute.");
+  }
+  render(t5) {
+    return " " + Object.keys(t5).filter((s4) => t5[s4]).join(" ") + " ";
+  }
+  update(s4, [i7]) {
+    if (void 0 === this.st) {
+      this.st = /* @__PURE__ */ new Set(), void 0 !== s4.strings && (this.nt = new Set(s4.strings.join(" ").split(/\s/).filter((t5) => "" !== t5)));
+      for (const t5 in i7) i7[t5] && !this.nt?.has(t5) && this.st.add(t5);
+      return this.render(i7);
+    }
+    const r6 = s4.element.classList;
+    for (const t5 of this.st) t5 in i7 || (r6.remove(t5), this.st.delete(t5));
+    for (const t5 in i7) {
+      const s5 = !!i7[t5];
+      s5 === this.st.has(t5) || this.nt?.has(t5) || (s5 ? (r6.add(t5), this.st.add(t5)) : (r6.remove(t5), this.st.delete(t5)));
+    }
+    return E;
+  }
+});
+
 // node_modules/lit-html/directives/style-map.js
 var n5 = "important";
 var i6 = " !" + n5;
@@ -769,6 +793,49 @@ var TodoListEntityFeature = {
 };
 function supportsFeature(supportedFeatures, feature) {
   return typeof supportedFeatures === "number" && (supportedFeatures & feature) !== 0;
+}
+function isOverdue(item) {
+  if (item.completed) {
+    return false;
+  }
+  const raw = item.due_datetime ?? (item.due_date ? `${item.due_date}T00:00:00` : null);
+  if (!raw) {
+    return false;
+  }
+  const due = new Date(raw);
+  const now = /* @__PURE__ */ new Date();
+  const dueDay = new Date(due.getFullYear(), due.getMonth(), due.getDate());
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  return dueDay.getTime() < today.getTime();
+}
+
+// src/filter.ts
+function matchesMode(item, mode) {
+  switch (mode) {
+    case "all":
+      return true;
+    case "active":
+      return !item.completed;
+    case "completed":
+      return item.completed;
+    case "overdue":
+      return isOverdue(item);
+  }
+}
+function matchesQuery(item, query) {
+  return !query || item.title.toLowerCase().includes(query.toLowerCase());
+}
+function filterTree(items, mode, query) {
+  const trimmedQuery = query.trim();
+  const result = [];
+  for (const item of items) {
+    const filteredChildren = filterTree(item.children, mode, trimmedQuery);
+    const selfMatches = matchesMode(item, mode) && matchesQuery(item, trimmedQuery);
+    if (selfMatches || filteredChildren.length > 0) {
+      result.push({ ...item, children: filteredChildren });
+    }
+  }
+  return result;
 }
 
 // src/sort.ts
@@ -1416,30 +1483,6 @@ TodoSaveLoadDialog = __decorateClass([
   t3("todo-overlay-save-load-dialog")
 ], TodoSaveLoadDialog);
 
-// node_modules/lit-html/directives/class-map.js
-var e6 = e5(class extends i5 {
-  constructor(t5) {
-    if (super(t5), t5.type !== t4.ATTRIBUTE || "class" !== t5.name || t5.strings?.length > 2) throw Error("`classMap()` can only be used in the `class` attribute and must be the only part in the attribute.");
-  }
-  render(t5) {
-    return " " + Object.keys(t5).filter((s4) => t5[s4]).join(" ") + " ";
-  }
-  update(s4, [i7]) {
-    if (void 0 === this.st) {
-      this.st = /* @__PURE__ */ new Set(), void 0 !== s4.strings && (this.nt = new Set(s4.strings.join(" ").split(/\s/).filter((t5) => "" !== t5)));
-      for (const t5 in i7) i7[t5] && !this.nt?.has(t5) && this.st.add(t5);
-      return this.render(i7);
-    }
-    const r6 = s4.element.classList;
-    for (const t5 of this.st) t5 in i7 || (r6.remove(t5), this.st.delete(t5));
-    for (const t5 in i7) {
-      const s5 = !!i7[t5];
-      s5 === this.st.has(t5) || this.nt?.has(t5) || (s5 ? (r6.add(t5), this.st.add(t5)) : (r6.remove(t5), this.st.delete(t5)));
-    }
-    return E;
-  }
-});
-
 // src/components/todo-tree-item.ts
 var BEFORE_AFTER_ZONE = 0.3;
 var MOVE_CANCEL_THRESHOLD_PX = 6;
@@ -1451,6 +1494,11 @@ var CLOCK_ICON = b2`
         <path
             d="M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20zm.5 5v5.4l4.2 2.5-.8 1.3-5-3V7h1.6z"
         ></path>
+    </svg>
+`;
+var CHEVRON_ICON = b2`
+    <svg viewBox="0 0 24 24">
+        <path d="M8.59 16.59 13.17 12 8.59 7.41 10 6l6 6-6 6z"></path>
     </svg>
 `;
 function formatDue(item) {
@@ -1479,7 +1527,7 @@ function formatDue(item) {
   }
   return {
     label,
-    overdue: !item.completed && dueDay.getTime() < today.getTime()
+    overdue: isOverdue(item)
   };
 }
 var TodoTreeItem = class extends i4 {
@@ -1487,6 +1535,7 @@ var TodoTreeItem = class extends i4 {
     super(...arguments);
     this.hideCompleteForParents = false;
     this.dragDisabled = false;
+    this.collapsedIds = /* @__PURE__ */ new Set();
     this.dragEngaged = false;
     this.pointerDownAt = 0;
     this.hasMoved = false;
@@ -1550,6 +1599,31 @@ var TodoTreeItem = class extends i4 {
   // todo-item-dialog.ts's complete toggle).
   get checkboxHidden() {
     return this.hideCompleteForParents && this.item.children.length > 0;
+  }
+  get hasChildren() {
+    return this.item.children.length > 0;
+  }
+  get isCollapsed() {
+    return this.hasChildren && this.collapsedIds.has(this.item.id);
+  }
+  get childStatus() {
+    if (!this.hasChildren) {
+      return void 0;
+    }
+    return {
+      completed: this.item.children.filter((child) => child.completed).length,
+      total: this.item.children.length
+    };
+  }
+  toggleCollapse(e7) {
+    e7.stopPropagation();
+    this.dispatchEvent(
+      new CustomEvent("tree-toggle-collapse", {
+        detail: { id: this.item.id },
+        bubbles: true,
+        composed: true
+      })
+    );
   }
   pointerDown(e7) {
     this.pointerDownAt = Date.now();
@@ -1648,6 +1722,7 @@ var TodoTreeItem = class extends i4 {
     };
     const due = formatDue(this.item);
     const hasMeta = due || this.item.description || this.item.tags.length > 0;
+    const status = this.childStatus;
     return b2`
             <li>
 
@@ -1658,6 +1733,21 @@ var TodoTreeItem = class extends i4 {
                     @dblclick=${this.onDoubleClick}
                 >
                     ${isBeingDragged ? "" : b2`
+                                ${this.hasChildren ? b2`
+                                            <button
+                                                class=${e6({
+      "collapse-toggle": true,
+      collapsed: this.isCollapsed
+    })}
+                                                aria-label=${this.isCollapsed ? "Expand" : "Collapse"}
+                                                @click=${this.toggleCollapse}
+                                                @dblclick=${(e7) => e7.stopPropagation()}
+                                                @pointerdown=${(e7) => e7.stopPropagation()}
+                                            >
+                                                ${CHEVRON_ICON}
+                                            </button>
+                                        ` : b2`<span class="collapse-toggle-spacer"></span>`}
+
                                 <ha-checkbox
                                     style=${this.checkboxHidden ? "visibility: hidden" : ""}
                                     .checked=${this.item.completed}
@@ -1667,6 +1757,14 @@ var TodoTreeItem = class extends i4 {
                                     <div class="title-line">
                                         <span class="summary">${this.item.title}</span>
                                         ${this.item.quantity ? b2`<span class="quantity-chip">${this.item.quantity}</span>` : ""}
+                                        ${status ? b2`
+                                                    <span class=${e6({
+      "status-chip": true,
+      "all-done": status.completed === status.total
+    })}>
+                                                        ${status.completed}/${status.total}
+                                                    </span>
+                                                ` : ""}
                                     </div>
 
                                     ${hasMeta ? b2`
@@ -1694,7 +1792,7 @@ var TodoTreeItem = class extends i4 {
                             `}
                 </div>
 
-                ${this.item.children.length ? b2`
+                ${this.hasChildren && !this.isCollapsed ? b2`
                             <ul>
                                 ${this.item.children.map(
       (child) => b2`
@@ -1705,6 +1803,7 @@ var TodoTreeItem = class extends i4 {
                                             .hoverPlacement=${this.hoverPlacement}
                                             .hideCompleteForParents=${this.hideCompleteForParents}
                                             .dragDisabled=${this.dragDisabled}
+                                            .collapsedIds=${this.collapsedIds}
                                         ></todo-overlay-tree-item>
                                     `
     )}
@@ -1830,6 +1929,56 @@ TodoTreeItem.styles = i`
             flex-shrink: 0;
         }
 
+        .collapse-toggle {
+            flex-shrink: 0;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            width: 24px;
+            height: 24px;
+            margin-inline-start: -8px;
+            border: none;
+            background: none;
+            padding: 0;
+            cursor: pointer;
+            color: var(--secondary-text-color);
+        }
+
+        .collapse-toggle svg {
+            width: 20px;
+            height: 20px;
+            fill: currentColor;
+            transition: transform 150ms ease;
+            transform: rotate(90deg);
+        }
+
+        .collapse-toggle.collapsed svg {
+            transform: rotate(0deg);
+        }
+
+        .collapse-toggle-spacer {
+            flex-shrink: 0;
+            width: 24px;
+            margin-inline-start: -8px;
+        }
+
+        .status-chip {
+            flex-shrink: 0;
+            font-family: Roboto, "Noto Sans", sans-serif;
+            font-size: 12px;
+            font-weight: 600;
+            color: var(--secondary-text-color);
+            background: rgba(var(--rgb-primary-text-color, 0, 0, 0), 0.08);
+            padding: 1px 7px;
+            border-radius: 10px;
+            white-space: nowrap;
+        }
+
+        .status-chip.all-done {
+            color: var(--success-color, #4caf50);
+            background: rgba(var(--rgb-success-color, 76, 175, 80), 0.12);
+        }
+
         /* Secondary metadata line: due date + description today, with
            room to append more chips (e.g. tags) here later without
            restructuring the row. Lives in the same content column as
@@ -1914,6 +2063,9 @@ __decorateClass([
   n4({ attribute: false })
 ], TodoTreeItem.prototype, "dragDisabled", 2);
 __decorateClass([
+  n4({ attribute: false })
+], TodoTreeItem.prototype, "collapsedIds", 2);
+__decorateClass([
   r5()
 ], TodoTreeItem.prototype, "holdRippleOrigin", 2);
 __decorateClass([
@@ -1930,6 +2082,7 @@ var TodoTree = class extends i4 {
     this.items = [];
     this.hideCompleteForParents = false;
     this.dragDisabled = false;
+    this.collapsedIds = /* @__PURE__ */ new Set();
   }
   render() {
     return b2`
@@ -1943,6 +2096,7 @@ var TodoTree = class extends i4 {
                             .hoverPlacement=${this.hoverPlacement}
                             .hideCompleteForParents=${this.hideCompleteForParents}
                             .dragDisabled=${this.dragDisabled}
+                            .collapsedIds=${this.collapsedIds}
                         ></todo-overlay-tree-item>
                     `
     )}
@@ -1975,6 +2129,9 @@ __decorateClass([
 __decorateClass([
   n4({ attribute: false })
 ], TodoTree.prototype, "dragDisabled", 2);
+__decorateClass([
+  n4({ attribute: false })
+], TodoTree.prototype, "collapsedIds", 2);
 TodoTree = __decorateClass([
   t3("todo-overlay-tree")
 ], TodoTree);
@@ -2047,6 +2204,13 @@ function splitDueDateTime(iso) {
   return { date: date ?? "", time: (time ?? "").slice(0, 5) };
 }
 var UNDO_TIMEOUT_MS = 8e3;
+var FILTER_MODES = ["all", "active", "completed", "overdue"];
+var FILTER_LABELS = {
+  all: "All",
+  active: "Active",
+  completed: "Completed",
+  overdue: "Overdue"
+};
 var TodoOverlayList = class extends i4 {
   constructor() {
     super(...arguments);
@@ -2057,6 +2221,10 @@ var TodoOverlayList = class extends i4 {
     this.showSaveLoadButtons = true;
     this.showQuickAdd = true;
     this.confirmDelete = true;
+    this.showFilterMenu = false;
+    this.collapsedIds = /* @__PURE__ */ new Set();
+    this.filterMode = "all";
+    this.searchQuery = "";
     this.dragGhostOffset = { x: 0, y: 0 };
     this.rowSnapshot = [];
     this.quickAddValue = "";
@@ -2181,6 +2349,22 @@ var TodoOverlayList = class extends i4 {
     window.removeEventListener("pointermove", this.onGlobalPointerMove, { capture: true });
     window.removeEventListener("pointerup", this.onGlobalPointerUp, { capture: true });
     window.removeEventListener("pointercancel", this.onGlobalPointerUp, { capture: true });
+  }
+  // --- collapse / filter / search --------------------------------------
+  onToggleCollapse(e7) {
+    const next = new Set(this.collapsedIds);
+    if (next.has(e7.detail.id)) {
+      next.delete(e7.detail.id);
+    } else {
+      next.add(e7.detail.id);
+    }
+    this.collapsedIds = next;
+  }
+  onFilterModeChanged(mode) {
+    this.filterMode = mode;
+  }
+  onSearchInput(e7) {
+    this.searchQuery = e7.target.value;
   }
   // --- completion + cascade undo --------------------------------------
   async toggleComplete(item) {
@@ -2402,7 +2586,8 @@ var TodoOverlayList = class extends i4 {
     }
   }
   renderTree(list) {
-    const items = sortTree(list.items, this.sortBy, this.sortOrder);
+    const filtered = filterTree(list.items, this.filterMode, this.searchQuery);
+    const items = sortTree(filtered, this.sortBy, this.sortOrder);
     const completedItems = items.filter((item) => item.completed);
     if (completedItems.length === 0) {
       return b2`
@@ -2413,10 +2598,12 @@ var TodoOverlayList = class extends i4 {
                     .hoverPlacement=${this.hoverPlacement}
                     .hideCompleteForParents=${this.hideCompleteForParents}
                     .dragDisabled=${this.dragDisabled}
+                    .collapsedIds=${this.collapsedIds}
 
                     @tree-pointer-down=${this.onPointerDown}
                     @tree-drag-start=${this.onDragStart}
                     @tree-pointer-up=${this.onPointerUp}
+                    @tree-toggle-collapse=${this.onToggleCollapse}
 
                 ></todo-overlay-tree>
             `;
@@ -2432,10 +2619,12 @@ var TodoOverlayList = class extends i4 {
                             .hoverPlacement=${this.hoverPlacement}
                             .hideCompleteForParents=${this.hideCompleteForParents}
                             .dragDisabled=${this.dragDisabled}
+                            .collapsedIds=${this.collapsedIds}
 
                             @tree-pointer-down=${this.onPointerDown}
                             @tree-drag-start=${this.onDragStart}
                             @tree-pointer-up=${this.onPointerUp}
+                            @tree-toggle-collapse=${this.onToggleCollapse}
 
                         ></todo-overlay-tree>
                     ` : ""}
@@ -2455,10 +2644,12 @@ var TodoOverlayList = class extends i4 {
                 .hoverPlacement=${this.hoverPlacement}
                 .hideCompleteForParents=${this.hideCompleteForParents}
                 .dragDisabled=${this.dragDisabled}
+                .collapsedIds=${this.collapsedIds}
 
                 @tree-pointer-down=${this.onPointerDown}
                 @tree-drag-start=${this.onDragStart}
                 @tree-pointer-up=${this.onPointerUp}
+                @tree-toggle-collapse=${this.onToggleCollapse}
 
             ></todo-overlay-tree>
         `;
@@ -2518,6 +2709,28 @@ var TodoOverlayList = class extends i4 {
                             <button @click=${this.openCreateDialog}>+ Add item</button>
                         </div>
                     `}
+
+            ${this.showFilterMenu ? b2`
+                        <div class="filter-bar">
+                            <input
+                                type="text"
+                                class="filter-search"
+                                placeholder="Search"
+                                .value=${this.searchQuery}
+                                @input=${this.onSearchInput}
+                            />
+                            <div class="filter-chips">
+                                ${FILTER_MODES.map((mode) => b2`
+                                    <button
+                                        class=${e6({ "filter-chip": true, active: this.filterMode === mode })}
+                                        @click=${() => this.onFilterModeChanged(mode)}
+                                    >
+                                        ${FILTER_LABELS[mode]}
+                                    </button>
+                                `)}
+                            </div>
+                        </div>
+                    ` : ""}
 
             ${this.error ? b2`
                         <div style="padding:16px; color: var(--error-color)">
@@ -2617,6 +2830,53 @@ TodoOverlayList.styles = i`
             font-weight: 500;
             cursor: pointer;
             padding: 4px 0;
+        }
+
+        .filter-bar {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            padding: 4px 20px 12px;
+            font-family: Roboto, "Noto Sans", sans-serif;
+        }
+
+        .filter-search {
+            font-family: inherit;
+            font-size: 14px;
+            color: var(--primary-text-color);
+            background: none;
+            border: none;
+            border-bottom: 1px solid var(--divider-color);
+            padding: 6px 0;
+            outline: none;
+        }
+
+        .filter-search:focus {
+            border-bottom: 2px solid var(--primary-color);
+            padding-bottom: 5px;
+        }
+
+        .filter-chips {
+            display: flex;
+            gap: 8px;
+            flex-wrap: wrap;
+        }
+
+        .filter-chip {
+            border: 1px solid var(--divider-color);
+            background: none;
+            border-radius: 12px;
+            padding: 4px 12px;
+            font-family: inherit;
+            font-size: 12px;
+            color: var(--secondary-text-color);
+            cursor: pointer;
+        }
+
+        .filter-chip.active {
+            border-color: var(--primary-color);
+            color: var(--primary-color);
+            background: rgba(var(--rgb-primary-color, 3, 169, 244), 0.12);
         }
 
         .list-actions {
@@ -2761,8 +3021,20 @@ __decorateClass([
   n4({ type: Boolean })
 ], TodoOverlayList.prototype, "confirmDelete", 2);
 __decorateClass([
+  n4({ type: Boolean })
+], TodoOverlayList.prototype, "showFilterMenu", 2);
+__decorateClass([
   r5()
 ], TodoOverlayList.prototype, "list", 2);
+__decorateClass([
+  r5()
+], TodoOverlayList.prototype, "collapsedIds", 2);
+__decorateClass([
+  r5()
+], TodoOverlayList.prototype, "filterMode", 2);
+__decorateClass([
+  r5()
+], TodoOverlayList.prototype, "searchQuery", 2);
 __decorateClass([
   r5()
 ], TodoOverlayList.prototype, "error", 2);
@@ -2950,6 +3222,13 @@ var TodoOverlayCardEditor = class extends i4 {
                     @change=${this.onSwitchChanged("show_quick_add", true)}
                 ></ha-switch>
             </ha-formfield>
+
+            <ha-formfield label="Filter and search bar">
+                <ha-switch
+                    .checked=${this._config.show_filter_menu ?? false}
+                    @change=${this.onSwitchChanged("show_filter_menu", false)}
+                ></ha-switch>
+            </ha-formfield>
         `;
   }
 };
@@ -3069,6 +3348,7 @@ var TodoOverlayCard = class extends i4 {
                             .showSaveLoadButtons=${this.config.show_save_load_buttons ?? true}
                             .showQuickAdd=${this.config.show_quick_add ?? true}
                             .confirmDelete=${this.config.confirm_delete ?? true}
+                            .showFilterMenu=${this.config.show_filter_menu ?? false}
                         ></todo-overlay-list>
                     </div>
                 `)}
@@ -3149,8 +3429,8 @@ lit-html/is-server.js:
    * SPDX-License-Identifier: BSD-3-Clause
    *)
 
-lit-html/directives/style-map.js:
 lit-html/directives/class-map.js:
+lit-html/directives/style-map.js:
   (**
    * @license
    * Copyright 2018 Google LLC

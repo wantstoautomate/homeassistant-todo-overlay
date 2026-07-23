@@ -251,6 +251,13 @@ export class TodoOverlayCardEditor extends LitElement {
                     @change=${this.onSwitchChanged("show_quick_add", true)}
                 ></ha-switch>
             </ha-formfield>
+
+            <ha-formfield label="Filter and search bar">
+                <ha-switch
+                    .checked=${this._config.show_filter_menu ?? false}
+                    @change=${this.onSwitchChanged("show_filter_menu", false)}
+                ></ha-switch>
+            </ha-formfield>
         `;
     }
 }

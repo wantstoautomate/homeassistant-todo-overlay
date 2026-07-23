@@ -34,6 +34,9 @@ export class TodoTree extends LitElement {
     @property({attribute: false})
     dragDisabled = false;
 
+    @property({attribute: false})
+    collapsedIds: Set<string> = new Set();
+
     render() {
         return html`
             <ul>
@@ -46,6 +49,7 @@ export class TodoTree extends LitElement {
                             .hoverPlacement=${this.hoverPlacement}
                             .hideCompleteForParents=${this.hideCompleteForParents}
                             .dragDisabled=${this.dragDisabled}
+                            .collapsedIds=${this.collapsedIds}
                         ></todo-overlay-tree-item>
                     `,
                 )}

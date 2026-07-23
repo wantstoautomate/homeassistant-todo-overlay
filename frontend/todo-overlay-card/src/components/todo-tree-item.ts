@@ -3,7 +3,7 @@ import {customElement, property, state} from "lit/decorators.js";
 import {classMap} from "lit/directives/class-map.js";
 import {styleMap} from "lit/directives/style-map.js";
 
-import {LONG_PRESS_MS, type Placement, type TodoItem} from "../models";
+import {LONG_PRESS_MS, type Placement, type TodoItem, isOverdue} from "../models";
 
 // How far into a row's top/bottom the pointer needs to be to count as
 // "before"/"after" rather than "inside" (reparent). Exported so the
@@ -33,6 +33,15 @@ const CLOCK_ICON = html`
         <path
             d="M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20zm.5 5v5.4l4.2 2.5-.8 1.3-5-3V7h1.6z"
         ></path>
+    </svg>
+`;
+
+// Points right when collapsed (children hidden), down when expanded -
+// a single path, rotated via CSS rather than swapped, so the direction
+// change can transition instead of popping.
+const CHEVRON_ICON = html`
+    <svg viewBox="0 0 24 24">
+        <path d="M8.59 16.59 13.17 12 8.59 7.41 10 6l6 6-6 6z"></path>
     </svg>
 `;
 
@@ -68,7 +77,7 @@ function formatDue(item: TodoItem): {label: string; overdue: boolean} | undefine
 
     return {
         label,
-        overdue: !item.completed && dueDay.getTime() < today.getTime(),
+        overdue: isOverdue(item),
     };
 }
 
@@ -201,6 +210,56 @@ export class TodoTreeItem extends LitElement {
             flex-shrink: 0;
         }
 
+        .collapse-toggle {
+            flex-shrink: 0;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            width: 24px;
+            height: 24px;
+            margin-inline-start: -8px;
+            border: none;
+            background: none;
+            padding: 0;
+            cursor: pointer;
+            color: var(--secondary-text-color);
+        }
+
+        .collapse-toggle svg {
+            width: 20px;
+            height: 20px;
+            fill: currentColor;
+            transition: transform 150ms ease;
+            transform: rotate(90deg);
+        }
+
+        .collapse-toggle.collapsed svg {
+            transform: rotate(0deg);
+        }
+
+        .collapse-toggle-spacer {
+            flex-shrink: 0;
+            width: 24px;
+            margin-inline-start: -8px;
+        }
+
+        .status-chip {
+            flex-shrink: 0;
+            font-family: Roboto, "Noto Sans", sans-serif;
+            font-size: 12px;
+            font-weight: 600;
+            color: var(--secondary-text-color);
+            background: rgba(var(--rgb-primary-text-color, 0, 0, 0), 0.08);
+            padding: 1px 7px;
+            border-radius: 10px;
+            white-space: nowrap;
+        }
+
+        .status-chip.all-done {
+            color: var(--success-color, #4caf50);
+            background: rgba(var(--rgb-success-color, 76, 175, 80), 0.12);
+        }
+
         /* Secondary metadata line: due date + description today, with
            room to append more chips (e.g. tags) here later without
            restructuring the row. Lives in the same content column as
@@ -291,6 +350,13 @@ export class TodoTreeItem extends LitElement {
     @property({attribute: false})
     dragDisabled = false;
 
+    // Owned by todo-overlay-list.ts, not this component - collapse state
+    // needs to survive this row's own re-renders (e.g. every list reload)
+    // and be visible to ancestors for the same reason draggedId/hoverId
+    // already are, so it's threaded down rather than kept as local state.
+    @property({attribute: false})
+    collapsedIds: Set<string> = new Set();
+
     @state()
     private holdRippleOrigin?: {x: number; y: number};
 
@@ -332,6 +398,37 @@ export class TodoTreeItem extends LitElement {
     // todo-item-dialog.ts's complete toggle).
     private get checkboxHidden(): boolean {
         return this.hideCompleteForParents && this.item.children.length > 0;
+    }
+
+    private get hasChildren(): boolean {
+        return this.item.children.length > 0;
+    }
+
+    private get isCollapsed(): boolean {
+        return this.hasChildren && this.collapsedIds.has(this.item.id);
+    }
+
+    private get childStatus(): {completed: number; total: number} | undefined {
+        if (!this.hasChildren) {
+            return undefined;
+        }
+
+        return {
+            completed: this.item.children.filter(child => child.completed).length,
+            total: this.item.children.length,
+        };
+    }
+
+    private toggleCollapse(e: Event) {
+        e.stopPropagation();
+
+        this.dispatchEvent(
+            new CustomEvent("tree-toggle-collapse", {
+                detail: {id: this.item.id},
+                bubbles: true,
+                composed: true,
+            }),
+        );
     }
 
     private pointerDown(e: PointerEvent) {
@@ -528,6 +625,7 @@ export class TodoTreeItem extends LitElement {
 
         const due = formatDue(this.item);
         const hasMeta = due || this.item.description || this.item.tags.length > 0;
+        const status = this.childStatus;
 
         return html`
             <li>
@@ -542,6 +640,25 @@ export class TodoTreeItem extends LitElement {
                         isBeingDragged
                             ? ""
                             : html`
+                                ${
+                                    this.hasChildren
+                                        ? html`
+                                            <button
+                                                class=${classMap({
+                                                    "collapse-toggle": true,
+                                                    collapsed: this.isCollapsed,
+                                                })}
+                                                aria-label=${this.isCollapsed ? "Expand" : "Collapse"}
+                                                @click=${this.toggleCollapse}
+                                                @dblclick=${(e: Event) => e.stopPropagation()}
+                                                @pointerdown=${(e: Event) => e.stopPropagation()}
+                                            >
+                                                ${CHEVRON_ICON}
+                                            </button>
+                                        `
+                                        : html`<span class="collapse-toggle-spacer"></span>`
+                                }
+
                                 <ha-checkbox
                                     style=${this.checkboxHidden ? "visibility: hidden" : ""}
                                     .checked=${this.item.completed}
@@ -553,6 +670,18 @@ export class TodoTreeItem extends LitElement {
                                         ${
                                             this.item.quantity
                                                 ? html`<span class="quantity-chip">${this.item.quantity}</span>`
+                                                : ""
+                                        }
+                                        ${
+                                            status
+                                                ? html`
+                                                    <span class=${classMap({
+                                                        "status-chip": true,
+                                                        "all-done": status.completed === status.total,
+                                                    })}>
+                                                        ${status.completed}/${status.total}
+                                                    </span>
+                                                `
                                                 : ""
                                         }
                                     </div>
@@ -600,7 +729,7 @@ export class TodoTreeItem extends LitElement {
                 </div>
 
                 ${
-                    this.item.children.length
+                    this.hasChildren && !this.isCollapsed
                         ? html`
                             <ul>
                                 ${this.item.children.map(
@@ -612,6 +741,7 @@ export class TodoTreeItem extends LitElement {
                                             .hoverPlacement=${this.hoverPlacement}
                                             .hideCompleteForParents=${this.hideCompleteForParents}
                                             .dragDisabled=${this.dragDisabled}
+                                            .collapsedIds=${this.collapsedIds}
                                         ></todo-overlay-tree-item>
                                     `,
                                 )}

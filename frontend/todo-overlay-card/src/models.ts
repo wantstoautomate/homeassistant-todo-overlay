@@ -45,3 +45,27 @@ export function supportsFeature(
         (supportedFeatures & feature) !== 0
     );
 }
+
+// Day-level (not exact-time) overdue check, shared between the row's
+// due-chip styling and the filter bar's "Overdue" mode so both agree on
+// exactly the same definition - an item due earlier today isn't overdue
+// until tomorrow, regardless of what time of day it's now.
+export function isOverdue(item: TodoItem): boolean {
+    if (item.completed) {
+        return false;
+    }
+
+    const raw = item.due_datetime ?? (item.due_date ? `${item.due_date}T00:00:00` : null);
+
+    if (!raw) {
+        return false;
+    }
+
+    const due = new Date(raw);
+    const now = new Date();
+
+    const dueDay = new Date(due.getFullYear(), due.getMonth(), due.getDate());
+    const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+
+    return dueDay.getTime() < today.getTime();
+}
