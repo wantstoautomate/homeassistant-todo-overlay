@@ -675,10 +675,11 @@ var o6 = e5(class extends i5 {
 });
 
 // src/api.ts
-async function getList(hass, entityId) {
+async function getList(hass, entityId, groupCompleted) {
   return await hass.connection.sendMessagePromise({
     type: "todo_overlay/get_list",
-    entity_id: entityId
+    entity_id: entityId,
+    group_completed: groupCompleted
   });
 }
 async function moveItem(hass, entityId, childId, referenceId, placement) {
@@ -690,12 +691,13 @@ async function moveItem(hass, entityId, childId, referenceId, placement) {
     placement
   });
 }
-async function setCompleted(hass, entityId, itemId, completed) {
+async function setCompleted(hass, entityId, itemId, completed, reposition) {
   const result = await hass.connection.sendMessagePromise({
     type: "todo_overlay/set_completed",
     entity_id: entityId,
     item_id: itemId,
-    completed
+    completed,
+    reposition
   });
   return result.changed;
 }
@@ -2169,6 +2171,11 @@ var LOAD_ICON = b2`
         <path d="M20,18H4V8H20M20,6H12L10,4H4C2.89,4 2,4.89 2,6V18A2,2 0 0,0 4,20H20A2,2 0 0,0 22,18V8C22,6.89 21.1,6 20,6Z"></path>
     </svg>
 `;
+var CLEAR_COMPLETED_ICON = b2`
+    <svg viewBox="0 0 24 24">
+        <path d="M9,3V4H4V6H5V19A2,2 0 0,0 7,21H17A2,2 0 0,0 19,19V6H20V4H15V3H9M7,6H17V19H7V6M9,8V17H11V8H9M13,8V17H15V8H13Z"></path>
+    </svg>
+`;
 function collectAllRows(root) {
   const rows = [];
   for (const el of Array.from(root.querySelectorAll("*"))) {
@@ -2254,6 +2261,7 @@ var TodoOverlayList = class extends i4 {
     this.showQuickAdd = true;
     this.confirmDelete = true;
     this.showFilterMenu = false;
+    this.moveCompletedItems = false;
     this.collapsedIds = /* @__PURE__ */ new Set();
     this.filterMode = "all";
     this.quickAddExpanded = false;
@@ -2313,7 +2321,8 @@ var TodoOverlayList = class extends i4 {
     try {
       this.list = await getList(
         this.hass,
-        this.entity
+        this.entity,
+        this.moveCompletedItems
       );
       this.error = void 0;
     } catch (err) {
@@ -2414,7 +2423,8 @@ var TodoOverlayList = class extends i4 {
         this.hass,
         this.entity,
         item.id,
-        !item.completed
+        !item.completed,
+        this.moveCompletedItems
       );
       await this.load();
       if (changes.length > 1) {
@@ -2629,6 +2639,25 @@ var TodoOverlayList = class extends i4 {
   renderTree(list) {
     const filtered = filterTree(list.items, this.filterMode);
     const items = sortTree(filtered, this.sortBy, this.sortOrder);
+    if (!this.moveCompletedItems) {
+      return b2`
+                <todo-overlay-tree
+                    .items=${items}
+                    .draggedId=${this.draggedId}
+                    .hoverId=${this.hoverId}
+                    .hoverPlacement=${this.hoverPlacement}
+                    .hideCompleteForParents=${this.hideCompleteForParents}
+                    .dragDisabled=${this.dragDisabled}
+                    .collapsedIds=${this.collapsedIds}
+
+                    @tree-pointer-down=${this.onPointerDown}
+                    @tree-drag-start=${this.onDragStart}
+                    @tree-pointer-up=${this.onPointerUp}
+                    @tree-toggle-collapse=${this.onToggleCollapse}
+
+                ></todo-overlay-tree>
+            `;
+    }
     const completedItems = items.filter((item) => item.completed);
     if (completedItems.length === 0) {
       return b2`
@@ -2670,14 +2699,7 @@ var TodoOverlayList = class extends i4 {
                         ></todo-overlay-tree>
                     ` : ""}
 
-            <div class="section-header">
-                <span>Completed</span>
-                ${this.showClearButton ? b2`
-                            <button class="clear-completed" @click=${this.onClearCompleted}>
-                                Clear completed
-                            </button>
-                        ` : ""}
-            </div>
+            <div class="section-header">Completed</div>
             <todo-overlay-tree
                 .items=${completedItems}
                 .draggedId=${this.draggedId}
@@ -2721,7 +2743,7 @@ var TodoOverlayList = class extends i4 {
         `;
   }
   render() {
-    const hasToolbar = this.showQuickAdd || this.showFilterMenu || this.showSaveLoadButtons;
+    const hasToolbar = this.showQuickAdd || this.showFilterMenu || this.showSaveLoadButtons || this.showClearButton;
     return b2`
             ${hasToolbar ? b2`
                         <div class="toolbar">
@@ -2776,6 +2798,16 @@ var TodoOverlayList = class extends i4 {
                                             @click=${this.openLoadDialog}
                                         >
                                             ${LOAD_ICON}
+                                        </button>
+                                    ` : ""}
+
+                            ${this.showClearButton ? b2`
+                                        <button
+                                            class="toolbar-icon"
+                                            aria-label="Clear completed"
+                                            @click=${this.onClearCompleted}
+                                        >
+                                            ${CLEAR_COMPLETED_ICON}
                                         </button>
                                     ` : ""}
                         </div>
@@ -3016,9 +3048,6 @@ TodoOverlayList.styles = i`
         }
 
         .section-header {
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
             padding: 14px 16px 6px;
             font-family: Roboto, "Noto Sans", sans-serif;
             font-size: 12px;
@@ -3026,17 +3055,6 @@ TodoOverlayList.styles = i`
             letter-spacing: 0.06em;
             text-transform: uppercase;
             color: var(--secondary-text-color);
-        }
-
-        .section-header .clear-completed {
-            border: none;
-            background: none;
-            color: var(--primary-color);
-            font-family: inherit;
-            font-size: 12px;
-            font-weight: 500;
-            cursor: pointer;
-            padding: 4px;
         }
 
         /* Follows the pointer while an item is being dragged (see
@@ -3107,6 +3125,9 @@ __decorateClass([
 __decorateClass([
   n4({ type: Boolean })
 ], TodoOverlayList.prototype, "showFilterMenu", 2);
+__decorateClass([
+  n4({ type: Boolean })
+], TodoOverlayList.prototype, "moveCompletedItems", 2);
 __decorateClass([
   r5()
 ], TodoOverlayList.prototype, "list", 2);
@@ -3272,8 +3293,15 @@ var TodoOverlayCardEditor = class extends i4 {
 
             <ha-formfield label="Hide complete checkbox for parents">
                 <ha-switch
-                    .checked=${this._config.hide_complete_for_parents ?? false}
-                    @change=${this.onSwitchChanged("hide_complete_for_parents", false)}
+                    .checked=${this._config.hide_complete_for_parents ?? true}
+                    @change=${this.onSwitchChanged("hide_complete_for_parents", true)}
+                ></ha-switch>
+            </ha-formfield>
+
+            <ha-formfield label="Move completed items to the bottom">
+                <ha-switch
+                    .checked=${this._config.move_completed_items ?? false}
+                    @change=${this.onSwitchChanged("move_completed_items", false)}
                 ></ha-switch>
             </ha-formfield>
 
@@ -3307,7 +3335,7 @@ var TodoOverlayCardEditor = class extends i4 {
                 ></ha-switch>
             </ha-formfield>
 
-            <ha-formfield label="Filter and search bar">
+            <ha-formfield label="Filter icon in toolbar">
                 <ha-switch
                     .checked=${this._config.show_filter_menu ?? false}
                     @change=${this.onSwitchChanged("show_filter_menu", false)}
@@ -3425,7 +3453,7 @@ var TodoOverlayCard = class extends i4 {
                         <todo-overlay-list
                             .hass=${this.hass}
                             .entity=${entityId}
-                            .hideCompleteForParents=${this.config.hide_complete_for_parents ?? false}
+                            .hideCompleteForParents=${this.config.hide_complete_for_parents ?? true}
                             .sortBy=${this.config.sort_by ?? "manual"}
                             .sortOrder=${this.config.sort_order ?? "asc"}
                             .showClearButton=${this.config.show_clear_completed_button ?? true}
@@ -3433,6 +3461,7 @@ var TodoOverlayCard = class extends i4 {
                             .showQuickAdd=${this.config.show_quick_add ?? true}
                             .confirmDelete=${this.config.confirm_delete ?? true}
                             .showFilterMenu=${this.config.show_filter_menu ?? false}
+                            .moveCompletedItems=${this.config.move_completed_items ?? false}
                         ></todo-overlay-list>
                     </div>
                 `)}

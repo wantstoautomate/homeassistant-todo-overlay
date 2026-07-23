@@ -84,6 +84,7 @@ def _handle_manager_errors(handler: WebSocketHandler) -> WebSocketHandler:
     {
         vol.Required("type"): WS_TYPE_GET_LIST,
         vol.Required("entity_id"): cv.entity_id,
+        vol.Optional("group_completed", default=False): bool,
     }
 )
 @websocket_api.async_response
@@ -99,6 +100,7 @@ async def websocket_get_list(
 
     todo_list = await manager.get_list(
         msg["entity_id"],
+        group_completed=msg["group_completed"],
     )
 
     connection.send_result(
@@ -143,6 +145,7 @@ async def websocket_move_item(
         vol.Required("entity_id"): cv.entity_id,
         vol.Required("item_id"): str,
         vol.Required("completed"): bool,
+        vol.Optional("reposition", default=False): bool,
     }
 )
 @websocket_api.async_response
@@ -160,6 +163,7 @@ async def websocket_set_completed(
         entity_id=msg["entity_id"],
         item_id=msg["item_id"],
         completed=msg["completed"],
+        reposition=msg["reposition"],
     )
 
     connection.send_result(msg["id"], {"changed": changed})

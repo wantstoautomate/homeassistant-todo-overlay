@@ -208,6 +208,59 @@ async def test_manager_set_completed_cascades_to_descendants():
 
 
 @pytest.mark.asyncio
+async def test_manager_set_completed_does_not_reposition_by_default():
+
+    adapter = FakeAdapter(items=[
+        TodoItem(id="1", title="First", completed=False),
+        TodoItem(id="2", title="Second", completed=False),
+        TodoItem(id="3", title="Already done", completed=True),
+    ])
+
+    metadata_store = FakeMetadataStore({
+        "1": ItemPosition(parent_id=None, order=0),
+        "2": ItemPosition(parent_id=None, order=1),
+        "3": ItemPosition(parent_id=None, order=2),
+    })
+
+    manager = TodoManager(adapter=adapter, metadata_store=metadata_store)
+
+    # No reposition= argument at all - the default should leave stored
+    # order untouched, matching a plain checkbox tap's expected behavior.
+    await manager.set_completed(entity_id="todo.shopping", item_id="1", completed=True)
+
+    todo_list = await manager.get_list("todo.shopping")
+
+    assert [item.id for item in todo_list.items] == ["1", "2", "3"]
+    assert todo_list.items[0].completed is True
+
+
+@pytest.mark.asyncio
+async def test_manager_set_completed_reposition_false_leaves_order_untouched():
+
+    adapter = FakeAdapter(items=[
+        TodoItem(id="1", title="Was done", completed=True),
+        TodoItem(id="2", title="Still incomplete", completed=False),
+        TodoItem(id="3", title="Also done", completed=True),
+    ])
+
+    metadata_store = FakeMetadataStore({
+        "1": ItemPosition(parent_id=None, order=0),
+        "2": ItemPosition(parent_id=None, order=1),
+        "3": ItemPosition(parent_id=None, order=2),
+    })
+
+    manager = TodoManager(adapter=adapter, metadata_store=metadata_store)
+
+    await manager.set_completed(entity_id="todo.shopping", item_id="1", completed=False, reposition=False)
+
+    todo_list = await manager.get_list("todo.shopping")
+
+    assert [item.id for item in todo_list.items] == ["1", "2", "3"]
+    assert todo_list.items[0].completed is False
+    assert metadata_store.set_positions_calls == []
+
+
+@pytest.mark.asyncio
 async def test_manager_set_completed_moves_item_to_top_of_completed_group():
 
     adapter = FakeAdapter(items=[
@@ -224,7 +277,7 @@ async def test_manager_set_completed_moves_item_to_top_of_completed_group():
 
     manager = TodoManager(adapter=adapter, metadata_store=metadata_store)
 
-    await manager.set_completed(entity_id="todo.shopping", item_id="1", completed=True)
+    await manager.set_completed(entity_id="todo.shopping", item_id="1", completed=True, reposition=True)
 
     todo_list = await manager.get_list("todo.shopping")
 
@@ -251,7 +304,7 @@ async def test_manager_set_completed_moves_item_to_bottom_of_incomplete_group():
 
     manager = TodoManager(adapter=adapter, metadata_store=metadata_store)
 
-    await manager.set_completed(entity_id="todo.shopping", item_id="1", completed=False)
+    await manager.set_completed(entity_id="todo.shopping", item_id="1", completed=False, reposition=True)
 
     todo_list = await manager.get_list("todo.shopping")
 
@@ -284,7 +337,7 @@ async def test_manager_set_completed_repositions_auto_completed_parent_among_sib
     # it should reposition among its own root-level siblings, landing
     # at the top of the completed ones (right after the incomplete
     # root), even though its own completion was never directly set.
-    await manager.set_completed(entity_id="todo.shopping", item_id="4", completed=True)
+    await manager.set_completed(entity_id="todo.shopping", item_id="4", completed=True, reposition=True)
 
     todo_list = await manager.get_list("todo.shopping")
 
@@ -321,7 +374,7 @@ async def test_manager_reposition_uses_derived_not_raw_completed_for_siblings():
 
     manager = TodoManager(adapter=adapter, metadata_store=metadata_store)
 
-    await manager.set_completed(entity_id="todo.shopping", item_id="egg", completed=True)
+    await manager.set_completed(entity_id="todo.shopping", item_id="egg", completed=True, reposition=True)
 
     todo_list = await manager.get_list("todo.shopping")
 
@@ -1436,7 +1489,7 @@ async def test_manager_set_completed_deep_cascade_repositions_every_level():
     # derived-complete (both its children now complete), and root
     # becomes derived-complete too (its only child, mid, now is).
     changed = await manager.set_completed(
-        entity_id="todo.shopping", item_id="leaf-a", completed=True,
+        entity_id="todo.shopping", item_id="leaf-a", completed=True, reposition=True,
     )
 
     assert {c["id"] for c in changed} == {"leaf-a"}

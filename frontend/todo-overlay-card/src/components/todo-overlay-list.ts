@@ -68,6 +68,12 @@ const LOAD_ICON = html`
     </svg>
 `;
 
+const CLEAR_COMPLETED_ICON = html`
+    <svg viewBox="0 0 24 24">
+        <path d="M9,3V4H4V6H5V19A2,2 0 0,0 7,21H17A2,2 0 0,0 19,19V6H20V4H15V3H9M7,6H17V19H7V6M9,8V17H11V8H9M13,8V17H15V8H13Z"></path>
+    </svg>
+`;
+
 interface TreeItemElement extends Element {
     item?: TodoItem;
 }
@@ -388,9 +394,6 @@ export class TodoOverlayList extends LitElement {
         }
 
         .section-header {
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
             padding: 14px 16px 6px;
             font-family: Roboto, "Noto Sans", sans-serif;
             font-size: 12px;
@@ -398,17 +401,6 @@ export class TodoOverlayList extends LitElement {
             letter-spacing: 0.06em;
             text-transform: uppercase;
             color: var(--secondary-text-color);
-        }
-
-        .section-header .clear-completed {
-            border: none;
-            background: none;
-            color: var(--primary-color);
-            font-family: inherit;
-            font-size: 12px;
-            font-weight: 500;
-            cursor: pointer;
-            padding: 4px;
         }
 
         /* Follows the pointer while an item is being dragged (see
@@ -479,6 +471,14 @@ export class TodoOverlayList extends LitElement {
 
     @property({type: Boolean})
     public showFilterMenu = false;
+
+    // Off by default: completing/uncompleting an item never repositions
+    // it (backend) or splits it into a separate Active/Completed section
+    // (see renderTree) - a plain checkbox tap just flips the check, full
+    // stop. Turning this on restores the old "completed items sink to
+    // the bottom, uncompleted rise back up" behavior end to end.
+    @property({type: Boolean})
+    public moveCompletedItems = false;
 
     @state()
     private list?: TodoList;
@@ -560,6 +560,7 @@ export class TodoOverlayList extends LitElement {
             this.list = await getList(
                 this.hass,
                 this.entity,
+                this.moveCompletedItems,
             );
 
             this.error = undefined;
@@ -760,6 +761,7 @@ export class TodoOverlayList extends LitElement {
                 this.entity,
                 item.id,
                 !item.completed,
+                this.moveCompletedItems,
             );
 
             await this.load();
@@ -1038,6 +1040,34 @@ export class TodoOverlayList extends LitElement {
     private renderTree(list: TodoList) {
         const filtered = filterTree(list.items, this.filterMode);
         const items = sortTree(filtered, this.sortBy, this.sortOrder);
+
+        // Splitting into separate Active/Completed sections is itself a
+        // form of "moving" a completed item away from wherever it sits
+        // among its siblings - gated on the same option as the backend's
+        // own reposition-on-complete and completed-last sort (see
+        // moveCompletedItems's own doc comment), so turning that off
+        // really does mean nothing about an item's position changes
+        // anywhere, frontend included.
+        if (!this.moveCompletedItems) {
+            return html`
+                <todo-overlay-tree
+                    .items=${items}
+                    .draggedId=${this.draggedId}
+                    .hoverId=${this.hoverId}
+                    .hoverPlacement=${this.hoverPlacement}
+                    .hideCompleteForParents=${this.hideCompleteForParents}
+                    .dragDisabled=${this.dragDisabled}
+                    .collapsedIds=${this.collapsedIds}
+
+                    @tree-pointer-down=${this.onPointerDown}
+                    @tree-drag-start=${this.onDragStart}
+                    @tree-pointer-up=${this.onPointerUp}
+                    @tree-toggle-collapse=${this.onToggleCollapse}
+
+                ></todo-overlay-tree>
+            `;
+        }
+
         const completedItems = items.filter(item => item.completed);
 
         if (completedItems.length === 0) {
@@ -1086,18 +1116,7 @@ export class TodoOverlayList extends LitElement {
                     : ""
             }
 
-            <div class="section-header">
-                <span>Completed</span>
-                ${
-                    this.showClearButton
-                        ? html`
-                            <button class="clear-completed" @click=${this.onClearCompleted}>
-                                Clear completed
-                            </button>
-                        `
-                        : ""
-                }
-            </div>
+            <div class="section-header">Completed</div>
             <todo-overlay-tree
                 .items=${completedItems}
                 .draggedId=${this.draggedId}
@@ -1151,7 +1170,8 @@ export class TodoOverlayList extends LitElement {
     }
 
     render() {
-        const hasToolbar = this.showQuickAdd || this.showFilterMenu || this.showSaveLoadButtons;
+        const hasToolbar =
+            this.showQuickAdd || this.showFilterMenu || this.showSaveLoadButtons || this.showClearButton;
 
         return html`
             ${
@@ -1215,6 +1235,20 @@ export class TodoOverlayList extends LitElement {
                                             @click=${this.openLoadDialog}
                                         >
                                             ${LOAD_ICON}
+                                        </button>
+                                    `
+                                    : ""
+                            }
+
+                            ${
+                                this.showClearButton
+                                    ? html`
+                                        <button
+                                            class="toolbar-icon"
+                                            aria-label="Clear completed"
+                                            @click=${this.onClearCompleted}
+                                        >
+                                            ${CLEAR_COMPLETED_ICON}
                                         </button>
                                     `
                                     : ""

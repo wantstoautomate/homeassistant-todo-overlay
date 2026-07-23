@@ -64,7 +64,7 @@ async def test_websocket_get_list_returns_serialised_list():
     manager = make_manager()
 
     connection = await call_handler(
-        websocket.websocket_get_list, manager, {"entity_id": ENTITY_ID},
+        websocket.websocket_get_list, manager, {"entity_id": ENTITY_ID, "group_completed": False},
     )
 
     assert len(connection.results) == 1
@@ -122,7 +122,7 @@ async def test_websocket_set_completed_returns_changed_list():
 
     connection = await call_handler(
         websocket.websocket_set_completed, manager,
-        {"entity_id": ENTITY_ID, "item_id": "1", "completed": True},
+        {"entity_id": ENTITY_ID, "item_id": "1", "completed": True, "reposition": False},
     )
 
     msg_id, result = connection.results[0]
@@ -222,7 +222,7 @@ async def test_websocket_create_item_returns_new_id():
     assert "id" in result
 
     list_connection = await call_handler(
-        websocket.websocket_get_list, manager, {"entity_id": ENTITY_ID},
+        websocket.websocket_get_list, manager, {"entity_id": ENTITY_ID, "group_completed": False},
     )
     items = list_connection.results[0][1]["items"]
     bread = next(item for item in items if item["title"] == "Bread")

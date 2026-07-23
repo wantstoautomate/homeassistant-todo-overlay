@@ -98,8 +98,14 @@ class TodoManager:
     async def get_list(
         self,
         entity_id: str,
+        group_completed: bool = False,
     ) -> TodoList:
         """Return a Todo list.
+
+        With group_completed=True, completed items are sorted after
+        incomplete siblings at every level (see build_tree) - off by
+        default, so a plain read reflects stored order regardless of
+        completion.
 
         Before building the tree, items that share a title with a
         sibling are merged together (combining their quantities where
@@ -114,9 +120,9 @@ class TodoManager:
         """
 
         async with self._lock_for(entity_id):
-            return await self._get_list_impl(entity_id)
+            return await self._get_list_impl(entity_id, group_completed)
 
-    async def _get_list_impl(self, entity_id: str) -> TodoList:
+    async def _get_list_impl(self, entity_id: str, group_completed: bool = False) -> TodoList:
         """The actual body of get_list(), callable by other locked public
         methods (see save_list) without re-entering self._lock_for(),
         since asyncio.Lock isn't reentrant and get_list() already holds
@@ -142,7 +148,7 @@ class TodoManager:
 
         return TodoList(
             entity_id=entity_id,
-            items=build_tree(items, positions, quantities, tags, trigger_on_due),
+            items=build_tree(items, positions, quantities, tags, trigger_on_due, group_completed),
         )
 
     async def _reconcile_orphaned_metadata(
@@ -590,17 +596,20 @@ class TodoManager:
         entity_id: str,
         item_id: str,
         completed: bool,
+        reposition: bool = False,
     ) -> list[dict]:
         """Set an item's completion, cascading to all of its descendants.
 
-        Every item whose status actually changes is also repositioned to
-        the boundary of its own sibling group: newly-completed items go
-        to the top of the completed ones, newly-uncompleted items go to
-        the bottom of the incomplete ones. Both are the same insertion
-        point (right at the boundary) - which side of it an item reads
-        on is just down to its own completed flag - so the move is
-        always the shortest possible hop rather than a jump back to
-        some stale manually-set position.
+        With reposition=True, every item whose status actually changes is
+        also repositioned to the boundary of its own sibling group:
+        newly-completed items go to the top of the completed ones,
+        newly-uncompleted items go to the bottom of the incomplete ones.
+        Both are the same insertion point (right at the boundary) - which
+        side of it an item reads on is just down to its own completed
+        flag - so the move is always the shortest possible hop rather
+        than a jump back to some stale manually-set position. Off by
+        default: completion alone never touches stored order, which is
+        what most users expect from a plain checkbox tap.
 
         Parents never have their own completed status stored - it's
         derived from their children (see build_tree's finalize step) -
@@ -648,43 +657,45 @@ class TodoManager:
                     "completed" if completed else "uncompleted",
                 )
 
-            # Every completed flag that's going to change already has by
-            # this point - what's left is purely repositioning (order),
-            # which _derived_completed() doesn't depend on at all (it only
-            # reads parent_id and each item's completed flag). So one
-            # computation here, after all the flags above are settled,
-            # gives the exact same result the old code recomputed from
-            # scratch (a full tree walk) on every touched descendant AND
-            # every ancestor level - reusing it instead avoids that
-            # redundant O((touched + ancestor depth) x list size) work.
-            derived = self._derived_completed(items, positions)
+            if reposition:
+                # Every completed flag that's going to change already has
+                # by this point - what's left is purely repositioning
+                # (order), which _derived_completed() doesn't depend on at
+                # all (it only reads parent_id and each item's completed
+                # flag). So one computation here, after all the flags
+                # above are settled, gives the exact same result the old
+                # code recomputed from scratch (a full tree walk) on every
+                # touched descendant AND every ancestor level - reusing it
+                # instead avoids that redundant
+                # O((touched + ancestor depth) x list size) work.
+                derived = self._derived_completed(items, positions)
 
-            position_updates: dict[str, ItemPosition] = {}
+                position_updates: dict[str, ItemPosition] = {}
 
-            for target_id in touched_ids:
-                reposition = self._reposition_at_boundary(target_id, items, positions, derived)
-                position_updates.update(reposition)
-                positions.update(reposition)
+                for target_id in touched_ids:
+                    update = self._reposition_at_boundary(target_id, items, positions, derived)
+                    position_updates.update(update)
+                    positions.update(update)
 
-            ancestor_id = self._parent_id_of(item_id, positions)
+                ancestor_id = self._parent_id_of(item_id, positions)
 
-            while ancestor_id is not None:
-                if ancestor_id not in item_lookup:
-                    break
+                while ancestor_id is not None:
+                    if ancestor_id not in item_lookup:
+                        break
 
-                new_status = derived[ancestor_id]
+                    new_status = derived[ancestor_id]
 
-                if new_status == before_derived.get(ancestor_id, False):
-                    break
+                    if new_status == before_derived.get(ancestor_id, False):
+                        break
 
-                reposition = self._reposition_at_boundary(ancestor_id, items, positions, derived)
-                position_updates.update(reposition)
-                positions.update(reposition)
+                    update = self._reposition_at_boundary(ancestor_id, items, positions, derived)
+                    position_updates.update(update)
+                    positions.update(update)
 
-                ancestor_id = self._parent_id_of(ancestor_id, positions)
+                    ancestor_id = self._parent_id_of(ancestor_id, positions)
 
-            if position_updates:
-                await self._metadata_store.set_positions(entity_id, position_updates)
+                if position_updates:
+                    await self._metadata_store.set_positions(entity_id, position_updates)
 
         return changed
 

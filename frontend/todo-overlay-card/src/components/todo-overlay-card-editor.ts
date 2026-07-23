@@ -217,8 +217,15 @@ export class TodoOverlayCardEditor extends LitElement {
 
             <ha-formfield label="Hide complete checkbox for parents">
                 <ha-switch
-                    .checked=${this._config.hide_complete_for_parents ?? false}
-                    @change=${this.onSwitchChanged("hide_complete_for_parents", false)}
+                    .checked=${this._config.hide_complete_for_parents ?? true}
+                    @change=${this.onSwitchChanged("hide_complete_for_parents", true)}
+                ></ha-switch>
+            </ha-formfield>
+
+            <ha-formfield label="Move completed items to the bottom">
+                <ha-switch
+                    .checked=${this._config.move_completed_items ?? false}
+                    @change=${this.onSwitchChanged("move_completed_items", false)}
                 ></ha-switch>
             </ha-formfield>
 
@@ -252,7 +259,7 @@ export class TodoOverlayCardEditor extends LitElement {
                 ></ha-switch>
             </ha-formfield>
 
-            <ha-formfield label="Filter and search bar">
+            <ha-formfield label="Filter icon in toolbar">
                 <ha-switch
                     .checked=${this._config.show_filter_menu ?? false}
                     @change=${this.onSwitchChanged("show_filter_menu", false)}

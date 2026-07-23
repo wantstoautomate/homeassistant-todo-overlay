@@ -4,11 +4,13 @@ import type { LoadMode, Placement, TodoList } from "./models";
 export async function getList(
     hass: HassLike,
     entityId: string,
+    groupCompleted: boolean,
 ): Promise<TodoList> {
 
     return await hass.connection.sendMessagePromise<TodoList>({
         type: "todo_overlay/get_list",
         entity_id: entityId,
+        group_completed: groupCompleted,
     });
 
 }
@@ -41,6 +43,7 @@ export async function setCompleted(
     entityId: string,
     itemId: string,
     completed: boolean,
+    reposition: boolean,
 ): Promise<CompletionChange[]> {
 
     const result = await hass.connection.sendMessagePromise<{changed: CompletionChange[]}>({
@@ -48,6 +51,7 @@ export async function setCompleted(
         entity_id: entityId,
         item_id: itemId,
         completed,
+        reposition,
     });
 
     return result.changed;

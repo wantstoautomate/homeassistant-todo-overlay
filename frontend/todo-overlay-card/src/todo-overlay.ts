@@ -24,14 +24,24 @@ export interface TodoOverlayCardConfig {
     // single-entity mode; in multi-entity mode, omitted entirely unless
     // set (the per-entity section headings already label each list).
     title?: string;
-    // When set, a parent item with children shows no completion checkbox
-    // on its own row at all - ticking a parent normally cascades to every
-    // descendant, which is easy to trigger by accident on a row that's
-    // mostly there to show hierarchy rather than be completed itself.
-    // With this on, the only way to complete such an item is a deliberate
-    // one: hold the row to open its edit dialog, which gets a "Mark
-    // complete" toggle in place of the row's own (hidden) checkbox.
+    // When set (defaults to true), a parent item with children shows no
+    // completion checkbox on its own row at all - ticking a parent
+    // normally cascades to every descendant, which is easy to trigger by
+    // accident on a row that's mostly there to show hierarchy rather
+    // than be completed itself. With this on, the only way to complete
+    // such an item is a deliberate one: hold the row to open its edit
+    // dialog, which gets a "Mark complete" toggle in place of the row's
+    // own (hidden) checkbox - or tap the row, which toggles collapse
+    // instead of completion for a row with no checkbox to tap.
     hide_complete_for_parents?: boolean;
+    // When set (off by default), completing/uncompleting an item
+    // repositions it to the boundary of its own sibling group (newly-
+    // completed to the top of the completed ones, newly-uncompleted to
+    // the bottom of the incomplete ones) and splits the list into
+    // separate Active/Completed sections. Off by default: a checkbox tap
+    // just flips the check, full stop - nothing about the item's
+    // position or grouping changes.
+    move_completed_items?: boolean;
     // "manual" (the default) is drag-and-drop order, stored per item in
     // the backend. Any other value re-sorts the displayed tree on the fly
     // without touching that stored order - switching back to "manual"
@@ -152,7 +162,7 @@ export class TodoOverlayCard extends LitElement {
                         <todo-overlay-list
                             .hass=${this.hass}
                             .entity=${entityId}
-                            .hideCompleteForParents=${this.config.hide_complete_for_parents ?? false}
+                            .hideCompleteForParents=${this.config.hide_complete_for_parents ?? true}
                             .sortBy=${this.config.sort_by ?? "manual"}
                             .sortOrder=${this.config.sort_order ?? "asc"}
                             .showClearButton=${this.config.show_clear_completed_button ?? true}
@@ -160,6 +170,7 @@ export class TodoOverlayCard extends LitElement {
                             .showQuickAdd=${this.config.show_quick_add ?? true}
                             .confirmDelete=${this.config.confirm_delete ?? true}
                             .showFilterMenu=${this.config.show_filter_menu ?? false}
+                            .moveCompletedItems=${this.config.move_completed_items ?? false}
                         ></todo-overlay-list>
                     </div>
                 `)}

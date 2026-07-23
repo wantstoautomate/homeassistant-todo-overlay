@@ -156,7 +156,7 @@ def test_build_tree_grandparent_completion_derives_through_parent():
     assert tree[0].completed is True
 
 
-def test_build_tree_completed_items_sort_after_incomplete_siblings():
+def test_build_tree_completed_items_sort_after_incomplete_siblings_when_grouping():
     items = [
         TodoItem(id="1", title="Done", completed=True),
         TodoItem(id="2", title="Not done", completed=False),
@@ -164,14 +164,33 @@ def test_build_tree_completed_items_sort_after_incomplete_siblings():
 
     positions = {
         # "Done" has a LOWER stored order than "Not done", but being
-        # complete should still push it to the bottom.
+        # complete should still push it to the bottom when group_completed
+        # is on.
         "1": ItemPosition(parent_id=None, order=0),
         "2": ItemPosition(parent_id=None, order=1),
     }
 
-    tree = build_tree(items, positions)
+    tree = build_tree(items, positions, group_completed=True)
 
     assert [item.id for item in tree] == ["2", "1"]
+
+
+def test_build_tree_does_not_group_completed_by_default():
+    items = [
+        TodoItem(id="1", title="Done", completed=True),
+        TodoItem(id="2", title="Not done", completed=False),
+    ]
+
+    positions = {
+        "1": ItemPosition(parent_id=None, order=0),
+        "2": ItemPosition(parent_id=None, order=1),
+    }
+
+    # group_completed defaults to False - stored order wins regardless of
+    # completion, so ticking an item never visually moves it.
+    tree = build_tree(items, positions)
+
+    assert [item.id for item in tree] == ["1", "2"]
 
 
 def test_build_tree_completed_sort_is_independent_per_level():
@@ -189,7 +208,7 @@ def test_build_tree_completed_sort_is_independent_per_level():
         "4": ItemPosition(parent_id="1", order=1),
     }
 
-    tree = build_tree(items, positions)
+    tree = build_tree(items, positions, group_completed=True)
 
     # "Root A" has an incomplete child, so it's computed incomplete and
     # sorts by order like normal at the root level (order 0 before 1) -

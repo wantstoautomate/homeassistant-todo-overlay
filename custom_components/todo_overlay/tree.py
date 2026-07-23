@@ -7,18 +7,22 @@ def build_tree(
     quantities: dict[str, str] | None = None,
     tags: dict[str, list[str]] | None = None,
     trigger_on_due: set[str] | None = None,
+    group_completed: bool = False,
 ) -> list[TodoItem]:
     """Build a hierarchy from a flat list of TodoItems.
 
     Items with no stored position (never moved) default to being a root,
     keeping their original relative order via Python's stable sort.
 
-    Completed items sort after incomplete ones within their own parent,
-    regardless of their stored order - so completing an item moves it to
-    the bottom of its own siblings (and only its siblings: this is applied
-    independently at every level), and a drag can still reorder within
-    the completed group but can never place one ahead of an incomplete
-    sibling, since that comparison is decided by completion status first.
+    With group_completed=True, completed items sort after incomplete ones
+    within their own parent, regardless of their stored order - so
+    completing an item moves it to the bottom of its own siblings (and
+    only its siblings: this is applied independently at every level), and
+    a drag can still reorder within the completed group but can never
+    place one ahead of an incomplete sibling, since that comparison is
+    decided by completion status first. Off by default: siblings sort
+    purely by stored order regardless of completion, so ticking an item
+    never visually moves it.
     """
 
     item_lookup = {
@@ -46,7 +50,7 @@ def build_tree(
         return position.order if position else 0
 
     def sort_key(item: TodoItem) -> tuple[bool, int]:
-        return (item.completed, order_of(item))
+        return (item.completed if group_completed else False, order_of(item))
 
     def finalize(item: TodoItem) -> None:
         for child in item.children:
