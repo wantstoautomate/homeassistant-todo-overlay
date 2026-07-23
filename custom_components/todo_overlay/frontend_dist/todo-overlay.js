@@ -1764,9 +1764,11 @@ var TodoTreeItem = class extends i4 {
                                             </button>
                                         ` : b2`<span class="collapse-toggle-spacer"></span>`}
 
-                                <div class="checkbox-slot">
-                                    ${this.checkboxHidden ? "" : b2`<ha-checkbox .checked=${this.item.completed}></ha-checkbox>`}
-                                </div>
+                                ${this.checkboxHidden ? "" : b2`
+                                            <div class="checkbox-slot">
+                                                <ha-checkbox .checked=${this.item.completed}></ha-checkbox>
+                                            </div>
+                                        `}
 
                                 <div class="content">
                                     <div class="title-line">
@@ -1841,16 +1843,16 @@ TodoTreeItem.styles = i`
         ul {
             list-style: none;
             margin: 0;
-            padding-inline-start: 32px;
+            padding-inline-start: 20px;
         }
 
         .row {
             position: relative;
             display: flex;
             align-items: center;
-            gap: 10px;
+            gap: 8px;
             min-height: 32px;
-            padding: 5px 16px;
+            padding: 5px 12px;
             border-radius: 4px;
             outline: 2px solid transparent;
             outline-offset: -2px;
@@ -1944,13 +1946,16 @@ TodoTreeItem.styles = i`
         }
 
         /* A row with children needs to read as a group header at a
-           glance, regardless of whether its own checkbox happens to be
-           showing (see hideCompleteForParents) - otherwise a
-           non-completable parent is visually indistinguishable from a
-           plain leaf item, since the chevron alone isn't a strong enough
-           signal on its own. */
+           glance - it never shows a checkbox at all (see the template's
+           checkboxHidden branch, which drops .checkbox-slot from the
+           layout entirely rather than reserving empty space for it), so
+           bold + very slightly larger text carries that signal on its
+           own instead, the same way the reference card this design
+           was inspired by distinguishes a single level of nesting with
+           no indentation at all. */
         .summary.has-children {
             font-weight: 600;
+            font-size: 15px;
         }
 
         ha-checkbox {
@@ -1958,18 +1963,17 @@ TodoTreeItem.styles = i`
             flex-shrink: 0;
         }
 
-        /* Always reserves the same width whether a checkbox is actually
-           rendered inside it or not (see checkboxHidden) - a parent with
-           hide_complete_for_parents active and a plain leaf item are
-           logically siblings at the same level, and need to align the
-           same way regardless of which one happens to show a checkbox.
-           Deliberately does NOT clip overflow: an earlier version used
-           overflow:hidden to crop ha-checkbox's own larger touch-target
-           box down to this slot's tighter footprint, but ha-checkbox's
-           actual VISIBLE glyph (not just its invisible touch padding) is
-           wider than that box, so it was cropping part of the real
-           checkmark - left un-clipped and centered instead, same
-           alignment contribution, nothing gets cut off. */
+        /* Only ever rendered around a real, visible checkbox (see the
+           template's checkboxHidden branch) - never reserved as empty
+           space, so there's nothing here for a hidden-checkbox parent
+           row to misalign against. Deliberately does NOT clip overflow:
+           an earlier version used overflow:hidden to crop ha-checkbox's
+           own larger touch-target box down to this slot's tighter
+           footprint, but ha-checkbox's actual VISIBLE glyph (not just
+           its invisible touch padding) is wider than that box, so it
+           was cropping part of the real checkmark - left un-clipped and
+           centered instead, same alignment contribution, nothing gets
+           cut off. */
         .checkbox-slot {
             flex-shrink: 0;
             width: 28px;
@@ -1984,9 +1988,9 @@ TodoTreeItem.styles = i`
             display: flex;
             align-items: center;
             justify-content: center;
-            width: 24px;
-            height: 24px;
-            margin-inline-start: -8px;
+            width: 20px;
+            height: 20px;
+            margin-inline-start: -4px;
             border: none;
             background: none;
             padding: 0;
@@ -1995,8 +1999,8 @@ TodoTreeItem.styles = i`
         }
 
         .collapse-toggle svg {
-            width: 20px;
-            height: 20px;
+            width: 18px;
+            height: 18px;
             fill: currentColor;
             transition: transform 150ms ease;
             transform: rotate(90deg);
@@ -2008,8 +2012,8 @@ TodoTreeItem.styles = i`
 
         .collapse-toggle-spacer {
             flex-shrink: 0;
-            width: 24px;
-            margin-inline-start: -8px;
+            width: 20px;
+            margin-inline-start: -4px;
         }
 
         .status-chip {

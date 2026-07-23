@@ -80,18 +80,26 @@ describe("todo-overlay-tree-item", () => {
         expect(el.shadowRoot?.querySelector(".status-chip.all-done")).not.toBeNull();
     });
 
-    it("hides the checkbox slot's checkbox for a parent when hideCompleteForParents is set", async () => {
+    it("drops the checkbox slot entirely for a parent when hideCompleteForParents is set", async () => {
         const el = await renderItem(
             makeItem({children: [makeItem({id: "2"})]}),
             {hideCompleteForParents: true},
         );
 
-        expect(el.shadowRoot?.querySelector(".checkbox-slot")).not.toBeNull();
-        expect(el.shadowRoot?.querySelector(".checkbox-slot ha-checkbox")).toBeNull();
+        expect(el.shadowRoot?.querySelector(".checkbox-slot")).toBeNull();
     });
 
     it("still shows a leaf item's own checkbox even when hideCompleteForParents is set", async () => {
         const el = await renderItem(makeItem(), {hideCompleteForParents: true});
+
+        expect(el.shadowRoot?.querySelector(".checkbox-slot ha-checkbox")).not.toBeNull();
+    });
+
+    it("still shows a parent's checkbox when hideCompleteForParents is off", async () => {
+        const el = await renderItem(
+            makeItem({children: [makeItem({id: "2"})]}),
+            {hideCompleteForParents: false},
+        );
 
         expect(el.shadowRoot?.querySelector(".checkbox-slot ha-checkbox")).not.toBeNull();
     });

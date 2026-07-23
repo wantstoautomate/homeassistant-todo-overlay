@@ -3,6 +3,24 @@
 All notable changes to this project are documented here. Versions follow the
 integration's `manifest.json`/card's `package.json` (kept in lockstep).
 
+## 0.12.1
+
+Follow-up polish on the card row layout, reported live right after 0.12.0:
+
+- A parent row (children hidden checkbox) no longer reserves an empty
+  `.checkbox-slot` at all - it's dropped from the layout entirely rather
+  than kept-but-invisible, which was the actual source of inconsistent
+  spacing between parent rows (an empty slot and a real `<ha-checkbox>`
+  never quite occupy their box the same way). Every parent row with its
+  checkbox hidden now has an identical, simpler layout: chevron, bold
+  title, done.
+- Cut the dead space before a row's content roughly in half (row
+  padding, the chevron/spacer column, and inter-element gaps are all
+  tighter), and reduced per-level indentation - hierarchy now leans more
+  on the parent row's bold (and very slightly larger) title than on deep
+  indentation, closer to how the reference card distinguishes a child
+  with no indentation at all.
+
 ## 0.12.0
 
 Follow-up hardening pass after a four-persona review (HA engineer, the
