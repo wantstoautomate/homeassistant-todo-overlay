@@ -279,6 +279,9 @@ export class TodoTreeItem extends LitElement {
     @property({attribute: false})
     hoverPlacement?: Placement;
 
+    @property({attribute: false})
+    hideCompleteForParents = false;
+
     @state()
     private holdRippleOrigin?: {x: number; y: number};
 
@@ -310,6 +313,16 @@ export class TodoTreeItem extends LitElement {
             this.draggedId !== undefined &&
             this.draggedId !== this.item.id
         );
+    }
+
+    // Ticking a parent normally cascades completion to every descendant -
+    // easy to trigger by accident on a row that's mostly there to show
+    // hierarchy. With hideCompleteForParents on, such a row shows no
+    // checkbox at all; completing it becomes a deliberate action via the
+    // edit dialog instead (see todo-overlay.ts's onPointerUp and
+    // todo-item-dialog.ts's complete toggle).
+    private get checkboxHidden(): boolean {
+        return this.hideCompleteForParents && this.item.children.length > 0;
     }
 
     private pointerDown(e: PointerEvent) {
@@ -520,7 +533,10 @@ export class TodoTreeItem extends LitElement {
                         isBeingDragged
                             ? ""
                             : html`
-                                <ha-checkbox .checked=${this.item.completed}></ha-checkbox>
+                                <ha-checkbox
+                                    style=${this.checkboxHidden ? "visibility: hidden" : ""}
+                                    .checked=${this.item.completed}
+                                ></ha-checkbox>
 
                                 <div class="content">
                                     <div class="title-line">
@@ -585,6 +601,7 @@ export class TodoTreeItem extends LitElement {
                                             .draggedId=${this.draggedId}
                                             .hoverId=${this.hoverId}
                                             .hoverPlacement=${this.hoverPlacement}
+                                            .hideCompleteForParents=${this.hideCompleteForParents}
                                         ></todo-overlay-tree-item>
                                     `,
                                 )}

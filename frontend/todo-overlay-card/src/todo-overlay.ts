@@ -35,6 +35,7 @@ import {BEFORE_AFTER_ZONE} from "./components/todo-tree-item";
 import "./components/todo-tree";
 import "./components/todo-item-dialog";
 import "./components/todo-save-load-dialog";
+import "./components/todo-overlay-card-editor";
 
 interface TreeItemElement extends Element {
     item?: TodoItem;
@@ -148,6 +149,14 @@ function findDropTarget(y: number, rows: RowSnapshot[]): {id: string; placement:
 
 export interface TodoOverlayCardConfig {
     entity: string;
+    // When set, a parent item with children shows no completion checkbox
+    // on its own row at all - ticking a parent normally cascades to every
+    // descendant, which is easy to trigger by accident on a row that's
+    // mostly there to show hierarchy rather than be completed itself.
+    // With this on, the only way to complete such an item is a deliberate
+    // one: hold the row to open its edit dialog, which gets a "Mark
+    // complete" toggle in place of the row's own (hidden) checkbox.
+    hide_complete_for_parents?: boolean;
 }
 
 const UNDO_TIMEOUT_MS = 8000;
@@ -390,6 +399,39 @@ export class TodoOverlayCard extends LitElement {
         this.config = config;
     }
 
+    // Picked up by Home Assistant's edit-card dialog to show a UI editor
+    // instead of leaving the user to hand-write YAML - the returned
+    // element just needs a setConfig() method and to emit "config-changed"
+    // (see todo-overlay-card-editor.ts), the same contract every native
+    // card's editor follows.
+    static getConfigElement() {
+        return document.createElement("todo-overlay-card-editor");
+    }
+
+    // Called by the card picker when this card is first added to a
+    // dashboard, so it starts from a usable config rather than an empty
+    // one the editor would immediately complain about. HA's own call
+    // signature for this varies by version (some pass only `hass`), so
+    // every parameter here is optional and this falls back to scanning
+    // hass.states directly if entities/entitiesFallback come back empty.
+    static getStubConfig(
+        hass?: HassLike,
+        entities: string[] = [],
+        entitiesFallback: string[] = [],
+    ): TodoOverlayCardConfig {
+        const isTodoEntity = (entityId: string) => entityId.startsWith("todo.");
+
+        const fromStates = hass ? Object.keys(hass.states).filter(isTodoEntity) : [];
+
+        const entity =
+            entities.find(isTodoEntity) ??
+            entitiesFallback.find(isTodoEntity) ??
+            fromStates[0] ??
+            "";
+
+        return {entity};
+    }
+
     protected updated(changed: Map<string, unknown>) {
         if (!changed.has("hass") || !this.hass || !this.config) {
             return;
@@ -541,9 +583,17 @@ export class TodoOverlayCard extends LitElement {
 
             if (item) {
                 const pressDurationMs = e.detail.pressDurationMs as number;
+                const checkboxHidden =
+                    (this.config.hide_complete_for_parents ?? false) && item.children.length > 0;
 
                 if (pressDurationMs < LONG_PRESS_MS) {
-                    await this.toggleComplete(item);
+                    // A quick tap has nothing to toggle when the row's own
+                    // checkbox is hidden - completing such an item is only
+                    // available via the edit dialog (see the hold branch
+                    // below, and todo-item-dialog.ts's complete toggle).
+                    if (!checkboxHidden) {
+                        await this.toggleComplete(item);
+                    }
                 } else {
                     this.openEditDialog(item);
                 }
@@ -695,6 +745,20 @@ export class TodoOverlayCard extends LitElement {
         this.dialogItem = undefined;
     }
 
+    private async onDialogToggleComplete() {
+        if (!this.dialogItem) {
+            return;
+        }
+
+        // Reuses the exact same cascade+undo path a normal row's
+        // checkbox tap goes through - this dialog toggle exists only
+        // because that row has no checkbox to tap (see
+        // hide_complete_for_parents), not because it needs different
+        // behavior once triggered.
+        await this.toggleComplete(this.dialogItem);
+        this.closeDialog();
+    }
+
     private dialogValue(): TodoItemFormValue {
         if (this.dialogMode === "edit" && this.dialogItem) {
             const due = this.dialogItem.due_datetime
@@ -837,6 +901,7 @@ export class TodoOverlayCard extends LitElement {
                     .draggedId=${this.draggedId}
                     .hoverId=${this.hoverId}
                     .hoverPlacement=${this.hoverPlacement}
+                    .hideCompleteForParents=${this.config.hide_complete_for_parents ?? false}
 
                     @tree-pointer-down=${this.onPointerDown}
                     @tree-drag-start=${this.onDragStart}
@@ -858,6 +923,7 @@ export class TodoOverlayCard extends LitElement {
                             .draggedId=${this.draggedId}
                             .hoverId=${this.hoverId}
                             .hoverPlacement=${this.hoverPlacement}
+                            .hideCompleteForParents=${this.config.hide_complete_for_parents ?? false}
 
                             @tree-pointer-down=${this.onPointerDown}
                             @tree-drag-start=${this.onDragStart}
@@ -879,6 +945,7 @@ export class TodoOverlayCard extends LitElement {
                 .draggedId=${this.draggedId}
                 .hoverId=${this.hoverId}
                 .hoverPlacement=${this.hoverPlacement}
+                .hideCompleteForParents=${this.config.hide_complete_for_parents ?? false}
 
                 @tree-pointer-down=${this.onPointerDown}
                 @tree-drag-start=${this.onDragStart}
@@ -986,10 +1053,17 @@ export class TodoOverlayCard extends LitElement {
                             .value=${this.dialogValue()}
                             .fieldSupport=${this.fieldSupport}
                             ?showDelete=${this.dialogMode === "edit"}
+                            ?showCompleteToggle=${
+                                this.dialogMode === "edit" &&
+                                (this.config.hide_complete_for_parents ?? false) &&
+                                (this.dialogItem?.children.length ?? 0) > 0
+                            }
+                            ?completed=${this.dialogItem?.completed ?? false}
 
                             @dialog-close=${this.closeDialog}
                             @dialog-save=${this.onDialogSave}
                             @dialog-delete=${this.onDialogDelete}
+                            @dialog-toggle-complete=${this.onDialogToggleComplete}
                         ></todo-overlay-item-dialog>
                     `
                     : ""

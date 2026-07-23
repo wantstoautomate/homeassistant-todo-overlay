@@ -28,6 +28,9 @@ export class TodoTree extends LitElement {
     @property({attribute: false})
     hoverPlacement?: Placement;
 
+    @property({attribute: false})
+    hideCompleteForParents = false;
+
     render() {
         return html`
             <ul>
@@ -38,6 +41,7 @@ export class TodoTree extends LitElement {
                             .draggedId=${this.draggedId}
                             .hoverId=${this.hoverId}
                             .hoverPlacement=${this.hoverPlacement}
+                            .hideCompleteForParents=${this.hideCompleteForParents}
                         ></todo-overlay-tree-item>
                     `,
                 )}

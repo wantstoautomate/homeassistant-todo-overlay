@@ -69,6 +69,20 @@ export class TodoItemDialog extends LitElement {
             min-width: 90px;
         }
 
+        .complete-toggle {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin-bottom: 16px;
+            font-family: Roboto, "Noto Sans", sans-serif;
+            font-size: 14px;
+            color: var(--primary-text-color);
+        }
+
+        .complete-toggle ha-checkbox {
+            margin-inline-start: -12px;
+        }
+
         label {
             font-size: 12px;
             color: var(--secondary-text-color);
@@ -143,6 +157,16 @@ export class TodoItemDialog extends LitElement {
     @property({type: Boolean})
     showDelete = false;
 
+    // Only relevant for an item whose own row hides its completion
+    // checkbox (see TodoOverlayCardConfig's hide_complete_for_parents) -
+    // this dialog is that item's only way to complete it, so the toggle
+    // only renders when it's actually needed.
+    @property({type: Boolean})
+    showCompleteToggle = false;
+
+    @property({type: Boolean})
+    completed = false;
+
     private close() {
         this.dispatchEvent(
             new CustomEvent("dialog-close", {bubbles: true, composed: true}),
@@ -162,6 +186,12 @@ export class TodoItemDialog extends LitElement {
     private requestDelete() {
         this.dispatchEvent(
             new CustomEvent("dialog-delete", {bubbles: true, composed: true}),
+        );
+    }
+
+    private toggleComplete() {
+        this.dispatchEvent(
+            new CustomEvent("dialog-toggle-complete", {bubbles: true, composed: true}),
         );
     }
 
@@ -198,6 +228,20 @@ export class TodoItemDialog extends LitElement {
                         />
                     </div>
                 </div>
+
+                ${
+                    this.showCompleteToggle
+                        ? html`
+                            <div class="complete-toggle">
+                                <ha-checkbox
+                                    .checked=${this.completed}
+                                    @click=${this.toggleComplete}
+                                ></ha-checkbox>
+                                <span>${this.completed ? "Completed" : "Mark complete"}</span>
+                            </div>
+                        `
+                        : ""
+                }
 
                 ${
                     this.fieldSupport.description

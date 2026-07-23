@@ -782,6 +782,8 @@ var TodoItemDialog = class extends i4 {
       dueDateTime: false
     };
     this.showDelete = false;
+    this.showCompleteToggle = false;
+    this.completed = false;
   }
   close() {
     this.dispatchEvent(
@@ -800,6 +802,11 @@ var TodoItemDialog = class extends i4 {
   requestDelete() {
     this.dispatchEvent(
       new CustomEvent("dialog-delete", { bubbles: true, composed: true })
+    );
+  }
+  toggleComplete() {
+    this.dispatchEvent(
+      new CustomEvent("dialog-toggle-complete", { bubbles: true, composed: true })
     );
   }
   updateField(field, fieldValue) {
@@ -831,6 +838,16 @@ var TodoItemDialog = class extends i4 {
                         />
                     </div>
                 </div>
+
+                ${this.showCompleteToggle ? b2`
+                            <div class="complete-toggle">
+                                <ha-checkbox
+                                    .checked=${this.completed}
+                                    @click=${this.toggleComplete}
+                                ></ha-checkbox>
+                                <span>${this.completed ? "Completed" : "Mark complete"}</span>
+                            </div>
+                        ` : ""}
 
                 ${this.fieldSupport.description ? b2`
                             <div class="field">
@@ -938,6 +955,20 @@ TodoItemDialog.styles = i`
             min-width: 90px;
         }
 
+        .complete-toggle {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin-bottom: 16px;
+            font-family: Roboto, "Noto Sans", sans-serif;
+            font-size: 14px;
+            color: var(--primary-text-color);
+        }
+
+        .complete-toggle ha-checkbox {
+            margin-inline-start: -12px;
+        }
+
         label {
             font-size: 12px;
             color: var(--secondary-text-color);
@@ -1007,6 +1038,12 @@ __decorateClass([
 __decorateClass([
   n4({ type: Boolean })
 ], TodoItemDialog.prototype, "showDelete", 2);
+__decorateClass([
+  n4({ type: Boolean })
+], TodoItemDialog.prototype, "showCompleteToggle", 2);
+__decorateClass([
+  n4({ type: Boolean })
+], TodoItemDialog.prototype, "completed", 2);
 TodoItemDialog = __decorateClass([
   t3("todo-overlay-item-dialog")
 ], TodoItemDialog);
@@ -1323,6 +1360,7 @@ function formatDue(item) {
 var TodoTreeItem = class extends i4 {
   constructor() {
     super(...arguments);
+    this.hideCompleteForParents = false;
     this.dragEngaged = false;
     this.pointerDownAt = 0;
     this.hasMoved = false;
@@ -1377,6 +1415,15 @@ var TodoTreeItem = class extends i4 {
   }
   get isDropTarget() {
     return this.hoverId === this.item.id && this.draggedId !== void 0 && this.draggedId !== this.item.id;
+  }
+  // Ticking a parent normally cascades completion to every descendant -
+  // easy to trigger by accident on a row that's mostly there to show
+  // hierarchy. With hideCompleteForParents on, such a row shows no
+  // checkbox at all; completing it becomes a deliberate action via the
+  // edit dialog instead (see todo-overlay.ts's onPointerUp and
+  // todo-item-dialog.ts's complete toggle).
+  get checkboxHidden() {
+    return this.hideCompleteForParents && this.item.children.length > 0;
   }
   pointerDown(e7) {
     this.pointerDownAt = Date.now();
@@ -1485,7 +1532,10 @@ var TodoTreeItem = class extends i4 {
                     @dblclick=${this.onDoubleClick}
                 >
                     ${isBeingDragged ? "" : b2`
-                                <ha-checkbox .checked=${this.item.completed}></ha-checkbox>
+                                <ha-checkbox
+                                    style=${this.checkboxHidden ? "visibility: hidden" : ""}
+                                    .checked=${this.item.completed}
+                                ></ha-checkbox>
 
                                 <div class="content">
                                     <div class="title-line">
@@ -1527,6 +1577,7 @@ var TodoTreeItem = class extends i4 {
                                             .draggedId=${this.draggedId}
                                             .hoverId=${this.hoverId}
                                             .hoverPlacement=${this.hoverPlacement}
+                                            .hideCompleteForParents=${this.hideCompleteForParents}
                                         ></todo-overlay-tree-item>
                                     `
     )}
@@ -1730,6 +1781,9 @@ __decorateClass([
   n4({ attribute: false })
 ], TodoTreeItem.prototype, "hoverPlacement", 2);
 __decorateClass([
+  n4({ attribute: false })
+], TodoTreeItem.prototype, "hideCompleteForParents", 2);
+__decorateClass([
   r5()
 ], TodoTreeItem.prototype, "holdRippleOrigin", 2);
 __decorateClass([
@@ -1744,6 +1798,7 @@ var TodoTree = class extends i4 {
   constructor() {
     super(...arguments);
     this.items = [];
+    this.hideCompleteForParents = false;
   }
   render() {
     return b2`
@@ -1755,6 +1810,7 @@ var TodoTree = class extends i4 {
                             .draggedId=${this.draggedId}
                             .hoverId=${this.hoverId}
                             .hoverPlacement=${this.hoverPlacement}
+                            .hideCompleteForParents=${this.hideCompleteForParents}
                         ></todo-overlay-tree-item>
                     `
     )}
@@ -1781,9 +1837,115 @@ __decorateClass([
 __decorateClass([
   n4({ attribute: false })
 ], TodoTree.prototype, "hoverPlacement", 2);
+__decorateClass([
+  n4({ attribute: false })
+], TodoTree.prototype, "hideCompleteForParents", 2);
 TodoTree = __decorateClass([
   t3("todo-overlay-tree")
 ], TodoTree);
+
+// src/components/todo-overlay-card-editor.ts
+var EMPTY_CONFIG = { entity: "" };
+var TodoOverlayCardEditor = class extends i4 {
+  constructor() {
+    super(...arguments);
+    this._config = EMPTY_CONFIG;
+  }
+  setConfig(config) {
+    this._config = config;
+  }
+  emitConfigChanged(config) {
+    this._config = config;
+    this.dispatchEvent(
+      new CustomEvent("config-changed", {
+        detail: { config },
+        bubbles: true,
+        composed: true
+      })
+    );
+  }
+  onEntityChanged(e7) {
+    this.emitConfigChanged({ ...this._config, entity: e7.detail.value });
+  }
+  onHideCompleteForParentsChanged(e7) {
+    const checked = e7.target.checked;
+    this.emitConfigChanged({
+      ...this._config,
+      hide_complete_for_parents: checked || void 0
+    });
+  }
+  render() {
+    return b2`
+            <div class="field">
+                <ha-entity-picker
+                    .hass=${this.hass}
+                    .value=${this._config.entity ?? ""}
+                    .includeDomains=${["todo"]}
+                    label="Todo entity"
+                    required
+                    @value-changed=${this.onEntityChanged}
+                ></ha-entity-picker>
+            </div>
+
+            <div class="switch-row">
+                <ha-switch
+                    .checked=${this._config.hide_complete_for_parents ?? false}
+                    @change=${this.onHideCompleteForParentsChanged}
+                ></ha-switch>
+                <div class="label">
+                    <div class="title">Hide complete checkbox for parents</div>
+                    <div class="description">
+                        A parent item with children shows no completion checkbox on its
+                        own row - ticking a parent normally completes every descendant
+                        too. Complete it via its edit dialog (hold the row) instead.
+                    </div>
+                </div>
+            </div>
+        `;
+  }
+};
+TodoOverlayCardEditor.styles = i`
+        .field {
+            margin-bottom: 16px;
+        }
+
+        .switch-row {
+            display: flex;
+            align-items: flex-start;
+            gap: 12px;
+            padding: 8px 0;
+        }
+
+        .switch-row ha-switch {
+            margin-top: 2px;
+            flex-shrink: 0;
+        }
+
+        .switch-row .label {
+            flex: 1;
+            font-family: Roboto, "Noto Sans", sans-serif;
+        }
+
+        .switch-row .title {
+            font-size: 14px;
+            color: var(--primary-text-color);
+        }
+
+        .switch-row .description {
+            font-size: 12px;
+            color: var(--secondary-text-color);
+            margin-top: 2px;
+        }
+    `;
+__decorateClass([
+  n4({ attribute: false })
+], TodoOverlayCardEditor.prototype, "hass", 2);
+__decorateClass([
+  r5()
+], TodoOverlayCardEditor.prototype, "_config", 2);
+TodoOverlayCardEditor = __decorateClass([
+  t3("todo-overlay-card-editor")
+], TodoOverlayCardEditor);
 
 // src/todo-overlay.ts
 function collectAllRows(root) {
@@ -1901,6 +2063,26 @@ var TodoOverlayCard = class extends i4 {
     }
     this.config = config;
   }
+  // Picked up by Home Assistant's edit-card dialog to show a UI editor
+  // instead of leaving the user to hand-write YAML - the returned
+  // element just needs a setConfig() method and to emit "config-changed"
+  // (see todo-overlay-card-editor.ts), the same contract every native
+  // card's editor follows.
+  static getConfigElement() {
+    return document.createElement("todo-overlay-card-editor");
+  }
+  // Called by the card picker when this card is first added to a
+  // dashboard, so it starts from a usable config rather than an empty
+  // one the editor would immediately complain about. HA's own call
+  // signature for this varies by version (some pass only `hass`), so
+  // every parameter here is optional and this falls back to scanning
+  // hass.states directly if entities/entitiesFallback come back empty.
+  static getStubConfig(hass, entities = [], entitiesFallback = []) {
+    const isTodoEntity = (entityId) => entityId.startsWith("todo.");
+    const fromStates = hass ? Object.keys(hass.states).filter(isTodoEntity) : [];
+    const entity = entities.find(isTodoEntity) ?? entitiesFallback.find(isTodoEntity) ?? fromStates[0] ?? "";
+    return { entity };
+  }
   updated(changed) {
     if (!changed.has("hass") || !this.hass || !this.config) {
       return;
@@ -1966,8 +2148,11 @@ var TodoOverlayCard = class extends i4 {
       const item = findItem(this.list.items, this.draggedId);
       if (item) {
         const pressDurationMs = e7.detail.pressDurationMs;
+        const checkboxHidden = (this.config.hide_complete_for_parents ?? false) && item.children.length > 0;
         if (pressDurationMs < LONG_PRESS_MS) {
-          await this.toggleComplete(item);
+          if (!checkboxHidden) {
+            await this.toggleComplete(item);
+          }
         } else {
           this.openEditDialog(item);
         }
@@ -2089,6 +2274,13 @@ var TodoOverlayCard = class extends i4 {
     this.dialogMode = void 0;
     this.dialogItem = void 0;
   }
+  async onDialogToggleComplete() {
+    if (!this.dialogItem) {
+      return;
+    }
+    await this.toggleComplete(this.dialogItem);
+    this.closeDialog();
+  }
   dialogValue() {
     if (this.dialogMode === "edit" && this.dialogItem) {
       const due = this.dialogItem.due_datetime ? splitDueDateTime(this.dialogItem.due_datetime) : { date: this.dialogItem.due_date ?? "", time: "" };
@@ -2199,6 +2391,7 @@ var TodoOverlayCard = class extends i4 {
                     .draggedId=${this.draggedId}
                     .hoverId=${this.hoverId}
                     .hoverPlacement=${this.hoverPlacement}
+                    .hideCompleteForParents=${this.config.hide_complete_for_parents ?? false}
 
                     @tree-pointer-down=${this.onPointerDown}
                     @tree-drag-start=${this.onDragStart}
@@ -2216,6 +2409,7 @@ var TodoOverlayCard = class extends i4 {
                             .draggedId=${this.draggedId}
                             .hoverId=${this.hoverId}
                             .hoverPlacement=${this.hoverPlacement}
+                            .hideCompleteForParents=${this.config.hide_complete_for_parents ?? false}
 
                             @tree-pointer-down=${this.onPointerDown}
                             @tree-drag-start=${this.onDragStart}
@@ -2235,6 +2429,7 @@ var TodoOverlayCard = class extends i4 {
                 .draggedId=${this.draggedId}
                 .hoverId=${this.hoverId}
                 .hoverPlacement=${this.hoverPlacement}
+                .hideCompleteForParents=${this.config.hide_complete_for_parents ?? false}
 
                 @tree-pointer-down=${this.onPointerDown}
                 @tree-drag-start=${this.onDragStart}
@@ -2320,10 +2515,13 @@ var TodoOverlayCard = class extends i4 {
                             .value=${this.dialogValue()}
                             .fieldSupport=${this.fieldSupport}
                             ?showDelete=${this.dialogMode === "edit"}
+                            ?showCompleteToggle=${this.dialogMode === "edit" && (this.config.hide_complete_for_parents ?? false) && (this.dialogItem?.children.length ?? 0) > 0}
+                            ?completed=${this.dialogItem?.completed ?? false}
 
                             @dialog-close=${this.closeDialog}
                             @dialog-save=${this.onDialogSave}
                             @dialog-delete=${this.onDialogDelete}
+                            @dialog-toggle-complete=${this.onDialogToggleComplete}
                         ></todo-overlay-item-dialog>
                     ` : ""}
 
