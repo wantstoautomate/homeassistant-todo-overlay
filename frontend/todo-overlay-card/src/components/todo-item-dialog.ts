@@ -1,5 +1,5 @@
 import {LitElement, html, css} from "lit";
-import {customElement, property} from "lit/decorators.js";
+import {customElement, property, state} from "lit/decorators.js";
 
 export interface TodoItemFormValue {
     title: string;
@@ -139,6 +139,20 @@ export class TodoItemDialog extends LitElement {
             color: var(--error-color);
             margin-inline-end: auto;
         }
+
+        .confirm-delete {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            width: 100%;
+            font-family: Roboto, "Noto Sans", sans-serif;
+            font-size: 14px;
+            color: var(--primary-text-color);
+        }
+
+        .confirm-delete span {
+            flex: 1;
+        }
     `;
 
     @property({attribute: false})
@@ -167,6 +181,15 @@ export class TodoItemDialog extends LitElement {
     @property({type: Boolean})
     completed = false;
 
+    // Deleting is the one destructive action this dialog can trigger, so
+    // it defaults to on - set false to skip straight to dialog-delete, as
+    // it always used to.
+    @property({type: Boolean})
+    confirmDelete = true;
+
+    @state()
+    private confirmingDelete = false;
+
     private close() {
         this.dispatchEvent(
             new CustomEvent("dialog-close", {bubbles: true, composed: true}),
@@ -184,6 +207,23 @@ export class TodoItemDialog extends LitElement {
     }
 
     private requestDelete() {
+        if (this.confirmDelete) {
+            this.confirmingDelete = true;
+            return;
+        }
+
+        this.dispatchEvent(
+            new CustomEvent("dialog-delete", {bubbles: true, composed: true}),
+        );
+    }
+
+    private cancelDelete() {
+        this.confirmingDelete = false;
+    }
+
+    private confirmDeleteNow() {
+        this.confirmingDelete = false;
+
         this.dispatchEvent(
             new CustomEvent("dialog-delete", {bubbles: true, composed: true}),
         );
@@ -318,17 +358,33 @@ export class TodoItemDialog extends LitElement {
 
                 <div class="actions" slot="footer">
                     ${
-                        this.showDelete
+                        this.confirmingDelete
                             ? html`
-                                <button class="destructive" @click=${this.requestDelete}>
-                                    Delete
+                                <div class="confirm-delete">
+                                    <span>Delete this item?</span>
+                                    <button @click=${this.cancelDelete}>
+                                        Cancel
+                                    </button>
+                                    <button class="destructive" @click=${this.confirmDeleteNow}>
+                                        Delete
+                                    </button>
+                                </div>
+                            `
+                            : html`
+                                ${
+                                    this.showDelete
+                                        ? html`
+                                            <button class="destructive" @click=${this.requestDelete}>
+                                                Delete
+                                            </button>
+                                        `
+                                        : ""
+                                }
+                                <button @click=${this.save}>
+                                    Save
                                 </button>
                             `
-                            : ""
                     }
-                    <button @click=${this.save}>
-                        Save
-                    </button>
                 </div>
             </ha-dialog>
         `;

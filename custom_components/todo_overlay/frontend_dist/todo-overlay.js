@@ -762,6 +762,33 @@ function supportsFeature(supportedFeatures, feature) {
   return typeof supportedFeatures === "number" && (supportedFeatures & feature) !== 0;
 }
 
+// src/sort.ts
+function dueTimestamp(item) {
+  const raw = item.due_datetime ?? (item.due_date ? `${item.due_date}T00:00:00` : null);
+  if (!raw) {
+    return Number.POSITIVE_INFINITY;
+  }
+  const parsed = new Date(raw).getTime();
+  return Number.isNaN(parsed) ? Number.POSITIVE_INFINITY : parsed;
+}
+function compareItems(a3, b3, sortBy) {
+  if (sortBy === "title") {
+    return a3.title.localeCompare(b3.title);
+  }
+  if (sortBy === "due_date") {
+    return dueTimestamp(a3) - dueTimestamp(b3);
+  }
+  return 0;
+}
+function sortTree(items, sortBy, sortOrder) {
+  if (sortBy === "manual") {
+    return items;
+  }
+  const direction = sortOrder === "desc" ? -1 : 1;
+  const sorted = [...items].sort((a3, b3) => direction * compareItems(a3, b3, sortBy));
+  return sorted.map((item) => ({ ...item, children: sortTree(item.children, sortBy, sortOrder) }));
+}
+
 // src/components/todo-item-dialog.ts
 var EMPTY_FORM_VALUE = {
   title: "",
@@ -784,6 +811,8 @@ var TodoItemDialog = class extends i4 {
     this.showDelete = false;
     this.showCompleteToggle = false;
     this.completed = false;
+    this.confirmDelete = true;
+    this.confirmingDelete = false;
   }
   close() {
     this.dispatchEvent(
@@ -800,6 +829,19 @@ var TodoItemDialog = class extends i4 {
     );
   }
   requestDelete() {
+    if (this.confirmDelete) {
+      this.confirmingDelete = true;
+      return;
+    }
+    this.dispatchEvent(
+      new CustomEvent("dialog-delete", { bubbles: true, composed: true })
+    );
+  }
+  cancelDelete() {
+    this.confirmingDelete = false;
+  }
+  confirmDeleteNow() {
+    this.confirmingDelete = false;
     this.dispatchEvent(
       new CustomEvent("dialog-delete", { bubbles: true, composed: true })
     );
@@ -907,14 +949,26 @@ var TodoItemDialog = class extends i4 {
                         ` : ""}
 
                 <div class="actions" slot="footer">
-                    ${this.showDelete ? b2`
-                                <button class="destructive" @click=${this.requestDelete}>
-                                    Delete
+                    ${this.confirmingDelete ? b2`
+                                <div class="confirm-delete">
+                                    <span>Delete this item?</span>
+                                    <button @click=${this.cancelDelete}>
+                                        Cancel
+                                    </button>
+                                    <button class="destructive" @click=${this.confirmDeleteNow}>
+                                        Delete
+                                    </button>
+                                </div>
+                            ` : b2`
+                                ${this.showDelete ? b2`
+                                            <button class="destructive" @click=${this.requestDelete}>
+                                                Delete
+                                            </button>
+                                        ` : ""}
+                                <button @click=${this.save}>
+                                    Save
                                 </button>
-                            ` : ""}
-                    <button @click=${this.save}>
-                        Save
-                    </button>
+                            `}
                 </div>
             </ha-dialog>
         `;
@@ -1025,6 +1079,20 @@ TodoItemDialog.styles = i`
             color: var(--error-color);
             margin-inline-end: auto;
         }
+
+        .confirm-delete {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            width: 100%;
+            font-family: Roboto, "Noto Sans", sans-serif;
+            font-size: 14px;
+            color: var(--primary-text-color);
+        }
+
+        .confirm-delete span {
+            flex: 1;
+        }
     `;
 __decorateClass([
   n4({ attribute: false })
@@ -1044,6 +1112,12 @@ __decorateClass([
 __decorateClass([
   n4({ type: Boolean })
 ], TodoItemDialog.prototype, "completed", 2);
+__decorateClass([
+  n4({ type: Boolean })
+], TodoItemDialog.prototype, "confirmDelete", 2);
+__decorateClass([
+  r5()
+], TodoItemDialog.prototype, "confirmingDelete", 2);
 TodoItemDialog = __decorateClass([
   t3("todo-overlay-item-dialog")
 ], TodoItemDialog);
@@ -1361,6 +1435,7 @@ var TodoTreeItem = class extends i4 {
   constructor() {
     super(...arguments);
     this.hideCompleteForParents = false;
+    this.dragDisabled = false;
     this.dragEngaged = false;
     this.pointerDownAt = 0;
     this.hasMoved = false;
@@ -1378,7 +1453,7 @@ var TodoTreeItem = class extends i4 {
       if (Math.hypot(dx, dy) <= MOVE_CANCEL_THRESHOLD_PX) {
         return;
       }
-      if (this.pointerIsMouse || this.holdReady) {
+      if (!this.dragDisabled && (this.pointerIsMouse || this.holdReady)) {
         this.hasMoved = true;
         this.dragEngaged = true;
         const grabOffset = this.holdRippleOrigin ?? { x: 0, y: 0 };
@@ -1578,6 +1653,7 @@ var TodoTreeItem = class extends i4 {
                                             .hoverId=${this.hoverId}
                                             .hoverPlacement=${this.hoverPlacement}
                                             .hideCompleteForParents=${this.hideCompleteForParents}
+                                            .dragDisabled=${this.dragDisabled}
                                         ></todo-overlay-tree-item>
                                     `
     )}
@@ -1784,6 +1860,9 @@ __decorateClass([
   n4({ attribute: false })
 ], TodoTreeItem.prototype, "hideCompleteForParents", 2);
 __decorateClass([
+  n4({ attribute: false })
+], TodoTreeItem.prototype, "dragDisabled", 2);
+__decorateClass([
   r5()
 ], TodoTreeItem.prototype, "holdRippleOrigin", 2);
 __decorateClass([
@@ -1799,6 +1878,7 @@ var TodoTree = class extends i4 {
     super(...arguments);
     this.items = [];
     this.hideCompleteForParents = false;
+    this.dragDisabled = false;
   }
   render() {
     return b2`
@@ -1811,6 +1891,7 @@ var TodoTree = class extends i4 {
                             .hoverId=${this.hoverId}
                             .hoverPlacement=${this.hoverPlacement}
                             .hideCompleteForParents=${this.hideCompleteForParents}
+                            .dragDisabled=${this.dragDisabled}
                         ></todo-overlay-tree-item>
                     `
     )}
@@ -1840,114 +1921,14 @@ __decorateClass([
 __decorateClass([
   n4({ attribute: false })
 ], TodoTree.prototype, "hideCompleteForParents", 2);
+__decorateClass([
+  n4({ attribute: false })
+], TodoTree.prototype, "dragDisabled", 2);
 TodoTree = __decorateClass([
   t3("todo-overlay-tree")
 ], TodoTree);
 
-// src/components/todo-overlay-card-editor.ts
-var EMPTY_CONFIG = { entity: "" };
-var TodoOverlayCardEditor = class extends i4 {
-  constructor() {
-    super(...arguments);
-    this._config = EMPTY_CONFIG;
-  }
-  setConfig(config) {
-    this._config = config;
-  }
-  emitConfigChanged(config) {
-    this._config = config;
-    this.dispatchEvent(
-      new CustomEvent("config-changed", {
-        detail: { config },
-        bubbles: true,
-        composed: true
-      })
-    );
-  }
-  onEntityChanged(e7) {
-    this.emitConfigChanged({ ...this._config, entity: e7.detail.value });
-  }
-  onHideCompleteForParentsChanged(e7) {
-    const checked = e7.target.checked;
-    this.emitConfigChanged({
-      ...this._config,
-      hide_complete_for_parents: checked || void 0
-    });
-  }
-  render() {
-    return b2`
-            <div class="field">
-                <ha-entity-picker
-                    .hass=${this.hass}
-                    .value=${this._config.entity ?? ""}
-                    .includeDomains=${["todo"]}
-                    label="Todo entity"
-                    required
-                    @value-changed=${this.onEntityChanged}
-                ></ha-entity-picker>
-            </div>
-
-            <div class="switch-row">
-                <ha-switch
-                    .checked=${this._config.hide_complete_for_parents ?? false}
-                    @change=${this.onHideCompleteForParentsChanged}
-                ></ha-switch>
-                <div class="label">
-                    <div class="title">Hide complete checkbox for parents</div>
-                    <div class="description">
-                        A parent item with children shows no completion checkbox on its
-                        own row - ticking a parent normally completes every descendant
-                        too. Complete it via its edit dialog (hold the row) instead.
-                    </div>
-                </div>
-            </div>
-        `;
-  }
-};
-TodoOverlayCardEditor.styles = i`
-        .field {
-            margin-bottom: 16px;
-        }
-
-        .switch-row {
-            display: flex;
-            align-items: flex-start;
-            gap: 12px;
-            padding: 8px 0;
-        }
-
-        .switch-row ha-switch {
-            margin-top: 2px;
-            flex-shrink: 0;
-        }
-
-        .switch-row .label {
-            flex: 1;
-            font-family: Roboto, "Noto Sans", sans-serif;
-        }
-
-        .switch-row .title {
-            font-size: 14px;
-            color: var(--primary-text-color);
-        }
-
-        .switch-row .description {
-            font-size: 12px;
-            color: var(--secondary-text-color);
-            margin-top: 2px;
-        }
-    `;
-__decorateClass([
-  n4({ attribute: false })
-], TodoOverlayCardEditor.prototype, "hass", 2);
-__decorateClass([
-  r5()
-], TodoOverlayCardEditor.prototype, "_config", 2);
-TodoOverlayCardEditor = __decorateClass([
-  t3("todo-overlay-card-editor")
-], TodoOverlayCardEditor);
-
-// src/todo-overlay.ts
+// src/components/todo-overlay-list.ts
 function collectAllRows(root) {
   const rows = [];
   for (const el of Array.from(root.querySelectorAll("*"))) {
@@ -1995,7 +1976,6 @@ function findDropTarget(y3, rows) {
   const relativeY = (y3 - nearest.rect.top) / nearest.rect.height;
   return resolvePlacement(nearest.id, nearest.children, relativeY);
 }
-var UNDO_TIMEOUT_MS = 8e3;
 function findItem(items, id) {
   for (const item of items) {
     if (item.id === id) {
@@ -2015,9 +1995,17 @@ function splitDueDateTime(iso) {
   const [date, time] = iso.split("T");
   return { date: date ?? "", time: (time ?? "").slice(0, 5) };
 }
-var TodoOverlayCard = class extends i4 {
+var UNDO_TIMEOUT_MS = 8e3;
+var TodoOverlayList = class extends i4 {
   constructor() {
     super(...arguments);
+    this.hideCompleteForParents = false;
+    this.sortBy = "manual";
+    this.sortOrder = "asc";
+    this.showClearButton = true;
+    this.showSaveLoadButtons = true;
+    this.showQuickAdd = true;
+    this.confirmDelete = true;
     this.dragGhostOffset = { x: 0, y: 0 };
     this.rowSnapshot = [];
     this.quickAddValue = "";
@@ -2045,7 +2033,7 @@ var TodoOverlayCard = class extends i4 {
         try {
           await moveItem(
             this.hass,
-            this.config.entity,
+            this.entity,
             draggedId,
             hoverId,
             hoverPlacement ?? "inside"
@@ -2057,37 +2045,11 @@ var TodoOverlayCard = class extends i4 {
       }
     };
   }
-  setConfig(config) {
-    if (!config.entity) {
-      throw new Error("todo-overlay-card: 'entity' is required");
-    }
-    this.config = config;
-  }
-  // Picked up by Home Assistant's edit-card dialog to show a UI editor
-  // instead of leaving the user to hand-write YAML - the returned
-  // element just needs a setConfig() method and to emit "config-changed"
-  // (see todo-overlay-card-editor.ts), the same contract every native
-  // card's editor follows.
-  static getConfigElement() {
-    return document.createElement("todo-overlay-card-editor");
-  }
-  // Called by the card picker when this card is first added to a
-  // dashboard, so it starts from a usable config rather than an empty
-  // one the editor would immediately complain about. HA's own call
-  // signature for this varies by version (some pass only `hass`), so
-  // every parameter here is optional and this falls back to scanning
-  // hass.states directly if entities/entitiesFallback come back empty.
-  static getStubConfig(hass, entities = [], entitiesFallback = []) {
-    const isTodoEntity = (entityId) => entityId.startsWith("todo.");
-    const fromStates = hass ? Object.keys(hass.states).filter(isTodoEntity) : [];
-    const entity = entities.find(isTodoEntity) ?? entitiesFallback.find(isTodoEntity) ?? fromStates[0] ?? "";
-    return { entity };
-  }
   updated(changed) {
-    if (!changed.has("hass") || !this.hass || !this.config) {
+    if (!changed.has("hass") || !this.hass || !this.entity) {
       return;
     }
-    const entityUpdate = this.hass.states[this.config.entity]?.last_updated;
+    const entityUpdate = this.hass.states[this.entity]?.last_updated;
     const entityChanged = entityUpdate !== void 0 && entityUpdate !== this.lastEntityUpdate;
     this.lastEntityUpdate = entityUpdate;
     if (!this.list && !this.error) {
@@ -2100,7 +2062,7 @@ var TodoOverlayCard = class extends i4 {
     try {
       this.list = await getList(
         this.hass,
-        this.config.entity
+        this.entity
       );
       this.error = void 0;
     } catch (err) {
@@ -2108,12 +2070,15 @@ var TodoOverlayCard = class extends i4 {
     }
   }
   get fieldSupport() {
-    const supportedFeatures = this.hass.states[this.config.entity]?.attributes.supported_features;
+    const supportedFeatures = this.hass.states[this.entity]?.attributes.supported_features;
     return {
       description: supportsFeature(supportedFeatures, TodoListEntityFeature.SET_DESCRIPTION_ON_ITEM),
       dueDate: supportsFeature(supportedFeatures, TodoListEntityFeature.SET_DUE_DATE_ON_ITEM),
       dueDateTime: supportsFeature(supportedFeatures, TodoListEntityFeature.SET_DUE_DATETIME_ON_ITEM)
     };
+  }
+  get dragDisabled() {
+    return this.sortBy !== "manual";
   }
   // --- drag / tap / hold ---------------------------------------------
   //
@@ -2148,7 +2113,7 @@ var TodoOverlayCard = class extends i4 {
       const item = findItem(this.list.items, this.draggedId);
       if (item) {
         const pressDurationMs = e7.detail.pressDurationMs;
-        const checkboxHidden = (this.config.hide_complete_for_parents ?? false) && item.children.length > 0;
+        const checkboxHidden = this.hideCompleteForParents && item.children.length > 0;
         if (pressDurationMs < LONG_PRESS_MS) {
           if (!checkboxHidden) {
             await this.toggleComplete(item);
@@ -2171,7 +2136,7 @@ var TodoOverlayCard = class extends i4 {
     try {
       const changes = await setCompleted(
         this.hass,
-        this.config.entity,
+        this.entity,
         item.id,
         !item.completed
       );
@@ -2199,7 +2164,7 @@ var TodoOverlayCard = class extends i4 {
     }
     window.clearTimeout(this.undoTimer);
     try {
-      await restoreCompleted(this.hass, this.config.entity, this.undoState.changes);
+      await restoreCompleted(this.hass, this.entity, this.undoState.changes);
       await this.load();
     } catch (err) {
       this.error = err instanceof Error ? err.message : String(err);
@@ -2208,7 +2173,7 @@ var TodoOverlayCard = class extends i4 {
   }
   async onClearCompleted() {
     try {
-      await clearCompleted(this.hass, this.config.entity);
+      await clearCompleted(this.hass, this.entity);
       await this.load();
     } catch (err) {
       this.error = err instanceof Error ? err.message : String(err);
@@ -2242,9 +2207,9 @@ var TodoOverlayCard = class extends i4 {
     const value = e7.detail;
     try {
       if (this.saveLoadAction === "save") {
-        await saveList(this.hass, this.config.entity, value.name, value.persistStates);
+        await saveList(this.hass, this.entity, value.name, value.persistStates);
       } else {
-        await loadList(this.hass, this.config.entity, value.name, value.mode);
+        await loadList(this.hass, this.entity, value.name, value.mode);
       }
       await this.load();
     } catch (err) {
@@ -2311,7 +2276,7 @@ var TodoOverlayCard = class extends i4 {
     try {
       if (this.dialogMode === "edit" && this.dialogItem) {
         const serviceData = {
-          entity_id: this.config.entity,
+          entity_id: this.entity,
           item: this.dialogItem.id,
           rename: value.title
         };
@@ -2324,10 +2289,10 @@ var TodoOverlayCard = class extends i4 {
           serviceData.due_date = dueDate;
         }
         await this.hass.callService("todo", "update_item", serviceData);
-        await setQuantity(this.hass, this.config.entity, this.dialogItem.id, quantity);
-        await setTags(this.hass, this.config.entity, this.dialogItem.id, tags);
+        await setQuantity(this.hass, this.entity, this.dialogItem.id, quantity);
+        await setTags(this.hass, this.entity, this.dialogItem.id, tags);
       } else {
-        await createItem(this.hass, this.config.entity, {
+        await createItem(this.hass, this.entity, {
           title: value.title,
           description,
           dueDate,
@@ -2348,7 +2313,7 @@ var TodoOverlayCard = class extends i4 {
     }
     try {
       await this.hass.callService("todo", "remove_item", {
-        entity_id: this.config.entity,
+        entity_id: this.entity,
         item: this.dialogItem.id
       });
       await this.load();
@@ -2373,7 +2338,7 @@ var TodoOverlayCard = class extends i4 {
     }
     try {
       await this.hass.callService("todo", "add_item", {
-        entity_id: this.config.entity,
+        entity_id: this.entity,
         item: title
       });
       this.quickAddValue = "";
@@ -2383,15 +2348,17 @@ var TodoOverlayCard = class extends i4 {
     }
   }
   renderTree(list) {
-    const completedItems = list.items.filter((item) => item.completed);
+    const items = sortTree(list.items, this.sortBy, this.sortOrder);
+    const completedItems = items.filter((item) => item.completed);
     if (completedItems.length === 0) {
       return b2`
                 <todo-overlay-tree
-                    .items=${list.items}
+                    .items=${items}
                     .draggedId=${this.draggedId}
                     .hoverId=${this.hoverId}
                     .hoverPlacement=${this.hoverPlacement}
-                    .hideCompleteForParents=${this.config.hide_complete_for_parents ?? false}
+                    .hideCompleteForParents=${this.hideCompleteForParents}
+                    .dragDisabled=${this.dragDisabled}
 
                     @tree-pointer-down=${this.onPointerDown}
                     @tree-drag-start=${this.onDragStart}
@@ -2400,7 +2367,7 @@ var TodoOverlayCard = class extends i4 {
                 ></todo-overlay-tree>
             `;
     }
-    const activeItems = list.items.filter((item) => !item.completed);
+    const activeItems = items.filter((item) => !item.completed);
     return b2`
             ${activeItems.length ? b2`
                         <div class="section-header">Active</div>
@@ -2409,7 +2376,8 @@ var TodoOverlayCard = class extends i4 {
                             .draggedId=${this.draggedId}
                             .hoverId=${this.hoverId}
                             .hoverPlacement=${this.hoverPlacement}
-                            .hideCompleteForParents=${this.config.hide_complete_for_parents ?? false}
+                            .hideCompleteForParents=${this.hideCompleteForParents}
+                            .dragDisabled=${this.dragDisabled}
 
                             @tree-pointer-down=${this.onPointerDown}
                             @tree-drag-start=${this.onDragStart}
@@ -2420,16 +2388,19 @@ var TodoOverlayCard = class extends i4 {
 
             <div class="section-header">
                 <span>Completed</span>
-                <button class="clear-completed" @click=${this.onClearCompleted}>
-                    Clear completed
-                </button>
+                ${this.showClearButton ? b2`
+                            <button class="clear-completed" @click=${this.onClearCompleted}>
+                                Clear completed
+                            </button>
+                        ` : ""}
             </div>
             <todo-overlay-tree
                 .items=${completedItems}
                 .draggedId=${this.draggedId}
                 .hoverId=${this.hoverId}
                 .hoverPlacement=${this.hoverPlacement}
-                .hideCompleteForParents=${this.config.hide_complete_for_parents ?? false}
+                .hideCompleteForParents=${this.hideCompleteForParents}
+                .dragDisabled=${this.dragDisabled}
 
                 @tree-pointer-down=${this.onPointerDown}
                 @tree-drag-start=${this.onDragStart}
@@ -2465,40 +2436,44 @@ var TodoOverlayCard = class extends i4 {
   }
   render() {
     return b2`
-            <ha-card header="Todo Overlay">
+            ${this.showSaveLoadButtons ? b2`
+                        <div class="list-actions">
+                            <button @click=${this.openSaveDialog}>Save list</button>
+                            <button @click=${this.openLoadDialog}>Load list</button>
+                        </div>
+                    ` : ""}
 
-                <div class="list-actions">
-                    <button @click=${this.openSaveDialog}>Save list</button>
-                    <button @click=${this.openLoadDialog}>Load list</button>
-                </div>
+            ${this.showQuickAdd ? b2`
+                        <div class="quick-add">
+                            <input
+                                type="text"
+                                placeholder="Add item"
+                                .value=${this.quickAddValue}
+                                @input=${this.onQuickAddInput}
+                                @keydown=${this.onQuickAddKeydown}
+                            />
+                            <button class="add" @click=${this.submitQuickAdd}>
+                                Add
+                            </button>
+                            <button class="details" @click=${this.openCreateDialog}>
+                                Details…
+                            </button>
+                        </div>
+                    ` : b2`
+                        <div class="quick-add-collapsed">
+                            <button @click=${this.openCreateDialog}>+ Add item</button>
+                        </div>
+                    `}
 
-                <div class="quick-add">
-                    <input
-                        type="text"
-                        placeholder="Add item"
-                        .value=${this.quickAddValue}
-                        @input=${this.onQuickAddInput}
-                        @keydown=${this.onQuickAddKeydown}
-                    />
-                    <button class="add" @click=${this.submitQuickAdd}>
-                        Add
-                    </button>
-                    <button class="details" @click=${this.openCreateDialog}>
-                        Details…
-                    </button>
-                </div>
-
-                ${this.error ? b2`
-                            <div style="padding:16px; color: var(--error-color)">
-                                ${this.error}
+            ${this.error ? b2`
+                        <div style="padding:16px; color: var(--error-color)">
+                            ${this.error}
+                        </div>
+                    ` : this.list ? this.renderTree(this.list) : b2`
+                            <div style="padding:16px">
+                                Loading...
                             </div>
-                        ` : this.list ? this.renderTree(this.list) : b2`
-                                <div style="padding:16px">
-                                    Loading...
-                                </div>
-                            `}
-
-            </ha-card>
+                        `}
 
             ${this.undoState ? b2`
                         <div class="undo-snackbar">
@@ -2515,7 +2490,8 @@ var TodoOverlayCard = class extends i4 {
                             .value=${this.dialogValue()}
                             .fieldSupport=${this.fieldSupport}
                             ?showDelete=${this.dialogMode === "edit"}
-                            ?showCompleteToggle=${this.dialogMode === "edit" && (this.config.hide_complete_for_parents ?? false) && (this.dialogItem?.children.length ?? 0) > 0}
+                            ?confirmDelete=${this.confirmDelete}
+                            ?showCompleteToggle=${this.dialogMode === "edit" && this.hideCompleteForParents && (this.dialogItem?.children.length ?? 0) > 0}
                             ?completed=${this.dialogItem?.completed ?? false}
 
                             @dialog-close=${this.closeDialog}
@@ -2541,7 +2517,7 @@ var TodoOverlayCard = class extends i4 {
         `;
   }
 };
-TodoOverlayCard.styles = i`
+TodoOverlayList.styles = i`
         .quick-add {
             display: flex;
             align-items: center;
@@ -2572,6 +2548,21 @@ TodoOverlayCard.styles = i`
             background: none;
             font-family: inherit;
             cursor: pointer;
+        }
+
+        .quick-add-collapsed {
+            padding: 4px 20px 12px;
+        }
+
+        .quick-add-collapsed button {
+            border: none;
+            background: none;
+            font-family: Roboto, "Noto Sans", sans-serif;
+            font-size: 14px;
+            color: var(--primary-color);
+            font-weight: 500;
+            cursor: pointer;
+            padding: 4px 0;
         }
 
         .list-actions {
@@ -2690,49 +2681,365 @@ TodoOverlayCard.styles = i`
     `;
 __decorateClass([
   n4({ attribute: false })
+], TodoOverlayList.prototype, "hass", 2);
+__decorateClass([
+  n4()
+], TodoOverlayList.prototype, "entity", 2);
+__decorateClass([
+  n4({ type: Boolean })
+], TodoOverlayList.prototype, "hideCompleteForParents", 2);
+__decorateClass([
+  n4()
+], TodoOverlayList.prototype, "sortBy", 2);
+__decorateClass([
+  n4()
+], TodoOverlayList.prototype, "sortOrder", 2);
+__decorateClass([
+  n4({ type: Boolean })
+], TodoOverlayList.prototype, "showClearButton", 2);
+__decorateClass([
+  n4({ type: Boolean })
+], TodoOverlayList.prototype, "showSaveLoadButtons", 2);
+__decorateClass([
+  n4({ type: Boolean })
+], TodoOverlayList.prototype, "showQuickAdd", 2);
+__decorateClass([
+  n4({ type: Boolean })
+], TodoOverlayList.prototype, "confirmDelete", 2);
+__decorateClass([
+  r5()
+], TodoOverlayList.prototype, "list", 2);
+__decorateClass([
+  r5()
+], TodoOverlayList.prototype, "error", 2);
+__decorateClass([
+  r5()
+], TodoOverlayList.prototype, "draggedId", 2);
+__decorateClass([
+  r5()
+], TodoOverlayList.prototype, "hoverId", 2);
+__decorateClass([
+  r5()
+], TodoOverlayList.prototype, "hoverPlacement", 2);
+__decorateClass([
+  r5()
+], TodoOverlayList.prototype, "ghostPosition", 2);
+__decorateClass([
+  r5()
+], TodoOverlayList.prototype, "dialogMode", 2);
+__decorateClass([
+  r5()
+], TodoOverlayList.prototype, "dialogItem", 2);
+__decorateClass([
+  r5()
+], TodoOverlayList.prototype, "quickAddValue", 2);
+__decorateClass([
+  r5()
+], TodoOverlayList.prototype, "undoState", 2);
+__decorateClass([
+  r5()
+], TodoOverlayList.prototype, "saveLoadAction", 2);
+__decorateClass([
+  r5()
+], TodoOverlayList.prototype, "saveLoadValue", 2);
+__decorateClass([
+  r5()
+], TodoOverlayList.prototype, "savedNames", 2);
+TodoOverlayList = __decorateClass([
+  t3("todo-overlay-list")
+], TodoOverlayList);
+
+// src/components/todo-overlay-card-editor.ts
+var EMPTY_CONFIG = { entity: "" };
+var TodoOverlayCardEditor = class extends i4 {
+  constructor() {
+    super(...arguments);
+    this._config = EMPTY_CONFIG;
+  }
+  setConfig(config) {
+    this._config = config;
+  }
+  emitConfigChanged(config) {
+    this._config = config;
+    this.dispatchEvent(
+      new CustomEvent("config-changed", {
+        detail: { config },
+        bubbles: true,
+        composed: true
+      })
+    );
+  }
+  // Always edited as a list, even when it's a single entry - a config
+  // written by hand can still use the older singular `entity` field
+  // (TodoOverlayCard's render() falls back to it when `entities` is
+  // empty), but any edit made here migrates it to `entities`, since
+  // that's the one field capable of expressing both single- and
+  // multi-entity configs.
+  get entities() {
+    if (this._config.entities?.length) {
+      return this._config.entities;
+    }
+    return this._config.entity ? [this._config.entity] : [];
+  }
+  onEntitiesChanged(e7) {
+    const { entity: _entity, ...rest } = this._config;
+    this.emitConfigChanged({ ...rest, entities: e7.detail.value });
+  }
+  onTitleChanged(e7) {
+    const value = e7.target.value;
+    this.emitConfigChanged({ ...this._config, title: value || void 0 });
+  }
+  onSortByChanged(e7) {
+    const value = e7.target.value;
+    this.emitConfigChanged({ ...this._config, sort_by: value });
+  }
+  onSortOrderChanged(e7) {
+    const value = e7.target.value;
+    this.emitConfigChanged({ ...this._config, sort_order: value });
+  }
+  onSwitchChanged(field, defaultValue) {
+    return (e7) => {
+      const checked = e7.target.checked;
+      this.emitConfigChanged({
+        ...this._config,
+        [field]: checked === defaultValue ? void 0 : checked
+      });
+    };
+  }
+  render() {
+    const sortBy = this._config.sort_by ?? "manual";
+    return b2`
+            <div class="field">
+                <ha-entities-picker
+                    .hass=${this.hass}
+                    .value=${this.entities}
+                    .includeDomains=${["todo"]}
+                    label="Todo entities"
+                    @value-changed=${this.onEntitiesChanged}
+                ></ha-entities-picker>
+            </div>
+
+            <div class="field text-field">
+                <label for="todo-overlay-title">Title</label>
+                <input
+                    id="todo-overlay-title"
+                    type="text"
+                    placeholder="Todo Overlay"
+                    .value=${this._config.title ?? ""}
+                    @input=${this.onTitleChanged}
+                />
+            </div>
+
+            <div class="section-title">Sorting</div>
+
+            <div class="row">
+                <div class="field select-field">
+                    <label for="todo-overlay-sort-by">Sort by</label>
+                    <select id="todo-overlay-sort-by" .value=${sortBy} @change=${this.onSortByChanged}>
+                        <option value="manual">Manual (drag and drop)</option>
+                        <option value="title">Title</option>
+                        <option value="due_date">Due date</option>
+                    </select>
+                </div>
+
+                ${sortBy !== "manual" ? b2`
+                            <div class="field select-field">
+                                <label for="todo-overlay-sort-order">Order</label>
+                                <select
+                                    id="todo-overlay-sort-order"
+                                    .value=${this._config.sort_order ?? "asc"}
+                                    @change=${this.onSortOrderChanged}
+                                >
+                                    <option value="asc">Ascending</option>
+                                    <option value="desc">Descending</option>
+                                </select>
+                            </div>
+                        ` : ""}
+            </div>
+
+            <div class="section-title">Behavior</div>
+
+            <ha-formfield label="Hide complete checkbox for parents">
+                <ha-switch
+                    .checked=${this._config.hide_complete_for_parents ?? false}
+                    @change=${this.onSwitchChanged("hide_complete_for_parents", false)}
+                ></ha-switch>
+            </ha-formfield>
+
+            <ha-formfield label="Confirm before deleting an item">
+                <ha-switch
+                    .checked=${this._config.confirm_delete ?? true}
+                    @change=${this.onSwitchChanged("confirm_delete", true)}
+                ></ha-switch>
+            </ha-formfield>
+
+            <div class="section-title">Show</div>
+
+            <ha-formfield label="Clear completed button">
+                <ha-switch
+                    .checked=${this._config.show_clear_completed_button ?? true}
+                    @change=${this.onSwitchChanged("show_clear_completed_button", true)}
+                ></ha-switch>
+            </ha-formfield>
+
+            <ha-formfield label="Save/load list buttons">
+                <ha-switch
+                    .checked=${this._config.show_save_load_buttons ?? true}
+                    @change=${this.onSwitchChanged("show_save_load_buttons", true)}
+                ></ha-switch>
+            </ha-formfield>
+
+            <ha-formfield label="Quick-add bar">
+                <ha-switch
+                    .checked=${this._config.show_quick_add ?? true}
+                    @change=${this.onSwitchChanged("show_quick_add", true)}
+                ></ha-switch>
+            </ha-formfield>
+        `;
+  }
+};
+TodoOverlayCardEditor.styles = i`
+        .field {
+            margin-bottom: 16px;
+        }
+
+        .row {
+            display: flex;
+            gap: 16px;
+        }
+
+        .row > .field {
+            flex: 1;
+            min-width: 0;
+        }
+
+        .text-field label,
+        .select-field label {
+            display: block;
+            font-size: 12px;
+            color: var(--secondary-text-color);
+            margin-bottom: 4px;
+        }
+
+        .text-field input,
+        .select-field select {
+            width: 100%;
+            box-sizing: border-box;
+            font-family: inherit;
+            font-size: 14px;
+            color: var(--primary-text-color);
+            background: none;
+            border: none;
+            border-bottom: 1px solid var(--divider-color);
+            padding: 8px 0;
+            outline: none;
+        }
+
+        .text-field input:focus,
+        .select-field select:focus {
+            border-bottom: 2px solid var(--primary-color);
+        }
+
+        .section-title {
+            font-size: 12px;
+            font-weight: 500;
+            text-transform: uppercase;
+            color: var(--secondary-text-color);
+            margin: 24px 0 8px;
+        }
+
+        ha-formfield {
+            display: block;
+        }
+    `;
+__decorateClass([
+  n4({ attribute: false })
+], TodoOverlayCardEditor.prototype, "hass", 2);
+__decorateClass([
+  r5()
+], TodoOverlayCardEditor.prototype, "_config", 2);
+TodoOverlayCardEditor = __decorateClass([
+  t3("todo-overlay-card-editor")
+], TodoOverlayCardEditor);
+
+// src/todo-overlay.ts
+function friendlyName(hass, entityId) {
+  const name = hass.states[entityId]?.attributes.friendly_name;
+  return typeof name === "string" && name ? name : entityId;
+}
+var TodoOverlayCard = class extends i4 {
+  setConfig(config) {
+    const hasEntities = Array.isArray(config.entities) && config.entities.length > 0;
+    if (!config.entity && !hasEntities) {
+      throw new Error("todo-overlay-card: 'entity' or 'entities' is required");
+    }
+    this.config = config;
+  }
+  // Picked up by Home Assistant's edit-card dialog to show a UI editor
+  // instead of leaving the user to hand-write YAML - the returned
+  // element just needs a setConfig() method and to emit "config-changed"
+  // (see todo-overlay-card-editor.ts), the same contract every native
+  // card's editor follows.
+  static getConfigElement() {
+    return document.createElement("todo-overlay-card-editor");
+  }
+  // Called by the card picker when this card is first added to a
+  // dashboard, so it starts from a usable config rather than an empty
+  // one the editor would immediately complain about. HA's own call
+  // signature for this varies by version (some pass only `hass`), so
+  // every parameter here is optional and this falls back to scanning
+  // hass.states directly if entities/entitiesFallback come back empty.
+  static getStubConfig(hass, entities = [], entitiesFallback = []) {
+    const isTodoEntity = (entityId) => entityId.startsWith("todo.");
+    const fromStates = hass ? Object.keys(hass.states).filter(isTodoEntity) : [];
+    const entity = entities.find(isTodoEntity) ?? entitiesFallback.find(isTodoEntity) ?? fromStates[0] ?? "";
+    return { entity };
+  }
+  render() {
+    const entityIds = this.config.entities?.length ? this.config.entities : this.config.entity ? [this.config.entity] : [];
+    const isMulti = entityIds.length > 1;
+    const header = isMulti ? this.config.title : this.config.title ?? "Todo Overlay";
+    return b2`
+            <ha-card header=${header || A}>
+                ${entityIds.map((entityId) => b2`
+                    <div class="entity-section">
+                        ${isMulti ? b2`<div class="entity-header">${friendlyName(this.hass, entityId)}</div>` : ""}
+                        <todo-overlay-list
+                            .hass=${this.hass}
+                            .entity=${entityId}
+                            .hideCompleteForParents=${this.config.hide_complete_for_parents ?? false}
+                            .sortBy=${this.config.sort_by ?? "manual"}
+                            .sortOrder=${this.config.sort_order ?? "asc"}
+                            .showClearButton=${this.config.show_clear_completed_button ?? true}
+                            .showSaveLoadButtons=${this.config.show_save_load_buttons ?? true}
+                            .showQuickAdd=${this.config.show_quick_add ?? true}
+                            .confirmDelete=${this.config.confirm_delete ?? true}
+                        ></todo-overlay-list>
+                    </div>
+                `)}
+            </ha-card>
+        `;
+  }
+};
+TodoOverlayCard.styles = i`
+        .entity-section + .entity-section {
+            border-top: 1px solid var(--divider-color);
+        }
+
+        .entity-header {
+            padding: 16px 20px 4px;
+            font-family: Roboto, "Noto Sans", sans-serif;
+            font-size: 16px;
+            font-weight: 500;
+            color: var(--primary-text-color);
+        }
+    `;
+__decorateClass([
+  n4({ attribute: false })
 ], TodoOverlayCard.prototype, "hass", 2);
 __decorateClass([
   n4()
 ], TodoOverlayCard.prototype, "config", 2);
-__decorateClass([
-  r5()
-], TodoOverlayCard.prototype, "list", 2);
-__decorateClass([
-  r5()
-], TodoOverlayCard.prototype, "error", 2);
-__decorateClass([
-  r5()
-], TodoOverlayCard.prototype, "draggedId", 2);
-__decorateClass([
-  r5()
-], TodoOverlayCard.prototype, "hoverId", 2);
-__decorateClass([
-  r5()
-], TodoOverlayCard.prototype, "hoverPlacement", 2);
-__decorateClass([
-  r5()
-], TodoOverlayCard.prototype, "ghostPosition", 2);
-__decorateClass([
-  r5()
-], TodoOverlayCard.prototype, "dialogMode", 2);
-__decorateClass([
-  r5()
-], TodoOverlayCard.prototype, "dialogItem", 2);
-__decorateClass([
-  r5()
-], TodoOverlayCard.prototype, "quickAddValue", 2);
-__decorateClass([
-  r5()
-], TodoOverlayCard.prototype, "undoState", 2);
-__decorateClass([
-  r5()
-], TodoOverlayCard.prototype, "saveLoadAction", 2);
-__decorateClass([
-  r5()
-], TodoOverlayCard.prototype, "saveLoadValue", 2);
-__decorateClass([
-  r5()
-], TodoOverlayCard.prototype, "savedNames", 2);
 TodoOverlayCard = __decorateClass([
   t3("todo-overlay-card")
 ], TodoOverlayCard);

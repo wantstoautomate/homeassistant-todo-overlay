@@ -2,6 +2,7 @@ import {LitElement, html, css} from "lit";
 import {customElement, property, state} from "lit/decorators.js";
 
 import type {HassLike} from "../hass";
+import type {SortBy, SortOrder} from "../sort";
 import type {TodoOverlayCardConfig} from "../todo-overlay";
 
 const EMPTY_CONFIG: TodoOverlayCardConfig = {entity: ""};
@@ -20,32 +21,53 @@ export class TodoOverlayCardEditor extends LitElement {
             margin-bottom: 16px;
         }
 
-        .switch-row {
+        .row {
             display: flex;
-            align-items: flex-start;
-            gap: 12px;
-            padding: 8px 0;
+            gap: 16px;
         }
 
-        .switch-row ha-switch {
-            margin-top: 2px;
-            flex-shrink: 0;
-        }
-
-        .switch-row .label {
+        .row > .field {
             flex: 1;
-            font-family: Roboto, "Noto Sans", sans-serif;
+            min-width: 0;
         }
 
-        .switch-row .title {
-            font-size: 14px;
-            color: var(--primary-text-color);
-        }
-
-        .switch-row .description {
+        .text-field label,
+        .select-field label {
+            display: block;
             font-size: 12px;
             color: var(--secondary-text-color);
-            margin-top: 2px;
+            margin-bottom: 4px;
+        }
+
+        .text-field input,
+        .select-field select {
+            width: 100%;
+            box-sizing: border-box;
+            font-family: inherit;
+            font-size: 14px;
+            color: var(--primary-text-color);
+            background: none;
+            border: none;
+            border-bottom: 1px solid var(--divider-color);
+            padding: 8px 0;
+            outline: none;
+        }
+
+        .text-field input:focus,
+        .select-field select:focus {
+            border-bottom: 2px solid var(--primary-color);
+        }
+
+        .section-title {
+            font-size: 12px;
+            font-weight: 500;
+            text-transform: uppercase;
+            color: var(--secondary-text-color);
+            margin: 24px 0 8px;
+        }
+
+        ha-formfield {
+            display: block;
         }
     `;
 
@@ -71,46 +93,149 @@ export class TodoOverlayCardEditor extends LitElement {
         );
     }
 
-    private onEntityChanged(e: CustomEvent<{value: string}>) {
-        this.emitConfigChanged({...this._config, entity: e.detail.value});
+    // Always edited as a list, even when it's a single entry - a config
+    // written by hand can still use the older singular `entity` field
+    // (TodoOverlayCard's render() falls back to it when `entities` is
+    // empty), but any edit made here migrates it to `entities`, since
+    // that's the one field capable of expressing both single- and
+    // multi-entity configs.
+    private get entities(): string[] {
+        if (this._config.entities?.length) {
+            return this._config.entities;
+        }
+
+        return this._config.entity ? [this._config.entity] : [];
     }
 
-    private onHideCompleteForParentsChanged(e: Event) {
-        const checked = (e.target as HTMLInputElement).checked;
+    private onEntitiesChanged(e: CustomEvent<{value: string[]}>) {
+        const {entity: _entity, ...rest} = this._config;
 
-        this.emitConfigChanged({
-            ...this._config,
-            hide_complete_for_parents: checked || undefined,
-        });
+        this.emitConfigChanged({...rest, entities: e.detail.value});
+    }
+
+    private onTitleChanged(e: InputEvent) {
+        const value = (e.target as HTMLInputElement).value;
+
+        this.emitConfigChanged({...this._config, title: value || undefined});
+    }
+
+    private onSortByChanged(e: Event) {
+        const value = (e.target as HTMLSelectElement).value as SortBy;
+
+        this.emitConfigChanged({...this._config, sort_by: value});
+    }
+
+    private onSortOrderChanged(e: Event) {
+        const value = (e.target as HTMLSelectElement).value as SortOrder;
+
+        this.emitConfigChanged({...this._config, sort_order: value});
+    }
+
+    private onSwitchChanged(field: keyof TodoOverlayCardConfig, defaultValue: boolean) {
+        return (e: Event) => {
+            const checked = (e.target as HTMLInputElement).checked;
+
+            this.emitConfigChanged({
+                ...this._config,
+                [field]: checked === defaultValue ? undefined : checked,
+            });
+        };
     }
 
     render() {
+        const sortBy = this._config.sort_by ?? "manual";
+
         return html`
             <div class="field">
-                <ha-entity-picker
+                <ha-entities-picker
                     .hass=${this.hass}
-                    .value=${this._config.entity ?? ""}
+                    .value=${this.entities}
                     .includeDomains=${["todo"]}
-                    label="Todo entity"
-                    required
-                    @value-changed=${this.onEntityChanged}
-                ></ha-entity-picker>
+                    label="Todo entities"
+                    @value-changed=${this.onEntitiesChanged}
+                ></ha-entities-picker>
             </div>
 
-            <div class="switch-row">
+            <div class="field text-field">
+                <label for="todo-overlay-title">Title</label>
+                <input
+                    id="todo-overlay-title"
+                    type="text"
+                    placeholder="Todo Overlay"
+                    .value=${this._config.title ?? ""}
+                    @input=${this.onTitleChanged}
+                />
+            </div>
+
+            <div class="section-title">Sorting</div>
+
+            <div class="row">
+                <div class="field select-field">
+                    <label for="todo-overlay-sort-by">Sort by</label>
+                    <select id="todo-overlay-sort-by" .value=${sortBy} @change=${this.onSortByChanged}>
+                        <option value="manual">Manual (drag and drop)</option>
+                        <option value="title">Title</option>
+                        <option value="due_date">Due date</option>
+                    </select>
+                </div>
+
+                ${
+                    sortBy !== "manual"
+                        ? html`
+                            <div class="field select-field">
+                                <label for="todo-overlay-sort-order">Order</label>
+                                <select
+                                    id="todo-overlay-sort-order"
+                                    .value=${this._config.sort_order ?? "asc"}
+                                    @change=${this.onSortOrderChanged}
+                                >
+                                    <option value="asc">Ascending</option>
+                                    <option value="desc">Descending</option>
+                                </select>
+                            </div>
+                        `
+                        : ""
+                }
+            </div>
+
+            <div class="section-title">Behavior</div>
+
+            <ha-formfield label="Hide complete checkbox for parents">
                 <ha-switch
                     .checked=${this._config.hide_complete_for_parents ?? false}
-                    @change=${this.onHideCompleteForParentsChanged}
+                    @change=${this.onSwitchChanged("hide_complete_for_parents", false)}
                 ></ha-switch>
-                <div class="label">
-                    <div class="title">Hide complete checkbox for parents</div>
-                    <div class="description">
-                        A parent item with children shows no completion checkbox on its
-                        own row - ticking a parent normally completes every descendant
-                        too. Complete it via its edit dialog (hold the row) instead.
-                    </div>
-                </div>
-            </div>
+            </ha-formfield>
+
+            <ha-formfield label="Confirm before deleting an item">
+                <ha-switch
+                    .checked=${this._config.confirm_delete ?? true}
+                    @change=${this.onSwitchChanged("confirm_delete", true)}
+                ></ha-switch>
+            </ha-formfield>
+
+            <div class="section-title">Show</div>
+
+            <ha-formfield label="Clear completed button">
+                <ha-switch
+                    .checked=${this._config.show_clear_completed_button ?? true}
+                    @change=${this.onSwitchChanged("show_clear_completed_button", true)}
+                ></ha-switch>
+            </ha-formfield>
+
+            <ha-formfield label="Save/load list buttons">
+                <ha-switch
+                    .checked=${this._config.show_save_load_buttons ?? true}
+                    @change=${this.onSwitchChanged("show_save_load_buttons", true)}
+                ></ha-switch>
+            </ha-formfield>
+
+            <ha-formfield label="Quick-add bar">
+                <ha-switch
+                    .checked=${this._config.show_quick_add ?? true}
+                    @change=${this.onSwitchChanged("show_quick_add", true)}
+                ></ha-switch>
+            </ha-formfield>
         `;
     }
 }

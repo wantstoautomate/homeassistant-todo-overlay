@@ -31,6 +31,9 @@ export class TodoTree extends LitElement {
     @property({attribute: false})
     hideCompleteForParents = false;
 
+    @property({attribute: false})
+    dragDisabled = false;
+
     render() {
         return html`
             <ul>
@@ -42,6 +45,7 @@ export class TodoTree extends LitElement {
                             .hoverId=${this.hoverId}
                             .hoverPlacement=${this.hoverPlacement}
                             .hideCompleteForParents=${this.hideCompleteForParents}
+                            .dragDisabled=${this.dragDisabled}
                         ></todo-overlay-tree-item>
                     `,
                 )}

@@ -282,6 +282,15 @@ export class TodoTreeItem extends LitElement {
     @property({attribute: false})
     hideCompleteForParents = false;
 
+    // When a sort mode other than "manual" is active, drag-to-reorder
+    // would be actively misleading - the position it visually ends up in
+    // has nothing to do with where it was dropped, since sort order
+    // overrides it on the next render. Movement past the jitter threshold
+    // still cancels a hold (same as the touch pre-holdReady path), it
+    // just never engages a drag.
+    @property({attribute: false})
+    dragDisabled = false;
+
     @state()
     private holdRippleOrigin?: {x: number; y: number};
 
@@ -400,7 +409,7 @@ export class TodoTreeItem extends LitElement {
             return;
         }
 
-        if (this.pointerIsMouse || this.holdReady) {
+        if (!this.dragDisabled && (this.pointerIsMouse || this.holdReady)) {
             this.hasMoved = true;
             this.dragEngaged = true;
 
@@ -602,6 +611,7 @@ export class TodoTreeItem extends LitElement {
                                             .hoverId=${this.hoverId}
                                             .hoverPlacement=${this.hoverPlacement}
                                             .hideCompleteForParents=${this.hideCompleteForParents}
+                                            .dragDisabled=${this.dragDisabled}
                                         ></todo-overlay-tree-item>
                                     `,
                                 )}
