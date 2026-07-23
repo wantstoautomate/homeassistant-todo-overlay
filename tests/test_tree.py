@@ -48,6 +48,25 @@ def test_build_tree_attaches_quantities():
     assert tree[1].quantity is None
 
 
+def test_build_tree_attaches_trigger_on_due():
+    items = [
+        TodoItem(id="1", title="Renew passport", completed=False),
+        TodoItem(id="2", title="Milk", completed=False),
+    ]
+
+    positions = {
+        "1": ItemPosition(parent_id=None, order=0),
+        "2": ItemPosition(parent_id=None, order=1),
+    }
+
+    tree = build_tree(items, positions, trigger_on_due={"1"})
+
+    assert tree[0].trigger_on_due is True
+    # Not in the set - stays False rather than stale data left over from
+    # a previous build_tree call on the same objects.
+    assert tree[1].trigger_on_due is False
+
+
 def test_build_tree_sorts_by_order():
     items = [
         TodoItem(id="1", title="First", completed=False),

@@ -102,6 +102,8 @@ class FakeMetadataStore:
         self._snapshots: dict[str, dict] = {}
         self._quantities: dict[str, str] = {}
         self._tags: dict[str, list[str]] = {}
+        self._trigger_on_due: set[str] = set()
+        self._due_fired: dict[str, str] = {}
 
     async def get_relationships(self, entity_id: str) -> dict[str, ItemPosition]:
         return dict(self._positions)
@@ -171,6 +173,47 @@ class FakeMetadataStore:
     ) -> None:
         for item_id in item_ids:
             self._tags.pop(item_id, None)
+
+    async def get_trigger_on_due(self, entity_id: str) -> set[str]:
+        return set(self._trigger_on_due)
+
+    async def set_trigger_on_due(
+        self,
+        entity_id: str,
+        item_id: str,
+        enabled: bool,
+    ) -> None:
+        if enabled:
+            self._trigger_on_due.add(item_id)
+        else:
+            self._trigger_on_due.discard(item_id)
+
+    async def remove_trigger_on_due_for_items(
+        self,
+        entity_id: str,
+        item_ids: list[str],
+    ) -> None:
+        for item_id in item_ids:
+            self._trigger_on_due.discard(item_id)
+
+    async def get_due_fired(self, entity_id: str) -> dict[str, str]:
+        return dict(self._due_fired)
+
+    async def set_due_fired(
+        self,
+        entity_id: str,
+        item_id: str,
+        due_value: str,
+    ) -> None:
+        self._due_fired[item_id] = due_value
+
+    async def remove_due_fired_for_items(
+        self,
+        entity_id: str,
+        item_ids: list[str],
+    ) -> None:
+        for item_id in item_ids:
+            self._due_fired.pop(item_id, None)
 
     async def set_positions(
         self,

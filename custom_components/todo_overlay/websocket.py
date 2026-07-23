@@ -24,8 +24,15 @@ from .const import (
     WS_TYPE_SET_COMPLETED,
     WS_TYPE_SET_QUANTITY,
     WS_TYPE_SET_TAGS,
+    WS_TYPE_SET_TRIGGER_ON_DUE,
 )
-from .errors import CycleError, EntityNotFoundError, ItemNotFoundError, SnapshotNotFoundError
+from .errors import (
+    CycleError,
+    DueTimeRequiredError,
+    EntityNotFoundError,
+    ItemNotFoundError,
+    SnapshotNotFoundError,
+)
 
 # Every TodoManager method that validates its input (a missing item,
 # entity, or saved list) raises one of these - all ValueError subclasses,
@@ -40,6 +47,7 @@ _ERROR_CODES: dict[type[Exception], str] = {
     EntityNotFoundError: "not_found",
     ItemNotFoundError: "not_found",
     SnapshotNotFoundError: "not_found",
+    DueTimeRequiredError: "due_time_required",
 }
 
 WebSocketHandler = Callable[
@@ -321,6 +329,7 @@ async def websocket_delete_saved_list(
         vol.Optional("due_datetime"): str,
         vol.Optional("quantity"): str,
         vol.Optional("tags"): [str],
+        vol.Optional("trigger_on_due"): bool,
     }
 )
 @websocket_api.async_response
@@ -342,6 +351,7 @@ async def websocket_create_item(
         due_datetime=msg.get("due_datetime"),
         quantity=msg.get("quantity"),
         tags=msg.get("tags"),
+        trigger_on_due=msg.get("trigger_on_due", False),
     )
 
     connection.send_result(msg["id"], {"id": item_id})
@@ -459,6 +469,34 @@ async def websocket_remove_tag(
     connection.send_result(msg["id"])
 
 
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): WS_TYPE_SET_TRIGGER_ON_DUE,
+        vol.Required("entity_id"): cv.entity_id,
+        vol.Required("item_id"): str,
+        vol.Required("enabled"): bool,
+    }
+)
+@websocket_api.async_response
+@_handle_manager_errors
+async def websocket_set_trigger_on_due(
+    hass: HomeAssistant,
+    connection: websocket_api.ActiveConnection,
+    msg,
+) -> None:
+    """Enable or disable the "due" trigger event for an item."""
+
+    manager = hass.data[DOMAIN][DATA_MANAGER]
+
+    await manager.set_trigger_on_due(
+        entity_id=msg["entity_id"],
+        item_id=msg["item_id"],
+        enabled=msg["enabled"],
+    )
+
+    connection.send_result(msg["id"])
+
+
 def async_register_websocket(hass: HomeAssistant) -> None:
     for handler in (
         websocket_get_list,
@@ -475,5 +513,6 @@ def async_register_websocket(hass: HomeAssistant) -> None:
         websocket_set_tags,
         websocket_add_tag,
         websocket_remove_tag,
+        websocket_set_trigger_on_due,
     ):
         websocket_api.async_register_command(hass, handler)

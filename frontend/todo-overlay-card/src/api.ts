@@ -75,6 +75,7 @@ export interface CreateItemFields {
     dueDatetime?: string;
     quantity?: string;
     tags?: string[];
+    triggerOnDue?: boolean;
 }
 
 export async function createItem(
@@ -92,6 +93,7 @@ export async function createItem(
         due_datetime: fields.dueDatetime,
         quantity: fields.quantity,
         tags: fields.tags,
+        trigger_on_due: fields.triggerOnDue,
     });
 
     return result.id;
@@ -110,6 +112,22 @@ export async function setQuantity(
         entity_id: entityId,
         item_id: itemId,
         quantity,
+    });
+
+}
+
+export async function setTriggerOnDue(
+    hass: HassLike,
+    entityId: string,
+    itemId: string,
+    enabled: boolean,
+): Promise<void> {
+
+    await hass.connection.sendMessagePromise<void>({
+        type: "todo_overlay/set_trigger_on_due",
+        entity_id: entityId,
+        item_id: itemId,
+        enabled,
     });
 
 }

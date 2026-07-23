@@ -1,8 +1,10 @@
 import pytest
 
 from custom_components.todo_overlay.metadata_store import (
+    DUE_FIRED_KEY,
     QUANTITIES_KEY,
     TAGS_KEY,
+    TRIGGER_ON_DUE_KEY,
     MetadataStore,
     _TodoOverlayStore,
 )
@@ -44,6 +46,8 @@ async def test_clear_entity_drops_positions_quantities_and_tags():
         "todo.b": {"2": {"parent": None, "order": 0}},
         QUANTITIES_KEY: {"todo.a": {"1": "2L"}, "todo.b": {"2": "1kg"}},
         TAGS_KEY: {"todo.a": {"1": ["urgent"]}, "todo.b": {"2": ["deli"]}},
+        TRIGGER_ON_DUE_KEY: {"todo.a": {"1": True}, "todo.b": {"2": True}},
+        DUE_FIRED_KEY: {"todo.a": {"1": "2026-01-01T00:00:00+00:00"}, "todo.b": {"2": "x"}},
     })
 
     await store.clear_entity("todo.a")
@@ -51,10 +55,14 @@ async def test_clear_entity_drops_positions_quantities_and_tags():
     assert "todo.a" not in fake.saved
     assert "todo.a" not in fake.saved[QUANTITIES_KEY]
     assert "todo.a" not in fake.saved[TAGS_KEY]
+    assert "todo.a" not in fake.saved[TRIGGER_ON_DUE_KEY]
+    assert "todo.a" not in fake.saved[DUE_FIRED_KEY]
     # Untouched: a different entity's data must survive.
     assert fake.saved["todo.b"] == {"2": {"parent": None, "order": 0}}
     assert fake.saved[QUANTITIES_KEY]["todo.b"] == {"2": "1kg"}
     assert fake.saved[TAGS_KEY]["todo.b"] == {"2": ["deli"]}
+    assert fake.saved[TRIGGER_ON_DUE_KEY]["todo.b"] == {"2": True}
+    assert fake.saved[DUE_FIRED_KEY]["todo.b"] == {"2": "x"}
 
 
 @pytest.mark.asyncio
@@ -72,6 +80,8 @@ async def test_rename_entity_moves_positions_quantities_and_tags():
         "todo.old": {"1": {"parent": None, "order": 0}},
         QUANTITIES_KEY: {"todo.old": {"1": "2L"}},
         TAGS_KEY: {"todo.old": {"1": ["urgent"]}},
+        TRIGGER_ON_DUE_KEY: {"todo.old": {"1": True}},
+        DUE_FIRED_KEY: {"todo.old": {"1": "2026-01-01T00:00:00+00:00"}},
     })
 
     await store.rename_entity("todo.old", "todo.new")
@@ -82,6 +92,10 @@ async def test_rename_entity_moves_positions_quantities_and_tags():
     assert fake.saved[QUANTITIES_KEY]["todo.new"] == {"1": "2L"}
     assert "todo.old" not in fake.saved[TAGS_KEY]
     assert fake.saved[TAGS_KEY]["todo.new"] == {"1": ["urgent"]}
+    assert "todo.old" not in fake.saved[TRIGGER_ON_DUE_KEY]
+    assert fake.saved[TRIGGER_ON_DUE_KEY]["todo.new"] == {"1": True}
+    assert "todo.old" not in fake.saved[DUE_FIRED_KEY]
+    assert fake.saved[DUE_FIRED_KEY]["todo.new"] == {"1": "2026-01-01T00:00:00+00:00"}
 
 
 @pytest.mark.asyncio
@@ -126,3 +140,35 @@ async def test_migrate_func_passes_data_through_without_raising():
     result = await fake_store._async_migrate_func(1, 1, old_data)
 
     assert result is old_data
+
+
+@pytest.mark.asyncio
+async def test_trigger_on_due_set_get_and_remove():
+    store, _fake = make_store({})
+
+    await store.set_trigger_on_due("todo.a", "1", True)
+    await store.set_trigger_on_due("todo.a", "2", True)
+
+    assert await store.get_trigger_on_due("todo.a") == {"1", "2"}
+
+    await store.set_trigger_on_due("todo.a", "1", False)
+    assert await store.get_trigger_on_due("todo.a") == {"2"}
+
+    await store.remove_trigger_on_due_for_items("todo.a", ["2"])
+    assert await store.get_trigger_on_due("todo.a") == set()
+
+
+@pytest.mark.asyncio
+async def test_due_fired_set_get_and_remove():
+    store, _fake = make_store({})
+
+    await store.set_due_fired("todo.a", "1", "2026-01-01T09:00:00+00:00")
+
+    assert await store.get_due_fired("todo.a") == {"1": "2026-01-01T09:00:00+00:00"}
+
+    # Re-setting for a new due value overwrites, doesn't accumulate.
+    await store.set_due_fired("todo.a", "1", "2026-02-01T09:00:00+00:00")
+    assert await store.get_due_fired("todo.a") == {"1": "2026-02-01T09:00:00+00:00"}
+
+    await store.remove_due_fired_for_items("todo.a", ["1"])
+    assert await store.get_due_fired("todo.a") == {}

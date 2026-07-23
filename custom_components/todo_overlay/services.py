@@ -7,6 +7,7 @@ from .const import (
     ATTR_DESCRIPTION,
     ATTR_DUE_DATE,
     ATTR_DUE_DATETIME,
+    ATTR_ENABLED,
     ATTR_ITEM,
     ATTR_MODE,
     ATTR_NAME,
@@ -15,6 +16,7 @@ from .const import (
     ATTR_TAG,
     ATTR_TAGS,
     ATTR_TITLE,
+    ATTR_TRIGGER_ON_DUE,
     DATA_MANAGER,
     DOMAIN,
     SERVICE_ADD_TAG,
@@ -24,6 +26,7 @@ from .const import (
     SERVICE_REMOVE_TAG,
     SERVICE_SAVE_LIST,
     SERVICE_SET_QUANTITY,
+    SERVICE_SET_TRIGGER_ON_DUE,
 )
 
 SAVE_LIST_SCHEMA = vol.Schema(
@@ -67,6 +70,7 @@ CREATE_ITEM_SCHEMA = vol.Schema(
         vol.Optional(ATTR_DUE_DATETIME): str,
         vol.Optional(ATTR_QUANTITY): str,
         vol.Optional(ATTR_TAGS): [str],
+        vol.Optional(ATTR_TRIGGER_ON_DUE, default=False): bool,
     }
 )
 
@@ -75,6 +79,14 @@ SET_QUANTITY_SCHEMA = vol.Schema(
         vol.Required("entity_id"): cv.entity_id,
         vol.Required(ATTR_ITEM): str,
         vol.Optional(ATTR_QUANTITY): str,
+    }
+)
+
+SET_TRIGGER_ON_DUE_SCHEMA = vol.Schema(
+    {
+        vol.Required("entity_id"): cv.entity_id,
+        vol.Required(ATTR_ITEM): str,
+        vol.Required(ATTR_ENABLED): bool,
     }
 )
 
@@ -137,6 +149,7 @@ def async_register_services(hass: HomeAssistant) -> None:
             due_datetime=call.data.get(ATTR_DUE_DATETIME),
             quantity=call.data.get(ATTR_QUANTITY),
             tags=call.data.get(ATTR_TAGS),
+            trigger_on_due=call.data[ATTR_TRIGGER_ON_DUE],
         )
 
     async def handle_set_quantity(call: ServiceCall) -> None:
@@ -146,6 +159,15 @@ def async_register_services(hass: HomeAssistant) -> None:
             entity_id=call.data["entity_id"],
             item=call.data[ATTR_ITEM],
             quantity=call.data.get(ATTR_QUANTITY),
+        )
+
+    async def handle_set_trigger_on_due(call: ServiceCall) -> None:
+        manager = hass.data[DOMAIN][DATA_MANAGER]
+
+        await manager.set_trigger_on_due_by_item(
+            entity_id=call.data["entity_id"],
+            item=call.data[ATTR_ITEM],
+            enabled=call.data[ATTR_ENABLED],
         )
 
     hass.services.async_register(
@@ -171,4 +193,10 @@ def async_register_services(hass: HomeAssistant) -> None:
     )
     hass.services.async_register(
         DOMAIN, SERVICE_SET_QUANTITY, handle_set_quantity, schema=SET_QUANTITY_SCHEMA
+    )
+    hass.services.async_register(
+        DOMAIN,
+        SERVICE_SET_TRIGGER_ON_DUE,
+        handle_set_trigger_on_due,
+        schema=SET_TRIGGER_ON_DUE_SCHEMA,
     )

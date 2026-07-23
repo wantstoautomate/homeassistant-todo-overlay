@@ -130,6 +130,12 @@ create_item:
       example: ["urgent", "deli"]
       selector:
         object:
+    trigger_on_due:
+      required: false
+      default: false
+      description: Fire the "due" automation trigger at the item's due date and time. Requires due_datetime to also be set.
+      selector:
+        boolean:
 
 set_quantity:
   name: Set quantity
@@ -151,3 +157,23 @@ set_quantity:
       example: 150g
       selector:
         text:
+
+set_trigger_on_due:
+  name: Set trigger on due
+  description: Enable or disable the "due" automation trigger for a Todo Overlay item. Enabling requires the item to already have a due date and time set.
+  fields:
+    entity_id:
+      required: true
+      selector:
+        entity:
+          domain: todo
+    item:
+      required: true
+      example: Salami
+      description: The item's id or title (same convention as todo.update_item).
+      selector:
+        text:
+    enabled:
+      required: true
+      selector:
+        boolean:

@@ -7,6 +7,7 @@ export interface TodoItem {
     due_datetime: string | null;
     quantity: string | null;
     tags: string[];
+    trigger_on_due: boolean;
     children: TodoItem[];
 }
 

@@ -8,6 +8,7 @@ export interface TodoItemFormValue {
     description: string;
     dueDate: string;
     dueTime: string;
+    triggerOnDue: boolean;
 }
 
 export interface TodoItemDialogFieldSupport {
@@ -23,6 +24,7 @@ export const EMPTY_FORM_VALUE: TodoItemFormValue = {
     description: "",
     dueDate: "",
     dueTime: "",
+    triggerOnDue: false,
 };
 
 // The dialog only knows about the fields above today. Extending it for a
@@ -153,6 +155,19 @@ export class TodoItemDialog extends LitElement {
         .confirm-delete span {
             flex: 1;
         }
+
+        .field-hint {
+            font-size: 12px;
+            color: var(--error-color);
+            margin-top: -8px;
+            margin-bottom: 16px;
+            font-family: Roboto, "Noto Sans", sans-serif;
+        }
+
+        button:disabled {
+            opacity: 0.4;
+            cursor: default;
+        }
     `;
 
     @property({attribute: false})
@@ -197,6 +212,10 @@ export class TodoItemDialog extends LitElement {
     }
 
     private save() {
+        if (this.triggerOnDueBlocked) {
+            return;
+        }
+
         this.dispatchEvent(
             new CustomEvent("dialog-save", {
                 detail: this.value,
@@ -235,8 +254,20 @@ export class TodoItemDialog extends LitElement {
         );
     }
 
-    private updateField(field: keyof TodoItemFormValue, fieldValue: string) {
+    private toggleTriggerOnDue() {
+        this.value = {...this.value, triggerOnDue: !this.value.triggerOnDue};
+    }
+
+    private updateField(field: keyof Omit<TodoItemFormValue, "triggerOnDue">, fieldValue: string) {
         this.value = {...this.value, [field]: fieldValue};
+    }
+
+    // Enabling "trigger on due" without a due time is meaningless - the
+    // backend enforces the same rule (see DueTimeRequiredError), but
+    // blocking Save here gives immediate feedback instead of a
+    // round-trip error.
+    private get triggerOnDueBlocked(): boolean {
+        return this.value.triggerOnDue && !(this.value.dueDate && this.value.dueTime);
     }
 
     render() {
@@ -352,6 +383,29 @@ export class TodoItemDialog extends LitElement {
                                         : ""
                                 }
                             </div>
+
+                            ${
+                                this.fieldSupport.dueDateTime
+                                    ? html`
+                                        <div class="complete-toggle">
+                                            <ha-checkbox
+                                                .checked=${this.value.triggerOnDue}
+                                                @click=${this.toggleTriggerOnDue}
+                                            ></ha-checkbox>
+                                            <span>Trigger automation when due</span>
+                                        </div>
+                                        ${
+                                            this.triggerOnDueBlocked
+                                                ? html`
+                                                    <div class="field-hint">
+                                                        Requires a due time to enable
+                                                    </div>
+                                                `
+                                                : ""
+                                        }
+                                    `
+                                    : ""
+                            }
                         `
                         : ""
                 }
@@ -380,7 +434,7 @@ export class TodoItemDialog extends LitElement {
                                         `
                                         : ""
                                 }
-                                <button @click=${this.save}>
+                                <button @click=${this.save} ?disabled=${this.triggerOnDueBlocked}>
                                     Save
                                 </button>
                             `

@@ -57,6 +57,7 @@ async def test_manager_returns_serialisable_list():
                 "due_datetime": None,
                 "quantity": None,
                 "tags": [],
+                "trigger_on_due": False,
                 "children": [
                     {
                         "id": "2",
@@ -67,6 +68,7 @@ async def test_manager_returns_serialisable_list():
                         "due_datetime": None,
                         "quantity": None,
                         "tags": [],
+                        "trigger_on_due": False,
                         "children": [],
                     }
                 ],
@@ -1041,6 +1043,249 @@ async def test_manager_get_list_reconciliation_is_noop_when_nothing_orphaned():
 
     assert metadata_store._positions == {"1": ItemPosition(parent_id=None, order=0)}
     assert metadata_store._quantities == {"1": "2L"}
+
+
+# --- trigger_on_due --------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_manager_set_trigger_on_due_requires_due_datetime():
+    from custom_components.todo_overlay.errors import DueTimeRequiredError
+
+    adapter = FakeAdapter(items=[TodoItem(id="1", title="Renew passport", completed=False)])
+    metadata_store = FakeMetadataStore({"1": ItemPosition(parent_id=None, order=0)})
+    manager = TodoManager(adapter=adapter, metadata_store=metadata_store)
+
+    with pytest.raises(DueTimeRequiredError):
+        await manager.set_trigger_on_due("todo.shopping", "1", True)
+
+    assert metadata_store._trigger_on_due == set()
+
+
+@pytest.mark.asyncio
+async def test_manager_set_trigger_on_due_enables_and_disables():
+    adapter = FakeAdapter(items=[
+        TodoItem(
+            id="1", title="Renew passport", completed=False,
+            due_datetime="2026-01-01T09:00:00+00:00",
+        ),
+    ])
+    metadata_store = FakeMetadataStore({"1": ItemPosition(parent_id=None, order=0)})
+    manager = TodoManager(adapter=adapter, metadata_store=metadata_store)
+
+    await manager.set_trigger_on_due("todo.shopping", "1", True)
+    todo_list = await manager.get_list("todo.shopping")
+    assert todo_list.items[0].trigger_on_due is True
+
+    await manager.set_trigger_on_due("todo.shopping", "1", False)
+    todo_list_after = await manager.get_list("todo.shopping")
+    assert todo_list_after.items[0].trigger_on_due is False
+
+
+@pytest.mark.asyncio
+async def test_manager_set_trigger_on_due_by_item_resolves_by_title():
+    adapter = FakeAdapter(items=[
+        TodoItem(
+            id="1", title="Renew passport", completed=False,
+            due_datetime="2026-01-01T09:00:00+00:00",
+        ),
+    ])
+    metadata_store = FakeMetadataStore({"1": ItemPosition(parent_id=None, order=0)})
+    manager = TodoManager(adapter=adapter, metadata_store=metadata_store)
+
+    await manager.set_trigger_on_due_by_item("todo.shopping", "Renew passport", True)
+
+    todo_list = await manager.get_list("todo.shopping")
+    assert todo_list.items[0].trigger_on_due is True
+
+
+@pytest.mark.asyncio
+async def test_manager_create_item_with_trigger_on_due():
+    adapter = FakeAdapter(items=[])
+    metadata_store = FakeMetadataStore()
+    manager = TodoManager(adapter=adapter, metadata_store=metadata_store)
+
+    item_id = await manager.create_item(
+        entity_id="todo.shopping",
+        title="Renew passport",
+        due_datetime="2026-01-01T09:00:00+00:00",
+        trigger_on_due=True,
+    )
+
+    todo_list = await manager.get_list("todo.shopping")
+    assert todo_list.items[0].id == item_id
+    assert todo_list.items[0].trigger_on_due is True
+
+
+@pytest.mark.asyncio
+async def test_manager_create_item_with_trigger_on_due_but_no_due_datetime_is_silently_ignored():
+    """trigger_on_due=True with no due_datetime given never raises at
+    creation time - it's just silently not applied, matching the same
+    "gracefully degrade" precedent as an unsupported field being
+    dropped, rather than every create_item caller needing to guard
+    against DueTimeRequiredError."""
+
+    adapter = FakeAdapter(items=[])
+    metadata_store = FakeMetadataStore()
+    manager = TodoManager(adapter=adapter, metadata_store=metadata_store)
+
+    item_id = await manager.create_item(
+        entity_id="todo.shopping",
+        title="Renew passport",
+        trigger_on_due=True,
+    )
+
+    todo_list = await manager.get_list("todo.shopping")
+    assert todo_list.items[0].id == item_id
+    assert todo_list.items[0].trigger_on_due is False
+
+
+@pytest.mark.asyncio
+async def test_manager_due_schedule_hook_called_after_toggle():
+    adapter = FakeAdapter(items=[
+        TodoItem(
+            id="1", title="Renew passport", completed=False,
+            due_datetime="2026-01-01T09:00:00+00:00",
+        ),
+    ])
+    metadata_store = FakeMetadataStore({"1": ItemPosition(parent_id=None, order=0)})
+    manager = TodoManager(adapter=adapter, metadata_store=metadata_store)
+
+    notified: list[str] = []
+
+    async def hook(entity_id: str) -> None:
+        notified.append(entity_id)
+
+    manager.set_due_schedule_hook(hook)
+
+    await manager.set_trigger_on_due("todo.shopping", "1", True)
+
+    assert notified == ["todo.shopping"]
+
+
+@pytest.mark.asyncio
+async def test_manager_fire_due_event_and_record_and_get_due_fired():
+    calls: list[tuple] = []
+
+    class FakeHass:
+        class bus:
+            @staticmethod
+            def async_fire(event, data):
+                calls.append((event, data))
+
+    adapter = FakeAdapter(items=[])
+    metadata_store = FakeMetadataStore()
+    manager = TodoManager(adapter=adapter, metadata_store=metadata_store, hass=FakeHass())
+
+    manager.fire_due_event("todo.shopping", "1", "Renew passport", "2026-01-01T09:00:00+00:00")
+
+    assert len(calls) == 1
+    _, data = calls[0]
+    assert data["action"] == "due"
+    assert data["due_datetime"] == "2026-01-01T09:00:00+00:00"
+
+    await manager.record_due_fired("todo.shopping", "1", "2026-01-01T09:00:00+00:00")
+
+    due_fired = await manager.get_due_fired("todo.shopping")
+    assert due_fired == {"1": "2026-01-01T09:00:00+00:00"}
+
+
+@pytest.mark.asyncio
+async def test_manager_get_list_merge_ors_trigger_on_due_of_duplicates():
+    # Merging is only triggered by a shared quantity (see
+    # _merge_duplicate_titles) - the survivor has no trigger_on_due of
+    # its own, but the duplicate does, and the survivor has a
+    # due_datetime to trigger against, so the flag should transfer.
+    adapter = FakeAdapter(items=[
+        TodoItem(
+            id="1", title="Renew passport", completed=False,
+            due_datetime="2026-01-01T09:00:00+00:00",
+        ),
+        TodoItem(
+            id="2", title="Renew passport", completed=False,
+            due_datetime="2026-02-01T09:00:00+00:00",
+        ),
+    ])
+    metadata_store = FakeMetadataStore({
+        "1": ItemPosition(parent_id=None, order=0),
+        "2": ItemPosition(parent_id=None, order=1),
+    })
+    metadata_store._quantities = {"1": "1", "2": "1"}
+    metadata_store._trigger_on_due = {"2"}
+
+    manager = TodoManager(adapter=adapter, metadata_store=metadata_store)
+
+    todo_list = await manager.get_list("todo.shopping")
+
+    assert len(todo_list.items) == 1
+    assert todo_list.items[0].id == "1"
+    assert todo_list.items[0].trigger_on_due is True
+
+
+@pytest.mark.asyncio
+async def test_manager_save_and_load_list_round_trips_trigger_on_due():
+    adapter = FakeAdapter(items=[
+        TodoItem(
+            id="1", title="Renew passport", completed=False,
+            due_datetime="2026-01-01T09:00:00+00:00",
+        ),
+    ])
+    metadata_store = FakeMetadataStore({"1": ItemPosition(parent_id=None, order=0)})
+    manager = TodoManager(adapter=adapter, metadata_store=metadata_store)
+
+    await manager.set_trigger_on_due("todo.shopping", "1", True)
+    await manager.save_list(entity_id="todo.shopping", name="template")
+
+    await manager.load_list(entity_id="todo.other_list", name="template", mode="full_merge")
+
+    todo_list = await manager.get_list("todo.other_list")
+    assert todo_list.items[0].trigger_on_due is True
+
+
+@pytest.mark.asyncio
+async def test_manager_load_list_trigger_on_due_dropped_when_target_lacks_due_datetime():
+    """A saved snapshot is entity-agnostic - if trigger_on_due=True
+    somehow ends up in a snapshot node without a due_datetime (or the
+    target entity doesn't support due_datetime at all, so add_item()
+    silently drops it), loading it must not enable an ineligible
+    trigger rather than raising mid-load."""
+
+    adapter = FakeAdapter(items=[])
+    metadata_store = FakeMetadataStore()
+    manager = TodoManager(adapter=adapter, metadata_store=metadata_store)
+
+    await metadata_store.save_snapshot("template", [
+        {
+            "title": "Renew passport",
+            "due_date": None,
+            "due_datetime": None,
+            "trigger_on_due": True,
+            "completed": False,
+            "children": [],
+        },
+    ])
+
+    await manager.load_list(entity_id="todo.shopping", name="template", mode="full_merge")
+
+    todo_list = await manager.get_list("todo.shopping")
+    assert todo_list.items[0].trigger_on_due is False
+
+
+@pytest.mark.asyncio
+async def test_manager_get_list_reconciles_orphaned_trigger_on_due_and_due_fired():
+    adapter = FakeAdapter(items=[TodoItem(id="1", title="Milk", completed=False)])
+    metadata_store = FakeMetadataStore({
+        "1": ItemPosition(parent_id=None, order=0),
+        "ghost": ItemPosition(parent_id=None, order=1),
+    })
+    metadata_store._trigger_on_due = {"1", "ghost"}
+    metadata_store._due_fired = {"1": "2026-01-01T00:00:00+00:00", "ghost": "2025-01-01T00:00:00+00:00"}
+
+    manager = TodoManager(adapter=adapter, metadata_store=metadata_store)
+
+    await manager.get_list("todo.shopping")
+
+    assert metadata_store._trigger_on_due == {"1"}
+    assert metadata_store._due_fired == {"1": "2026-01-01T00:00:00+00:00"}
 
 
 # --- typed exceptions -----------------------------------------------------

@@ -691,7 +691,8 @@ async function createItem(hass, entityId, fields) {
     due_date: fields.dueDate,
     due_datetime: fields.dueDatetime,
     quantity: fields.quantity,
-    tags: fields.tags
+    tags: fields.tags,
+    trigger_on_due: fields.triggerOnDue
   });
   return result.id;
 }
@@ -701,6 +702,14 @@ async function setQuantity(hass, entityId, itemId, quantity) {
     entity_id: entityId,
     item_id: itemId,
     quantity
+  });
+}
+async function setTriggerOnDue(hass, entityId, itemId, enabled) {
+  await hass.connection.sendMessagePromise({
+    type: "todo_overlay/set_trigger_on_due",
+    entity_id: entityId,
+    item_id: itemId,
+    enabled
   });
 }
 async function setTags(hass, entityId, itemId, tags) {
@@ -796,7 +805,8 @@ var EMPTY_FORM_VALUE = {
   tags: "",
   description: "",
   dueDate: "",
-  dueTime: ""
+  dueTime: "",
+  triggerOnDue: false
 };
 var TodoItemDialog = class extends i4 {
   constructor() {
@@ -820,6 +830,9 @@ var TodoItemDialog = class extends i4 {
     );
   }
   save() {
+    if (this.triggerOnDueBlocked) {
+      return;
+    }
     this.dispatchEvent(
       new CustomEvent("dialog-save", {
         detail: this.value,
@@ -851,8 +864,18 @@ var TodoItemDialog = class extends i4 {
       new CustomEvent("dialog-toggle-complete", { bubbles: true, composed: true })
     );
   }
+  toggleTriggerOnDue() {
+    this.value = { ...this.value, triggerOnDue: !this.value.triggerOnDue };
+  }
   updateField(field, fieldValue) {
     this.value = { ...this.value, [field]: fieldValue };
+  }
+  // Enabling "trigger on due" without a due time is meaningless - the
+  // backend enforces the same rule (see DueTimeRequiredError), but
+  // blocking Save here gives immediate feedback instead of a
+  // round-trip error.
+  get triggerOnDueBlocked() {
+    return this.value.triggerOnDue && !(this.value.dueDate && this.value.dueTime);
   }
   render() {
     const showDue = this.fieldSupport.dueDate || this.fieldSupport.dueDateTime;
@@ -946,6 +969,21 @@ var TodoItemDialog = class extends i4 {
                                             </div>
                                         ` : ""}
                             </div>
+
+                            ${this.fieldSupport.dueDateTime ? b2`
+                                        <div class="complete-toggle">
+                                            <ha-checkbox
+                                                .checked=${this.value.triggerOnDue}
+                                                @click=${this.toggleTriggerOnDue}
+                                            ></ha-checkbox>
+                                            <span>Trigger automation when due</span>
+                                        </div>
+                                        ${this.triggerOnDueBlocked ? b2`
+                                                    <div class="field-hint">
+                                                        Requires a due time to enable
+                                                    </div>
+                                                ` : ""}
+                                    ` : ""}
                         ` : ""}
 
                 <div class="actions" slot="footer">
@@ -965,7 +1003,7 @@ var TodoItemDialog = class extends i4 {
                                                 Delete
                                             </button>
                                         ` : ""}
-                                <button @click=${this.save}>
+                                <button @click=${this.save} ?disabled=${this.triggerOnDueBlocked}>
                                     Save
                                 </button>
                             `}
@@ -1092,6 +1130,19 @@ TodoItemDialog.styles = i`
 
         .confirm-delete span {
             flex: 1;
+        }
+
+        .field-hint {
+            font-size: 12px;
+            color: var(--error-color);
+            margin-top: -8px;
+            margin-bottom: 16px;
+            font-family: Roboto, "Noto Sans", sans-serif;
+        }
+
+        button:disabled {
+            opacity: 0.4;
+            cursor: default;
         }
     `;
 __decorateClass([
@@ -2255,7 +2306,8 @@ var TodoOverlayList = class extends i4 {
         tags: this.dialogItem.tags.join(", "),
         description: this.dialogItem.description ?? "",
         dueDate: due.date,
-        dueTime: due.time
+        dueTime: due.time,
+        triggerOnDue: this.dialogItem.trigger_on_due
       };
     }
     return EMPTY_FORM_VALUE;
@@ -2291,6 +2343,7 @@ var TodoOverlayList = class extends i4 {
         await this.hass.callService("todo", "update_item", serviceData);
         await setQuantity(this.hass, this.entity, this.dialogItem.id, quantity);
         await setTags(this.hass, this.entity, this.dialogItem.id, tags);
+        await setTriggerOnDue(this.hass, this.entity, this.dialogItem.id, value.triggerOnDue);
       } else {
         await createItem(this.hass, this.entity, {
           title: value.title,
@@ -2298,7 +2351,8 @@ var TodoOverlayList = class extends i4 {
           dueDate,
           dueDatetime,
           quantity,
-          tags
+          tags,
+          triggerOnDue: value.triggerOnDue
         });
       }
       await this.load();

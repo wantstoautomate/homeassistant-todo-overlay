@@ -16,6 +16,7 @@ WS_TYPE_SET_QUANTITY = "todo_overlay/set_quantity"
 WS_TYPE_SET_TAGS = "todo_overlay/set_tags"
 WS_TYPE_ADD_TAG = "todo_overlay/add_tag"
 WS_TYPE_REMOVE_TAG = "todo_overlay/remove_tag"
+WS_TYPE_SET_TRIGGER_ON_DUE = "todo_overlay/set_trigger_on_due"
 
 SERVICE_SAVE_LIST = "save_list"
 SERVICE_LOAD_LIST = "load_list"
@@ -24,6 +25,7 @@ SERVICE_ADD_TAG = "add_tag"
 SERVICE_REMOVE_TAG = "remove_tag"
 SERVICE_CREATE_ITEM = "create_item"
 SERVICE_SET_QUANTITY = "set_quantity"
+SERVICE_SET_TRIGGER_ON_DUE = "set_trigger_on_due"
 
 ATTR_NAME = "name"
 ATTR_PERSIST_STATES = "persist_states"
@@ -36,6 +38,8 @@ ATTR_DUE_DATE = "due_date"
 ATTR_DUE_DATETIME = "due_datetime"
 ATTR_QUANTITY = "quantity"
 ATTR_TAGS = "tags"
+ATTR_ENABLED = "enabled"
+ATTR_TRIGGER_ON_DUE = "trigger_on_due"
 
 # Fired whenever a meaningful change happens to a list's items, so
 # automations can react via the todo_overlay trigger platform.

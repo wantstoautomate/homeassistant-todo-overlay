@@ -2,10 +2,11 @@ from __future__ import annotations
 
 import asyncio
 import re
+from collections.abc import Awaitable, Callable
 from typing import Any, Literal
 
 from .const import EVENT_ITEM_CHANGED
-from .errors import CycleError, ItemNotFoundError, SnapshotNotFoundError
+from .errors import CycleError, DueTimeRequiredError, ItemNotFoundError, SnapshotNotFoundError
 from .ha_adapter import HomeAssistantTodoProvider
 from .metadata_store import MetadataStore
 from .models import ItemPosition, TodoItem, TodoList
@@ -46,6 +47,22 @@ class TodoManager:
         # would otherwise both read the same stale positions and the
         # second write to land would silently clobber the first.
         self._locks: dict[str, asyncio.Lock] = {}
+        # Set by due_scheduler.py after construction. Toggling trigger_on_due
+        # is a metadata-only write - it never touches the native entity's
+        # own state - so the scheduler's state_changed listener would never
+        # notice a toggle happened at all without this explicit nudge.
+        self._due_schedule_hook: Callable[[str], Awaitable[None]] | None = None
+
+    def set_due_schedule_hook(self, hook: Callable[[str], Awaitable[None]] | None) -> None:
+        """Register the callback due_scheduler.py uses to immediately
+        reconcile an entity's due schedule after set_trigger_on_due()
+        changes an item's eligibility."""
+
+        self._due_schedule_hook = hook
+
+    async def _notify_due_schedule_changed(self, entity_id: str) -> None:
+        if self._due_schedule_hook is not None:
+            await self._due_schedule_hook(entity_id)
 
     def _lock_for(self, entity_id: str) -> asyncio.Lock:
         lock = self._locks.get(entity_id)
@@ -113,18 +130,19 @@ class TodoManager:
 
         quantities = await self._metadata_store.get_quantities(entity_id)
         tags = await self._metadata_store.get_tags(entity_id)
+        trigger_on_due = await self._metadata_store.get_trigger_on_due(entity_id)
 
-        items, positions, quantities, tags = await self._reconcile_orphaned_metadata(
-            entity_id, items, positions, quantities, tags,
+        items, positions, quantities, tags, trigger_on_due = await self._reconcile_orphaned_metadata(
+            entity_id, items, positions, quantities, tags, trigger_on_due,
         )
 
-        items, positions, quantities, tags = await self._merge_duplicate_titles(
-            entity_id, items, positions, quantities, tags,
+        items, positions, quantities, tags, trigger_on_due = await self._merge_duplicate_titles(
+            entity_id, items, positions, quantities, tags, trigger_on_due,
         )
 
         return TodoList(
             entity_id=entity_id,
-            items=build_tree(items, positions, quantities, tags),
+            items=build_tree(items, positions, quantities, tags, trigger_on_due),
         )
 
     async def _reconcile_orphaned_metadata(
@@ -134,9 +152,13 @@ class TodoManager:
         positions: dict[str, ItemPosition],
         quantities: dict[str, str],
         tags: dict[str, list[str]],
-    ) -> tuple[list[TodoItem], dict[str, ItemPosition], dict[str, str], dict[str, list[str]]]:
-        """Drop stored positions/quantities/tags for ids that no longer
-        exist on the native list.
+        trigger_on_due: set[str],
+    ) -> tuple[
+        list[TodoItem], dict[str, ItemPosition], dict[str, str], dict[str, list[str]], set[str],
+    ]:
+        """Drop stored positions/quantities/tags/trigger_on_due (and the
+        scheduler's due_fired bookkeeping) for ids that no longer exist on
+        the native list.
 
         An item can disappear through paths this integration never sees -
         the native todo card, a voice assistant, an automation calling
@@ -150,23 +172,26 @@ class TodoManager:
         live_ids = {item.id for item in items}
         orphaned_set = set()
 
-        for source in (positions, quantities, tags):
+        for source in (positions, quantities, tags, trigger_on_due):
             orphaned_set.update(item_id for item_id in source if item_id not in live_ids)
 
         if not orphaned_set:
-            return items, positions, quantities, tags
+            return items, positions, quantities, tags, trigger_on_due
 
         orphaned = list(orphaned_set)
 
         await self._metadata_store.remove_positions(entity_id, orphaned)
         await self._metadata_store.remove_quantities(entity_id, orphaned)
         await self._metadata_store.remove_tags_for_items(entity_id, orphaned)
+        await self._metadata_store.remove_trigger_on_due_for_items(entity_id, orphaned)
+        await self._metadata_store.remove_due_fired_for_items(entity_id, orphaned)
 
         positions = {k: v for k, v in positions.items() if k not in orphaned_set}
         quantities = {k: v for k, v in quantities.items() if k not in orphaned_set}
         tags = {k: v for k, v in tags.items() if k not in orphaned_set}
+        trigger_on_due = {item_id for item_id in trigger_on_due if item_id not in orphaned_set}
 
-        return items, positions, quantities, tags
+        return items, positions, quantities, tags, trigger_on_due
 
     async def _merge_duplicate_titles(
         self,
@@ -175,7 +200,10 @@ class TodoManager:
         positions: dict[str, ItemPosition],
         quantities: dict[str, str],
         tags: dict[str, list[str]],
-    ) -> tuple[list[TodoItem], dict[str, ItemPosition], dict[str, str], dict[str, list[str]]]:
+        trigger_on_due: set[str],
+    ) -> tuple[
+        list[TodoItem], dict[str, ItemPosition], dict[str, str], dict[str, list[str]], set[str],
+    ]:
         """Collapse sibling items that share a title into one, combining
         their quantities where possible (see _combine_quantities) and
         unioning their tags.
@@ -211,6 +239,11 @@ class TodoManager:
             survivor, *duplicates = group
             combined_quantity = quantities.get(survivor.id)
             combined_tags = list(tags.get(survivor.id, []))
+            # A duplicate's own due_datetime never transfers to the
+            # survivor (only the survivor's own due_datetime matters), so
+            # this only ever turns the flag on, and only when the
+            # survivor actually has a due_datetime to trigger against.
+            survivor_trigger_on_due = survivor.id in trigger_on_due
 
             for duplicate in duplicates:
                 combined_quantity = (
@@ -221,6 +254,9 @@ class TodoManager:
                 for tag in tags.get(duplicate.id, []):
                     if tag not in combined_tags:
                         combined_tags.append(tag)
+
+                if duplicate.id in trigger_on_due:
+                    survivor_trigger_on_due = True
 
                 child_ids = self._siblings(items, positions, duplicate.id)
 
@@ -249,23 +285,30 @@ class TodoManager:
                 await self._metadata_store.set_tags(entity_id, survivor.id, combined_tags)
                 tags[survivor.id] = combined_tags
 
+            if survivor_trigger_on_due and survivor.due_datetime and survivor.id not in trigger_on_due:
+                await self._metadata_store.set_trigger_on_due(entity_id, survivor.id, True)
+                trigger_on_due.add(survivor.id)
+
         if reparented:
             await self._metadata_store.set_positions(entity_id, reparented)
 
         if not removed_ids:
-            return items, positions, quantities, tags
+            return items, positions, quantities, tags, trigger_on_due
 
         await self._metadata_store.remove_positions(entity_id, removed_ids)
         await self._metadata_store.remove_quantities(entity_id, removed_ids)
         await self._metadata_store.remove_tags_for_items(entity_id, removed_ids)
+        await self._metadata_store.remove_trigger_on_due_for_items(entity_id, removed_ids)
+        await self._metadata_store.remove_due_fired_for_items(entity_id, removed_ids)
 
         removed_id_set = set(removed_ids)
         items = [item for item in items if item.id not in removed_id_set]
         positions = {k: v for k, v in positions.items() if k not in removed_id_set}
         quantities = {k: v for k, v in quantities.items() if k not in removed_id_set}
         tags = {k: v for k, v in tags.items() if k not in removed_id_set}
+        trigger_on_due = {item_id for item_id in trigger_on_due if item_id not in removed_id_set}
 
-        return items, positions, quantities, tags
+        return items, positions, quantities, tags, trigger_on_due
 
     async def create_item(
         self,
@@ -276,10 +319,16 @@ class TodoManager:
         due_datetime: str | None = None,
         quantity: str | None = None,
         tags: list[str] | None = None,
+        trigger_on_due: bool = False,
     ) -> str:
         """Create an item, including overlay-only fields (quantity,
-        tags) that Home Assistant's native todo.add_item has no
-        concept of.
+        tags, trigger_on_due) that Home Assistant's native
+        todo.add_item has no concept of.
+
+        trigger_on_due=True is silently ignored if the target entity
+        doesn't end up with a due_datetime (either none was given, or
+        the entity doesn't support the feature and add_item dropped it)
+        - same "gracefully degrade" precedent as due_datetime itself.
 
         Returns the new item's id.
         """
@@ -299,9 +348,104 @@ class TodoManager:
             if tags:
                 await self._metadata_store.set_tags(entity_id, item_id, tags)
 
+            if trigger_on_due:
+                created = await self._adapter.get_items(entity_id)
+                created_item = next((c for c in created if c.id == item_id), None)
+
+                if created_item is not None and created_item.due_datetime:
+                    await self._metadata_store.set_trigger_on_due(entity_id, item_id, True)
+
         self._fire_event(entity_id, item_id, title, "created", quantity=quantity, tags=tags or [])
 
         return item_id
+
+    async def set_trigger_on_due(
+        self,
+        entity_id: str,
+        item_id: str,
+        enabled: bool,
+    ) -> None:
+        """Enable or disable the "due" trigger event for an item.
+
+        Enabling requires the item to currently have a due_datetime - a
+        date-only due_date isn't specific enough to schedule an exact
+        moment against (see DueTimeRequiredError)."""
+
+        async with self._lock_for(entity_id):
+            if enabled:
+                items = await self._adapter.get_items(entity_id)
+                item = next((candidate for candidate in items if candidate.id == item_id), None)
+
+                if item is None or not item.due_datetime:
+                    raise DueTimeRequiredError(
+                        f"Cannot enable trigger-on-due for {item_id!r} on "
+                        f"{entity_id}: no due time set"
+                    )
+
+            await self._metadata_store.set_trigger_on_due(entity_id, item_id, enabled)
+
+        await self._notify_due_schedule_changed(entity_id)
+
+    async def set_trigger_on_due_by_item(
+        self,
+        entity_id: str,
+        item: str,
+        enabled: bool,
+    ) -> None:
+        """Enable or disable the "due" trigger event, identified by uid
+        or title - the service-facing counterpart to
+        set_trigger_on_due()."""
+
+        async with self._lock_for(entity_id):
+            resolved = await self._resolve_item(entity_id, item)
+
+            if enabled and not resolved.due_datetime:
+                raise DueTimeRequiredError(
+                    f"Cannot enable trigger-on-due for {resolved.title!r} on "
+                    f"{entity_id}: no due time set"
+                )
+
+            await self._metadata_store.set_trigger_on_due(entity_id, resolved.id, enabled)
+
+        await self._notify_due_schedule_changed(entity_id)
+
+    def fire_due_event(
+        self,
+        entity_id: str,
+        item_id: str,
+        title: str,
+        due_datetime: str,
+    ) -> None:
+        """Fire the "due" trigger event - called by due_scheduler.py at
+        the exact moment an opted-in item's due time arrives. Kept here
+        rather than the scheduler calling _fire_event() directly so that
+        stays private."""
+
+        self._fire_event(entity_id, item_id, title, "due", due_datetime=due_datetime)
+
+    async def record_due_fired(
+        self,
+        entity_id: str,
+        item_id: str,
+        due_value: str,
+    ) -> None:
+        """Record that a "due" trigger has already fired for this item's
+        current due value, so a restart or later reconciliation pass
+        doesn't fire it again for the same value (see due_scheduler.py)."""
+
+        async with self._lock_for(entity_id):
+            await self._metadata_store.set_due_fired(entity_id, item_id, due_value)
+
+    async def get_due_fired(
+        self,
+        entity_id: str,
+    ) -> dict[str, str]:
+        """Which due value a "due" trigger has already fired for, per
+        item - used by due_scheduler.py to avoid re-firing on
+        reconciliation or restart for a due value already handled."""
+
+        async with self._lock_for(entity_id):
+            return await self._metadata_store.get_due_fired(entity_id)
 
     async def set_quantity(
         self,
@@ -780,6 +924,7 @@ class TodoManager:
             "due_datetime": item.due_datetime,
             "quantity": item.quantity,
             "tags": item.tags,
+            "trigger_on_due": item.trigger_on_due,
             "completed": item.completed if persist_states else False,
             "children": [
                 TodoManager._snapshot_node(child, persist_states)
@@ -816,6 +961,7 @@ class TodoManager:
     ) -> None:
         items = await self._adapter.get_items(entity_id)
         positions = await self._metadata_store.get_relationships(entity_id)
+        item_by_id = {item.id: item for item in items}
 
         existing_children = self._siblings(items, positions, parent_id)
         next_order = max(
@@ -854,6 +1000,12 @@ class TodoManager:
                             merged_tags.append(tag)
 
                     await self._metadata_store.set_tags(entity_id, target_id, merged_tags)
+
+                if node.get("trigger_on_due"):
+                    existing_item = item_by_id.get(target_id)
+
+                    if existing_item is not None and existing_item.due_datetime:
+                        await self._metadata_store.set_trigger_on_due(entity_id, target_id, True)
             else:
                 target_id = await self._adapter.add_item(
                     entity_id,
@@ -877,6 +1029,20 @@ class TodoManager:
 
                 if node.get("completed"):
                     await self._adapter.set_completed(entity_id, target_id, True)
+
+                if node.get("trigger_on_due"):
+                    # Re-check due_datetime actually landed - the target
+                    # entity might not support it at all, in which case
+                    # add_item() above already silently dropped it (same
+                    # "gracefully degrade" precedent as other unsupported
+                    # cross-entity snapshot fields).
+                    created_items = await self._adapter.get_items(entity_id)
+                    created_item = next(
+                        (c for c in created_items if c.id == target_id), None,
+                    )
+
+                    if created_item is not None and created_item.due_datetime:
+                        await self._metadata_store.set_trigger_on_due(entity_id, target_id, True)
 
             if node.get("children"):
                 await self._create_snapshot_nodes(

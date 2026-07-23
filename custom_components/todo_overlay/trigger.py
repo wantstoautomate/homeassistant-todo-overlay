@@ -1,8 +1,9 @@
 """Automation trigger platform: fires whenever TodoManager reports a
 meaningful change to a list (item created/completed/uncompleted/removed,
-a tag added/removed, or a quantity changed) - see manager.py's
-_fire_event() and const.py's EVENT_ITEM_CHANGED. Filterable by entity_id,
-action, and/or tag so an automation only reacts to what it cares about.
+a tag added/removed, a quantity changed, or an opted-in item's due
+time arriving) - see manager.py's _fire_event()/fire_due_event() and
+const.py's EVENT_ITEM_CHANGED. Filterable by entity_id, action, and/or
+tag so an automation only reacts to what it cares about.
 """
 
 import voluptuous as vol
@@ -31,6 +32,7 @@ TRIGGER_SCHEMA = cv.TRIGGER_BASE_SCHEMA.extend(
                 "tag_added",
                 "tag_removed",
                 "quantity_changed",
+                "due",
             ]
         ),
         vol.Optional(CONF_TAG): str,

@@ -30,3 +30,10 @@ class CycleError(TodoOverlayError):
 
 class SnapshotNotFoundError(TodoOverlayError):
     """Raised when a saved list name doesn't exist."""
+
+
+class DueTimeRequiredError(TodoOverlayError):
+    """Raised when trigger_on_due is set True for an item with no
+    due_datetime - a date-only due_date isn't specific enough to schedule
+    an exact-time trigger against, so this is enforced rather than
+    silently picking an arbitrary time of day."""

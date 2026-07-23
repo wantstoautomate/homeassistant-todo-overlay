@@ -23,6 +23,12 @@ class TodoItem:
     due_datetime: str | None = None
     quantity: str | None = None
     tags: list[str] = field(default_factory=list)
+    # Opt-in: whether this item should fire the "due" trigger event at its
+    # due_datetime. Off by default for every item, including existing ones
+    # with due dates already set - having a due date at all never implies
+    # wanting to be triggered on it. Only meaningful alongside a real
+    # due_datetime (not a date-only due_date) - see DueTimeRequiredError.
+    trigger_on_due: bool = False
     children: list["TodoItem"] = field(default_factory=list)
 
     def to_dict(self) -> dict:
@@ -35,6 +41,7 @@ class TodoItem:
             "due_datetime": self.due_datetime,
             "quantity": self.quantity,
             "tags": self.tags,
+            "trigger_on_due": self.trigger_on_due,
             "children": [child.to_dict() for child in self.children],
         }
 

@@ -65,6 +65,7 @@ def test_async_register_services_registers_every_service():
         "remove_tag",
         "create_item",
         "set_quantity",
+        "set_trigger_on_due",
     }
 
 
@@ -133,6 +134,7 @@ async def test_service_create_item_with_quantity_and_tags():
         "due_datetime": None,
         "quantity": "2",
         "tags": ["bakery"],
+        "trigger_on_due": False,
     }))
 
     todo_list = await manager.get_list(ENTITY_ID)
@@ -170,4 +172,38 @@ async def test_service_add_tag_raises_item_not_found_for_unknown_item():
     with pytest.raises(ItemNotFoundError):
         await services.handlers["add_tag"](FakeServiceCall({
             "entity_id": ENTITY_ID, "item": "nonexistent", "tag": "urgent",
+        }))
+
+
+@pytest.mark.asyncio
+async def test_service_set_trigger_on_due_resolves_by_title():
+    from custom_components.todo_overlay.models import TodoItem
+
+    manager = make_manager(items=[
+        TodoItem(
+            id="1", title="Renew passport", completed=False,
+            due_datetime="2026-01-01T09:00:00+00:00",
+        ),
+    ])
+    _, services = make_hass(manager)
+
+    await services.handlers["set_trigger_on_due"](FakeServiceCall({
+        "entity_id": ENTITY_ID, "item": "Renew passport", "enabled": True,
+    }))
+
+    todo_list = await manager.get_list(ENTITY_ID)
+    item = next(i for i in todo_list.items if i.id == "1")
+    assert item.trigger_on_due is True
+
+
+@pytest.mark.asyncio
+async def test_service_set_trigger_on_due_raises_due_time_required_without_due_datetime():
+    from custom_components.todo_overlay.errors import DueTimeRequiredError
+
+    manager = make_manager()  # default items have no due_datetime
+    _, services = make_hass(manager)
+
+    with pytest.raises(DueTimeRequiredError):
+        await services.handlers["set_trigger_on_due"](FakeServiceCall({
+            "entity_id": ENTITY_ID, "item": "Shopping", "enabled": True,
         }))

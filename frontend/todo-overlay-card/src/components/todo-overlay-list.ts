@@ -16,6 +16,7 @@ import {
     setCompleted,
     setQuantity,
     setTags,
+    setTriggerOnDue,
 } from "../api";
 import type {HassLike} from "../hass";
 import {
@@ -765,6 +766,7 @@ export class TodoOverlayList extends LitElement {
                 description: this.dialogItem.description ?? "",
                 dueDate: due.date,
                 dueTime: due.time,
+                triggerOnDue: this.dialogItem.trigger_on_due,
             };
         }
 
@@ -813,6 +815,7 @@ export class TodoOverlayList extends LitElement {
                 await this.hass.callService("todo", "update_item", serviceData);
                 await setQuantity(this.hass, this.entity, this.dialogItem.id, quantity);
                 await setTags(this.hass, this.entity, this.dialogItem.id, tags);
+                await setTriggerOnDue(this.hass, this.entity, this.dialogItem.id, value.triggerOnDue);
             } else {
                 await createItem(this.hass, this.entity, {
                     title: value.title,
@@ -821,6 +824,7 @@ export class TodoOverlayList extends LitElement {
                     dueDatetime,
                     quantity,
                     tags,
+                    triggerOnDue: value.triggerOnDue,
                 });
             }
 

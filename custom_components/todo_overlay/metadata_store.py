@@ -28,6 +28,14 @@ SAVE_DELAY = 3
 SNAPSHOTS_KEY = "_snapshots"
 QUANTITIES_KEY = "_quantities"
 TAGS_KEY = "_tags"
+TRIGGER_ON_DUE_KEY = "_trigger_on_due"
+# Which due value a "due" trigger has already fired for, per item - the
+# scheduler's own bookkeeping (see due_scheduler.py) so a restart, or any
+# reconciliation pass, doesn't re-fire for a due value already handled.
+# Keyed separately from TRIGGER_ON_DUE_KEY since toggling the trigger off
+# and back on shouldn't itself cause a re-fire if the due value hasn't
+# actually changed.
+DUE_FIRED_KEY = "_due_fired"
 
 
 class _TodoOverlayStore(Store):
@@ -171,6 +179,8 @@ class MetadataStore:
         self._cache.pop(entity_id, None)
         self._cache.get(QUANTITIES_KEY, {}).pop(entity_id, None)
         self._cache.get(TAGS_KEY, {}).pop(entity_id, None)
+        self._cache.get(TRIGGER_ON_DUE_KEY, {}).pop(entity_id, None)
+        self._cache.get(DUE_FIRED_KEY, {}).pop(entity_id, None)
 
         self._save()
 
@@ -192,7 +202,7 @@ class MetadataStore:
         if old_entity_id in self._cache:
             self._cache[new_entity_id] = self._cache.pop(old_entity_id)
 
-        for key in (QUANTITIES_KEY, TAGS_KEY):
+        for key in (QUANTITIES_KEY, TAGS_KEY, TRIGGER_ON_DUE_KEY, DUE_FIRED_KEY):
             bucket = self._cache.get(key, {})
 
             if old_entity_id in bucket:
@@ -399,5 +409,111 @@ class MetadataStore:
 
         for item_id in item_ids:
             entity_tags.pop(item_id, None)
+
+        self._save()
+
+    async def get_trigger_on_due(
+        self,
+        entity_id: str,
+    ) -> set[str]:
+        """Ids of items with the "trigger on due" toggle enabled - stored
+        as a set (only True entries ever get written) rather than a
+        dict-of-booleans, since a disabled item just isn't in it."""
+
+        await self._load()
+
+        assert self._cache is not None
+
+        return set(self._cache.get(TRIGGER_ON_DUE_KEY, {}).get(entity_id, {}))
+
+    async def set_trigger_on_due(
+        self,
+        entity_id: str,
+        item_id: str,
+        enabled: bool,
+    ) -> None:
+        await self._load()
+
+        assert self._cache is not None
+
+        entity_flags = self._cache.setdefault(TRIGGER_ON_DUE_KEY, {}).setdefault(entity_id, {})
+
+        if enabled:
+            entity_flags[item_id] = True
+        else:
+            entity_flags.pop(item_id, None)
+
+        self._save()
+
+    async def remove_trigger_on_due_for_items(
+        self,
+        entity_id: str,
+        item_ids: list[str],
+    ) -> None:
+        """Drop the "trigger on due" flag for items that no longer exist,
+        e.g. after a clear-completed removal."""
+
+        await self._load()
+
+        assert self._cache is not None
+
+        entity_flags = self._cache.get(TRIGGER_ON_DUE_KEY, {}).get(entity_id)
+
+        if not entity_flags:
+            return
+
+        for item_id in item_ids:
+            entity_flags.pop(item_id, None)
+
+        self._save()
+
+    async def get_due_fired(
+        self,
+        entity_id: str,
+    ) -> dict[str, str]:
+        """Map of item_id -> the due_datetime value a "due" trigger has
+        already fired for - see due_scheduler.py for how this prevents a
+        restart, or any reconciliation pass, from re-firing."""
+
+        await self._load()
+
+        assert self._cache is not None
+
+        return dict(self._cache.get(DUE_FIRED_KEY, {}).get(entity_id, {}))
+
+    async def set_due_fired(
+        self,
+        entity_id: str,
+        item_id: str,
+        due_value: str,
+    ) -> None:
+        await self._load()
+
+        assert self._cache is not None
+
+        entity_fired = self._cache.setdefault(DUE_FIRED_KEY, {}).setdefault(entity_id, {})
+        entity_fired[item_id] = due_value
+
+        self._save()
+
+    async def remove_due_fired_for_items(
+        self,
+        entity_id: str,
+        item_ids: list[str],
+    ) -> None:
+        """Drop fired-tracking for items that no longer exist, e.g. after
+        a clear-completed removal."""
+
+        await self._load()
+
+        assert self._cache is not None
+
+        entity_fired = self._cache.get(DUE_FIRED_KEY, {}).get(entity_id)
+
+        if not entity_fired:
+            return
+
+        for item_id in item_ids:
+            entity_fired.pop(item_id, None)
 
         self._save()

@@ -103,6 +103,29 @@ async def test_trigger_ignores_non_matching_action():
 
 
 @pytest.mark.asyncio
+async def test_trigger_fires_for_due_action():
+    hass = FakeHass()
+
+    config = TRIGGER_SCHEMA({
+        "platform": "todo_overlay",
+        "action": "due",
+    })
+
+    await async_attach_trigger(hass, config, _noop_action, {"trigger_data": {"id": "1"}})
+
+    await hass.bus.async_fire(EVENT_ITEM_CHANGED, {
+        "entity_id": "todo.shopping",
+        "item_id": "1",
+        "title": "Renew passport",
+        "action": "due",
+        "due_datetime": "2026-01-01T09:00:00+00:00",
+    })
+
+    assert len(hass.triggered) == 1
+    assert hass.triggered[0]["trigger"]["event"].data["due_datetime"] == "2026-01-01T09:00:00+00:00"
+
+
+@pytest.mark.asyncio
 async def test_trigger_filters_by_tag():
     hass = FakeHass()
 

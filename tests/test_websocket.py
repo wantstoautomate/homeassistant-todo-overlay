@@ -260,6 +260,43 @@ async def test_websocket_set_tags_replaces_full_list():
     assert metadata_store._tags["1"] == ["urgent", "deli"]
 
 
+# --- set_trigger_on_due ----------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_websocket_set_trigger_on_due_success():
+    manager = make_manager(items=[
+        TodoItem(
+            id="1", title="Renew passport", completed=False,
+            due_datetime="2026-01-01T09:00:00+00:00",
+        ),
+    ])
+
+    connection = await call_handler(
+        websocket.websocket_set_trigger_on_due, manager,
+        {"entity_id": ENTITY_ID, "item_id": "1", "enabled": True},
+    )
+
+    assert connection.results == [(1, None)]
+
+    metadata_store: FakeMetadataStore = manager._metadata_store
+    assert metadata_store._trigger_on_due == {"1"}
+
+
+@pytest.mark.asyncio
+async def test_websocket_set_trigger_on_due_without_due_time_sends_due_time_required_error():
+    manager = make_manager()  # default items have no due_datetime
+
+    connection = await call_handler(
+        websocket.websocket_set_trigger_on_due, manager,
+        {"entity_id": ENTITY_ID, "item_id": "1", "enabled": True},
+    )
+
+    assert connection.results == []
+    assert len(connection.errors) == 1
+    _, code, _ = connection.errors[0]
+    assert code == "due_time_required"
+
+
 # --- add_tag / remove_tag -------------------------------------------------
 
 @pytest.mark.asyncio
@@ -353,5 +390,6 @@ def test_async_register_websocket_registers_every_handler():
         "todo_overlay/set_tags",
         "todo_overlay/add_tag",
         "todo_overlay/remove_tag",
+        "todo_overlay/set_trigger_on_due",
     }
     assert set(registered_commands) == expected
