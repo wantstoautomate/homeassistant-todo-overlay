@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import asyncio
 import re
 from typing import Any, Literal
 
 from .const import EVENT_ITEM_CHANGED
+from .errors import CycleError, ItemNotFoundError, SnapshotNotFoundError
 from .ha_adapter import HomeAssistantTodoProvider
 from .metadata_store import MetadataStore
 from .models import ItemPosition, TodoItem, TodoList
@@ -33,6 +35,26 @@ class TodoManager:
         # trigger platform. None in tests, where there's nothing
         # listening for them anyway.
         self._hass = hass
+        # One lock per entity_id, created on first use and never removed -
+        # a handful of Lock objects live for the life of the integration,
+        # which is negligible even for an install with many todo lists.
+        # Every public method that reads-then-writes an entity's items or
+        # metadata holds this for its whole body, since HA's websocket API
+        # does not serialize command handlers against each other - two
+        # rapid calls against the same list (e.g. a fast double
+        # drag-and-drop, or a save_list racing a concurrent move_item)
+        # would otherwise both read the same stale positions and the
+        # second write to land would silently clobber the first.
+        self._locks: dict[str, asyncio.Lock] = {}
+
+    def _lock_for(self, entity_id: str) -> asyncio.Lock:
+        lock = self._locks.get(entity_id)
+
+        if lock is None:
+            lock = asyncio.Lock()
+            self._locks[entity_id] = lock
+
+        return lock
 
     def _fire_event(
         self,
@@ -74,6 +96,15 @@ class TodoManager:
         additions still end up back through here.
         """
 
+        async with self._lock_for(entity_id):
+            return await self._get_list_impl(entity_id)
+
+    async def _get_list_impl(self, entity_id: str) -> TodoList:
+        """The actual body of get_list(), callable by other locked public
+        methods (see save_list) without re-entering self._lock_for(),
+        since asyncio.Lock isn't reentrant and get_list() already holds
+        it for the entity by the time such a caller reaches here."""
+
         items = await self._adapter.get_items(entity_id)
 
         positions = await self._metadata_store.get_relationships(
@@ -83,6 +114,10 @@ class TodoManager:
         quantities = await self._metadata_store.get_quantities(entity_id)
         tags = await self._metadata_store.get_tags(entity_id)
 
+        items, positions, quantities, tags = await self._reconcile_orphaned_metadata(
+            entity_id, items, positions, quantities, tags,
+        )
+
         items, positions, quantities, tags = await self._merge_duplicate_titles(
             entity_id, items, positions, quantities, tags,
         )
@@ -91,6 +126,47 @@ class TodoManager:
             entity_id=entity_id,
             items=build_tree(items, positions, quantities, tags),
         )
+
+    async def _reconcile_orphaned_metadata(
+        self,
+        entity_id: str,
+        items: list[TodoItem],
+        positions: dict[str, ItemPosition],
+        quantities: dict[str, str],
+        tags: dict[str, list[str]],
+    ) -> tuple[list[TodoItem], dict[str, ItemPosition], dict[str, str], dict[str, list[str]]]:
+        """Drop stored positions/quantities/tags for ids that no longer
+        exist on the native list.
+
+        An item can disappear through paths this integration never sees -
+        the native todo card, a voice assistant, an automation calling
+        todo.remove_item directly - and none of those run our own
+        metadata cleanup. Without this, that metadata sits in storage
+        forever. Runs on every read since it's cheap (the ids needed are
+        already fetched for this call) and catches removals regardless
+        of which path did the removing.
+        """
+
+        live_ids = {item.id for item in items}
+        orphaned_set = set()
+
+        for source in (positions, quantities, tags):
+            orphaned_set.update(item_id for item_id in source if item_id not in live_ids)
+
+        if not orphaned_set:
+            return items, positions, quantities, tags
+
+        orphaned = list(orphaned_set)
+
+        await self._metadata_store.remove_positions(entity_id, orphaned)
+        await self._metadata_store.remove_quantities(entity_id, orphaned)
+        await self._metadata_store.remove_tags_for_items(entity_id, orphaned)
+
+        positions = {k: v for k, v in positions.items() if k not in orphaned_set}
+        quantities = {k: v for k, v in quantities.items() if k not in orphaned_set}
+        tags = {k: v for k, v in tags.items() if k not in orphaned_set}
+
+        return items, positions, quantities, tags
 
     async def _merge_duplicate_titles(
         self,
@@ -208,19 +284,20 @@ class TodoManager:
         Returns the new item's id.
         """
 
-        item_id = await self._adapter.add_item(
-            entity_id,
-            title,
-            description=description,
-            due_date=due_date,
-            due_datetime=due_datetime,
-        )
+        async with self._lock_for(entity_id):
+            item_id = await self._adapter.add_item(
+                entity_id,
+                title,
+                description=description,
+                due_date=due_date,
+                due_datetime=due_datetime,
+            )
 
-        if quantity:
-            await self._metadata_store.set_quantity(entity_id, item_id, quantity)
+            if quantity:
+                await self._metadata_store.set_quantity(entity_id, item_id, quantity)
 
-        if tags:
-            await self._metadata_store.set_tags(entity_id, item_id, tags)
+            if tags:
+                await self._metadata_store.set_tags(entity_id, item_id, tags)
 
         self._fire_event(entity_id, item_id, title, "created", quantity=quantity, tags=tags or [])
 
@@ -234,6 +311,19 @@ class TodoManager:
     ) -> None:
         """Set (or clear) an item's quantity - overlay-only metadata,
         since native Home Assistant todo items have no such field."""
+
+        async with self._lock_for(entity_id):
+            await self._set_quantity_impl(entity_id, item_id, quantity)
+
+    async def _set_quantity_impl(
+        self,
+        entity_id: str,
+        item_id: str,
+        quantity: str | None,
+    ) -> None:
+        """The actual body of set_quantity(), callable by
+        set_quantity_by_item() without re-entering self._lock_for() - see
+        _get_list_impl()'s docstring for why that split exists."""
 
         await self._metadata_store.set_quantity(entity_id, item_id, quantity)
 
@@ -253,8 +343,9 @@ class TodoManager:
         service-facing counterpart to set_quantity(), which callers
         with a real item_id already in hand (the frontend) use directly."""
 
-        resolved = await self._resolve_item(entity_id, item)
-        await self.set_quantity(entity_id, resolved.id, quantity)
+        async with self._lock_for(entity_id):
+            resolved = await self._resolve_item(entity_id, item)
+            await self._set_quantity_impl(entity_id, resolved.id, quantity)
 
     async def set_tags(
         self,
@@ -264,7 +355,8 @@ class TodoManager:
     ) -> None:
         """Replace an item's full tag list - overlay-only metadata."""
 
-        await self._metadata_store.set_tags(entity_id, item_id, tags)
+        async with self._lock_for(entity_id):
+            await self._metadata_store.set_tags(entity_id, item_id, tags)
 
     async def add_tag(
         self,
@@ -276,8 +368,10 @@ class TodoManager:
         the same uid-or-summary convention Home Assistant's own
         todo.update_item service uses for its "item" field)."""
 
-        resolved = await self._resolve_item(entity_id, item)
-        await self._metadata_store.add_tag(entity_id, resolved.id, tag)
+        async with self._lock_for(entity_id):
+            resolved = await self._resolve_item(entity_id, item)
+            await self._metadata_store.add_tag(entity_id, resolved.id, tag)
+
         self._fire_event(entity_id, resolved.id, resolved.title, "tag_added", tag=tag)
 
     async def remove_tag(
@@ -286,8 +380,10 @@ class TodoManager:
         item: str,
         tag: str,
     ) -> None:
-        resolved = await self._resolve_item(entity_id, item)
-        await self._metadata_store.remove_tag(entity_id, resolved.id, tag)
+        async with self._lock_for(entity_id):
+            resolved = await self._resolve_item(entity_id, item)
+            await self._metadata_store.remove_tag(entity_id, resolved.id, tag)
+
         self._fire_event(entity_id, resolved.id, resolved.title, "tag_removed", tag=tag)
 
     async def _resolve_item(
@@ -301,7 +397,7 @@ class TodoManager:
             if item in (candidate.id, candidate.title):
                 return candidate
 
-        raise ValueError(f"No item {item!r} (by id or title) found on {entity_id}")
+        raise ItemNotFoundError(f"No item {item!r} (by id or title) found on {entity_id}")
 
     async def move_item(
         self,
@@ -313,36 +409,37 @@ class TodoManager:
         """Move an item before, after, or inside another item."""
 
         if reference_id == child_id:
-            raise ValueError(f"Cannot move {child_id} relative to itself")
+            raise CycleError(f"Cannot move {child_id} relative to itself")
 
-        items = await self._adapter.get_items(entity_id)
-        positions = await self._metadata_store.get_relationships(entity_id)
+        async with self._lock_for(entity_id):
+            items = await self._adapter.get_items(entity_id)
+            positions = await self._metadata_store.get_relationships(entity_id)
 
-        reference_position = positions.get(reference_id)
-        reference_parent_id = (
-            reference_position.parent_id if reference_position else None
-        )
+            reference_position = positions.get(reference_id)
+            reference_parent_id = (
+                reference_position.parent_id if reference_position else None
+            )
 
-        new_parent_id = reference_id if placement == "inside" else reference_parent_id
+            new_parent_id = reference_id if placement == "inside" else reference_parent_id
 
-        self._ensure_no_cycle(child_id, new_parent_id, positions)
+            self._ensure_no_cycle(child_id, new_parent_id, positions)
 
-        siblings = self._siblings(items, positions, new_parent_id, exclude=child_id)
+            siblings = self._siblings(items, positions, new_parent_id, exclude=child_id)
 
-        if placement == "inside":
-            siblings.append(child_id)
-        else:
-            reference_index = siblings.index(reference_id)
-            insert_at = reference_index if placement == "before" else reference_index + 1
-            siblings.insert(insert_at, child_id)
+            if placement == "inside":
+                siblings.append(child_id)
+            else:
+                reference_index = siblings.index(reference_id)
+                insert_at = reference_index if placement == "before" else reference_index + 1
+                siblings.insert(insert_at, child_id)
 
-        await self._metadata_store.set_positions(
-            entity_id,
-            {
-                item_id: ItemPosition(parent_id=new_parent_id, order=order)
-                for order, item_id in enumerate(siblings)
-            },
-        )
+            await self._metadata_store.set_positions(
+                entity_id,
+                {
+                    item_id: ItemPosition(parent_id=new_parent_id, order=order)
+                    for order, item_id in enumerate(siblings)
+                },
+            )
 
     async def set_completed(
         self,
@@ -378,62 +475,72 @@ class TodoManager:
         so a caller can offer to undo the whole cascade.
         """
 
-        items = await self._adapter.get_items(entity_id)
-        positions = await self._metadata_store.get_relationships(entity_id)
-        item_lookup = {item.id: item for item in items}
+        async with self._lock_for(entity_id):
+            items = await self._adapter.get_items(entity_id)
+            positions = await self._metadata_store.get_relationships(entity_id)
+            item_lookup = {item.id: item for item in items}
 
-        before_derived = self._derived_completed(items, positions)
+            before_derived = self._derived_completed(items, positions)
 
-        target_ids = [item_id, *self._descendants(item_id, positions, items)]
+            target_ids = [item_id, *self._descendants(item_id, positions, items)]
 
-        changed = []
-        touched_ids = []
+            changed = []
+            touched_ids = []
 
-        for target_id in target_ids:
-            item = item_lookup.get(target_id)
+            for target_id in target_ids:
+                item = item_lookup.get(target_id)
 
-            if item is None or item.completed == completed:
-                continue
+                if item is None or item.completed == completed:
+                    continue
 
-            changed.append({"id": target_id, "completed": item.completed})
+                changed.append({"id": target_id, "completed": item.completed})
 
-            await self._adapter.set_completed(entity_id, target_id, completed)
-            item.completed = completed
-            touched_ids.append(target_id)
+                await self._adapter.set_completed(entity_id, target_id, completed)
+                item.completed = completed
+                touched_ids.append(target_id)
 
-            self._fire_event(
-                entity_id, target_id, item.title,
-                "completed" if completed else "uncompleted",
-            )
+                self._fire_event(
+                    entity_id, target_id, item.title,
+                    "completed" if completed else "uncompleted",
+                )
 
-        position_updates: dict[str, ItemPosition] = {}
-
-        for target_id in touched_ids:
+            # Every completed flag that's going to change already has by
+            # this point - what's left is purely repositioning (order),
+            # which _derived_completed() doesn't depend on at all (it only
+            # reads parent_id and each item's completed flag). So one
+            # computation here, after all the flags above are settled,
+            # gives the exact same result the old code recomputed from
+            # scratch (a full tree walk) on every touched descendant AND
+            # every ancestor level - reusing it instead avoids that
+            # redundant O((touched + ancestor depth) x list size) work.
             derived = self._derived_completed(items, positions)
-            reposition = self._reposition_at_boundary(target_id, items, positions, derived)
-            position_updates.update(reposition)
-            positions.update(reposition)
 
-        ancestor_id = self._parent_id_of(item_id, positions)
+            position_updates: dict[str, ItemPosition] = {}
 
-        while ancestor_id is not None:
-            if ancestor_id not in item_lookup:
-                break
+            for target_id in touched_ids:
+                reposition = self._reposition_at_boundary(target_id, items, positions, derived)
+                position_updates.update(reposition)
+                positions.update(reposition)
 
-            derived = self._derived_completed(items, positions)
-            new_status = derived[ancestor_id]
+            ancestor_id = self._parent_id_of(item_id, positions)
 
-            if new_status == before_derived.get(ancestor_id, False):
-                break
+            while ancestor_id is not None:
+                if ancestor_id not in item_lookup:
+                    break
 
-            reposition = self._reposition_at_boundary(ancestor_id, items, positions, derived)
-            position_updates.update(reposition)
-            positions.update(reposition)
+                new_status = derived[ancestor_id]
 
-            ancestor_id = self._parent_id_of(ancestor_id, positions)
+                if new_status == before_derived.get(ancestor_id, False):
+                    break
 
-        if position_updates:
-            await self._metadata_store.set_positions(entity_id, position_updates)
+                reposition = self._reposition_at_boundary(ancestor_id, items, positions, derived)
+                position_updates.update(reposition)
+                positions.update(reposition)
+
+                ancestor_id = self._parent_id_of(ancestor_id, positions)
+
+            if position_updates:
+                await self._metadata_store.set_positions(entity_id, position_updates)
 
         return changed
 
@@ -518,12 +625,13 @@ class TodoManager:
     ) -> None:
         """Write back exact prior completion states, e.g. to undo a cascade."""
 
-        for change in changes:
-            await self._adapter.set_completed(
-                entity_id,
-                change["id"],
-                change["completed"],
-            )
+        async with self._lock_for(entity_id):
+            for change in changes:
+                await self._adapter.set_completed(
+                    entity_id,
+                    change["id"],
+                    change["completed"],
+                )
 
     async def clear_completed(
         self,
@@ -541,39 +649,40 @@ class TodoManager:
         Returns the ids of everything removed.
         """
 
-        items = await self._adapter.get_items(entity_id)
-        positions = await self._metadata_store.get_relationships(entity_id)
+        async with self._lock_for(entity_id):
+            items = await self._adapter.get_items(entity_id)
+            positions = await self._metadata_store.get_relationships(entity_id)
 
-        derived = self._derived_completed(items, positions)
+            derived = self._derived_completed(items, positions)
 
-        root_ids = [
-            item.id
-            for item in items
-            if self._parent_id_of(item.id, positions) is None
-        ]
+            root_ids = [
+                item.id
+                for item in items
+                if self._parent_id_of(item.id, positions) is None
+            ]
 
-        removed_ids: list[str] = []
+            removed_ids: list[str] = []
 
-        for root_id in root_ids:
-            if not derived[root_id]:
-                continue
+            for root_id in root_ids:
+                if not derived[root_id]:
+                    continue
 
-            removed_ids.append(root_id)
-            removed_ids.extend(self._descendants(root_id, positions, items))
+                removed_ids.append(root_id)
+                removed_ids.extend(self._descendants(root_id, positions, items))
 
-        item_by_id = {item.id: item for item in items}
+            item_by_id = {item.id: item for item in items}
 
-        for removed_id in removed_ids:
-            await self._adapter.remove_item(entity_id, removed_id)
-            removed_item = item_by_id.get(removed_id)
-            self._fire_event(
-                entity_id, removed_id, removed_item.title if removed_item else "", "removed",
-            )
+            for removed_id in removed_ids:
+                await self._adapter.remove_item(entity_id, removed_id)
+                removed_item = item_by_id.get(removed_id)
+                self._fire_event(
+                    entity_id, removed_id, removed_item.title if removed_item else "", "removed",
+                )
 
-        if removed_ids:
-            await self._metadata_store.remove_positions(entity_id, removed_ids)
-            await self._metadata_store.remove_quantities(entity_id, removed_ids)
-            await self._metadata_store.remove_tags_for_items(entity_id, removed_ids)
+            if removed_ids:
+                await self._metadata_store.remove_positions(entity_id, removed_ids)
+                await self._metadata_store.remove_quantities(entity_id, removed_ids)
+                await self._metadata_store.remove_tags_for_items(entity_id, removed_ids)
 
         return removed_ids
 
@@ -595,7 +704,8 @@ class TodoManager:
         todo entity, not just this one.
         """
 
-        todo_list = await self.get_list(entity_id)
+        async with self._lock_for(entity_id):
+            todo_list = await self._get_list_impl(entity_id)
 
         snapshot = [
             self._snapshot_node(item, persist_states)
@@ -626,28 +736,29 @@ class TodoManager:
         snapshot = await self._metadata_store.get_snapshot(name)
 
         if snapshot is None:
-            raise ValueError(f"No saved list named {name!r}")
+            raise SnapshotNotFoundError(f"No saved list named {name!r}")
 
-        if mode == "replace":
-            for item in await self._adapter.get_items(entity_id):
-                await self._adapter.remove_item(entity_id, item.id)
+        async with self._lock_for(entity_id):
+            if mode == "replace":
+                for item in await self._adapter.get_items(entity_id):
+                    await self._adapter.remove_item(entity_id, item.id)
 
-            await self._metadata_store.clear_positions(entity_id)
+                await self._metadata_store.clear_positions(entity_id)
 
-        existing_by_path: dict[tuple[str, ...], str] = {}
+            existing_by_path: dict[tuple[str, ...], str] = {}
 
-        if mode == "merge":
-            items = await self._adapter.get_items(entity_id)
-            positions = await self._metadata_store.get_relationships(entity_id)
-            existing_by_path = self._title_path_index(items, positions)
+            if mode == "merge":
+                items = await self._adapter.get_items(entity_id)
+                positions = await self._metadata_store.get_relationships(entity_id)
+                existing_by_path = self._title_path_index(items, positions)
 
-        await self._create_snapshot_nodes(
-            entity_id,
-            snapshot,
-            parent_id=None,
-            ancestor_path=(),
-            existing_by_path=existing_by_path,
-        )
+            await self._create_snapshot_nodes(
+                entity_id,
+                snapshot,
+                parent_id=None,
+                ancestor_path=(),
+                existing_by_path=existing_by_path,
+            )
 
     async def list_saved(self) -> list[str]:
         """Names of every saved snapshot, across all entities."""
@@ -856,7 +967,7 @@ class TodoManager:
 
         while ancestor is not None:
             if ancestor == child_id:
-                raise ValueError(
+                raise CycleError(
                     f"Cannot move {child_id} under {new_parent_id}: "
                     f"{new_parent_id} is already a descendant of {child_id}"
                 )

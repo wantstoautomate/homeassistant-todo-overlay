@@ -1,4 +1,5 @@
 import datetime
+import logging
 
 from homeassistant.components.todo import (
     DATA_COMPONENT,
@@ -6,7 +7,10 @@ from homeassistant.components.todo import (
     TodoListEntityFeature,
 )
 
+from .errors import EntityNotFoundError
 from .models import TodoItem
+
+_LOGGER = logging.getLogger(__name__)
 
 
 def _due_fields(
@@ -40,7 +44,7 @@ class HomeAssistantTodoProvider:
         entity = component.get_entity(entity_id)
 
         if entity is None:
-            raise ValueError(f"Unknown todo entity: {entity_id}")
+            raise EntityNotFoundError(f"Unknown todo entity: {entity_id}")
 
         items = []
 
@@ -150,5 +154,21 @@ class HomeAssistantTodoProvider:
 
         if not new_items:
             raise RuntimeError(f"Failed to determine new item id after adding {title!r}")
+
+        if len(new_items) > 1:
+            # Something else (a voice assistant, another concurrent
+            # add_item/load_list call) added an item in the same window
+            # between the before/after reads used to spot the new one -
+            # there's no way to tell which of new_items is actually ours,
+            # so this picks one arbitrarily and could silently attach
+            # quantity/tags/events to the wrong item. TodoManager's
+            # per-entity lock (see manager.py) makes this very unlikely
+            # for calls that go through it, but add_item can still be
+            # reached while something outside this integration entirely
+            # is adding to the same list at the same moment.
+            _LOGGER.warning(
+                "Ambiguous new item after adding %r to %s: %d candidates, picking %r",
+                title, entity_id, len(new_items), new_items[0].id,
+            )
 
         return new_items[0].id

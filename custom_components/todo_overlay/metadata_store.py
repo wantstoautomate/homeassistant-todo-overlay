@@ -1,11 +1,25 @@
 from __future__ import annotations
 
+import logging
+from typing import Any
+
 from homeassistant.helpers.storage import Store
 
 from .models import ItemPosition
 
+_LOGGER = logging.getLogger(__name__)
+
 STORAGE_VERSION = 2
 STORAGE_KEY = "todo_overlay"
+
+# Batches rapid-fire writes (e.g. a multi-step load_list or duplicate
+# merge, which would otherwise write the whole store to disk once per
+# field per item) into a single write - the in-memory cache is always
+# current regardless of this delay, so nothing that reads through
+# MetadataStore within the same runtime ever sees stale data; this only
+# affects how quickly a write lands on disk. HA still guarantees a
+# final flush on clean shutdown (see Store.async_delay_save).
+SAVE_DELAY = 3
 
 # Saved snapshots and quantities live under these reserved top-level
 # cache keys, separate from the per-entity position maps (which are
@@ -16,16 +30,53 @@ QUANTITIES_KEY = "_quantities"
 TAGS_KEY = "_tags"
 
 
+class _TodoOverlayStore(Store):
+    """Store subclass with a defensive migration path.
+
+    The base Store's default _async_migrate_func raises NotImplementedError
+    for any version it doesn't recognise, which Store.async_load() then
+    re-raises outright - meaning without this override, a version bump
+    (STORAGE_VERSION has already moved 1 -> 2 once) would hard-crash
+    setup for anyone whose stored data predates it, rather than degrading
+    gracefully. There's no real historical data to migrate FROM yet (this
+    integration hasn't shipped a release under version 1), so this is
+    deliberately a safety net rather than an actual v1 -> v2 transform:
+    it logs and passes the old data through as-is instead of raising,
+    which is the right call for shape-compatible bumps and at least
+    doesn't take the whole integration down for an incompatible one.
+    """
+
+    async def _async_migrate_func(
+        self,
+        old_major_version: int,
+        old_minor_version: int,
+        old_data: dict[str, Any],
+    ) -> dict[str, Any]:
+        _LOGGER.warning(
+            "Migrating %s storage from version %s.%s to %s.%s with no "
+            "dedicated migration - passing stored data through unchanged",
+            self.key, old_major_version, old_minor_version,
+            self.version, self.minor_version,
+        )
+
+        return old_data
+
+
 class MetadataStore:
     """Stores Todo Overlay metadata."""
 
     def __init__(self, hass) -> None:
-        self._store = Store(hass, STORAGE_VERSION, STORAGE_KEY)
+        self._store = _TodoOverlayStore(hass, STORAGE_VERSION, STORAGE_KEY)
         self._cache: dict[str, dict[str, dict]] | None = None
 
     async def _load(self) -> None:
         if self._cache is None:
             self._cache = await self._store.async_load() or {}
+
+    def _save(self) -> None:
+        assert self._cache is not None
+
+        self._store.async_delay_save(lambda: self._cache, SAVE_DELAY)
 
     async def get_relationships(
         self,
@@ -59,7 +110,7 @@ class MetadataStore:
                 "order": position.order,
             }
 
-        await self._store.async_save(self._cache)
+        self._save()
 
     async def remove_positions(
         self,
@@ -81,7 +132,7 @@ class MetadataStore:
         for item_id in item_ids:
             entity_positions.pop(item_id, None)
 
-        await self._store.async_save(self._cache)
+        self._save()
 
     async def clear_positions(
         self,
@@ -96,7 +147,58 @@ class MetadataStore:
 
         self._cache.pop(entity_id, None)
 
-        await self._store.async_save(self._cache)
+        self._save()
+
+    async def clear_entity(
+        self,
+        entity_id: str,
+    ) -> None:
+        """Drop every stored position, quantity, and tag for an entity.
+
+        Unlike clear_positions() (used before a replace-mode load
+        repopulates a still-live list), this is for when the entity
+        itself stops existing - e.g. removed from the entity registry -
+        so nothing will ever again call get_list() for it to trigger the
+        normal per-item orphan cleanup (see TodoManager's reconciliation
+        sweep). Without this, that entity's whole metadata block would
+        sit in storage forever.
+        """
+
+        await self._load()
+
+        assert self._cache is not None
+
+        self._cache.pop(entity_id, None)
+        self._cache.get(QUANTITIES_KEY, {}).pop(entity_id, None)
+        self._cache.get(TAGS_KEY, {}).pop(entity_id, None)
+
+        self._save()
+
+    async def rename_entity(
+        self,
+        old_entity_id: str,
+        new_entity_id: str,
+    ) -> None:
+        """Move stored positions/quantities/tags from one entity_id key
+        to another, e.g. when a todo.* entity is renamed in the entity
+        registry - without this, a rename would silently orphan
+        everything under the old id (same underlying problem as
+        clear_entity(), just a move instead of a drop)."""
+
+        await self._load()
+
+        assert self._cache is not None
+
+        if old_entity_id in self._cache:
+            self._cache[new_entity_id] = self._cache.pop(old_entity_id)
+
+        for key in (QUANTITIES_KEY, TAGS_KEY):
+            bucket = self._cache.get(key, {})
+
+            if old_entity_id in bucket:
+                bucket[new_entity_id] = bucket.pop(old_entity_id)
+
+        self._save()
 
     async def save_snapshot(
         self,
@@ -117,7 +219,7 @@ class MetadataStore:
 
         self._cache.setdefault(SNAPSHOTS_KEY, {})[name] = snapshot
 
-        await self._store.async_save(self._cache)
+        self._save()
 
     async def get_snapshot(
         self,
@@ -148,7 +250,7 @@ class MetadataStore:
 
         self._cache.get(SNAPSHOTS_KEY, {}).pop(name, None)
 
-        await self._store.async_save(self._cache)
+        self._save()
 
     async def get_quantities(
         self,
@@ -179,7 +281,7 @@ class MetadataStore:
         else:
             entity_quantities.pop(item_id, None)
 
-        await self._store.async_save(self._cache)
+        self._save()
 
     async def remove_quantities(
         self,
@@ -201,7 +303,7 @@ class MetadataStore:
         for item_id in item_ids:
             entity_quantities.pop(item_id, None)
 
-        await self._store.async_save(self._cache)
+        self._save()
 
     async def get_tags(
         self,
@@ -235,7 +337,7 @@ class MetadataStore:
         else:
             entity_tags.pop(item_id, None)
 
-        await self._store.async_save(self._cache)
+        self._save()
 
     async def add_tag(
         self,
@@ -253,7 +355,7 @@ class MetadataStore:
         if tag not in tags:
             tags.append(tag)
 
-        await self._store.async_save(self._cache)
+        self._save()
 
     async def remove_tag(
         self,
@@ -276,7 +378,7 @@ class MetadataStore:
         if not tags:
             entity_tags.pop(item_id, None)
 
-        await self._store.async_save(self._cache)
+        self._save()
 
     async def remove_tags_for_items(
         self,
@@ -298,4 +400,4 @@ class MetadataStore:
         for item_id in item_ids:
             entity_tags.pop(item_id, None)
 
-        await self._store.async_save(self._cache)
+        self._save()

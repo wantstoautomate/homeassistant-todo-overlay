@@ -1,3 +1,6 @@
+from functools import wraps
+from typing import Any, Callable, Coroutine
+
 import voluptuous as vol
 
 from homeassistant.components import websocket_api
@@ -22,6 +25,51 @@ from .const import (
     WS_TYPE_SET_QUANTITY,
     WS_TYPE_SET_TAGS,
 )
+from .errors import CycleError, EntityNotFoundError, ItemNotFoundError, SnapshotNotFoundError
+
+# Every TodoManager method that validates its input (a missing item,
+# entity, or saved list) raises one of these - all ValueError subclasses,
+# so a plain `except ValueError` still works for a caller that only cares
+# whether something went wrong. Mapped here to specific websocket error
+# codes so the card can tell them apart; anything not listed still gets a
+# reasonable code instead of falling through to HA's generic
+# "unknown_error", which was the case for every handler except
+# move_item/load_list/add_tag/remove_tag before this existed.
+_ERROR_CODES: dict[type[Exception], str] = {
+    CycleError: "cycle_detected",
+    EntityNotFoundError: "not_found",
+    ItemNotFoundError: "not_found",
+    SnapshotNotFoundError: "not_found",
+}
+
+WebSocketHandler = Callable[
+    [HomeAssistant, websocket_api.ActiveConnection, dict], Coroutine[Any, Any, None]
+]
+
+
+def _handle_manager_errors(handler: WebSocketHandler) -> WebSocketHandler:
+    """Translate a TodoManager ValueError into a websocket error response
+    instead of letting it fall through to HA's generic handling."""
+
+    @wraps(handler)
+    async def wrapper(
+        hass: HomeAssistant,
+        connection: websocket_api.ActiveConnection,
+        msg: dict,
+    ) -> None:
+        try:
+            await handler(hass, connection, msg)
+        except ValueError as err:
+            code = "invalid_request"
+
+            for exc_type, mapped_code in _ERROR_CODES.items():
+                if isinstance(err, exc_type):
+                    code = mapped_code
+                    break
+
+            connection.send_error(msg["id"], code, str(err))
+
+    return wrapper
 
 
 @websocket_api.websocket_command(
@@ -31,6 +79,7 @@ from .const import (
     }
 )
 @websocket_api.async_response
+@_handle_manager_errors
 async def websocket_get_list(
     hass: HomeAssistant,
     connection: websocket_api.ActiveConnection,
@@ -60,6 +109,7 @@ async def websocket_get_list(
     }
 )
 @websocket_api.async_response
+@_handle_manager_errors
 async def websocket_move_item(
     hass: HomeAssistant,
     connection: websocket_api.ActiveConnection,
@@ -69,16 +119,12 @@ async def websocket_move_item(
 
     manager = hass.data[DOMAIN][DATA_MANAGER]
 
-    try:
-        await manager.move_item(
-            entity_id=msg["entity_id"],
-            child_id=msg["child_id"],
-            reference_id=msg["reference_id"],
-            placement=msg["placement"],
-        )
-    except ValueError as err:
-        connection.send_error(msg["id"], "cycle_detected", str(err))
-        return
+    await manager.move_item(
+        entity_id=msg["entity_id"],
+        child_id=msg["child_id"],
+        reference_id=msg["reference_id"],
+        placement=msg["placement"],
+    )
 
     connection.send_result(msg["id"])
 
@@ -92,6 +138,7 @@ async def websocket_move_item(
     }
 )
 @websocket_api.async_response
+@_handle_manager_errors
 async def websocket_set_completed(
     hass: HomeAssistant,
     connection: websocket_api.ActiveConnection,
@@ -123,6 +170,7 @@ async def websocket_set_completed(
     }
 )
 @websocket_api.async_response
+@_handle_manager_errors
 async def websocket_restore_completed(
     hass: HomeAssistant,
     connection: websocket_api.ActiveConnection,
@@ -147,6 +195,7 @@ async def websocket_restore_completed(
     }
 )
 @websocket_api.async_response
+@_handle_manager_errors
 async def websocket_clear_completed(
     hass: HomeAssistant,
     connection: websocket_api.ActiveConnection,
@@ -172,6 +221,7 @@ async def websocket_clear_completed(
     }
 )
 @websocket_api.async_response
+@_handle_manager_errors
 async def websocket_save_list(
     hass: HomeAssistant,
     connection: websocket_api.ActiveConnection,
@@ -199,6 +249,7 @@ async def websocket_save_list(
     }
 )
 @websocket_api.async_response
+@_handle_manager_errors
 async def websocket_load_list(
     hass: HomeAssistant,
     connection: websocket_api.ActiveConnection,
@@ -208,15 +259,11 @@ async def websocket_load_list(
 
     manager = hass.data[DOMAIN][DATA_MANAGER]
 
-    try:
-        await manager.load_list(
-            entity_id=msg["entity_id"],
-            name=msg["name"],
-            mode=msg["mode"],
-        )
-    except ValueError as err:
-        connection.send_error(msg["id"], "not_found", str(err))
-        return
+    await manager.load_list(
+        entity_id=msg["entity_id"],
+        name=msg["name"],
+        mode=msg["mode"],
+    )
 
     connection.send_result(msg["id"])
 
@@ -227,6 +274,7 @@ async def websocket_load_list(
     }
 )
 @websocket_api.async_response
+@_handle_manager_errors
 async def websocket_list_saved(
     hass: HomeAssistant,
     connection: websocket_api.ActiveConnection,
@@ -248,6 +296,7 @@ async def websocket_list_saved(
     }
 )
 @websocket_api.async_response
+@_handle_manager_errors
 async def websocket_delete_saved_list(
     hass: HomeAssistant,
     connection: websocket_api.ActiveConnection,
@@ -275,6 +324,7 @@ async def websocket_delete_saved_list(
     }
 )
 @websocket_api.async_response
+@_handle_manager_errors
 async def websocket_create_item(
     hass: HomeAssistant,
     connection: websocket_api.ActiveConnection,
@@ -306,6 +356,7 @@ async def websocket_create_item(
     }
 )
 @websocket_api.async_response
+@_handle_manager_errors
 async def websocket_set_quantity(
     hass: HomeAssistant,
     connection: websocket_api.ActiveConnection,
@@ -333,6 +384,7 @@ async def websocket_set_quantity(
     }
 )
 @websocket_api.async_response
+@_handle_manager_errors
 async def websocket_set_tags(
     hass: HomeAssistant,
     connection: websocket_api.ActiveConnection,
@@ -360,6 +412,7 @@ async def websocket_set_tags(
     }
 )
 @websocket_api.async_response
+@_handle_manager_errors
 async def websocket_add_tag(
     hass: HomeAssistant,
     connection: websocket_api.ActiveConnection,
@@ -369,15 +422,11 @@ async def websocket_add_tag(
 
     manager = hass.data[DOMAIN][DATA_MANAGER]
 
-    try:
-        await manager.add_tag(
-            entity_id=msg["entity_id"],
-            item=msg["item"],
-            tag=msg["tag"],
-        )
-    except ValueError as err:
-        connection.send_error(msg["id"], "not_found", str(err))
-        return
+    await manager.add_tag(
+        entity_id=msg["entity_id"],
+        item=msg["item"],
+        tag=msg["tag"],
+    )
 
     connection.send_result(msg["id"])
 
@@ -391,6 +440,7 @@ async def websocket_add_tag(
     }
 )
 @websocket_api.async_response
+@_handle_manager_errors
 async def websocket_remove_tag(
     hass: HomeAssistant,
     connection: websocket_api.ActiveConnection,
@@ -400,15 +450,11 @@ async def websocket_remove_tag(
 
     manager = hass.data[DOMAIN][DATA_MANAGER]
 
-    try:
-        await manager.remove_tag(
-            entity_id=msg["entity_id"],
-            item=msg["item"],
-            tag=msg["tag"],
-        )
-    except ValueError as err:
-        connection.send_error(msg["id"], "not_found", str(err))
-        return
+    await manager.remove_tag(
+        entity_id=msg["entity_id"],
+        item=msg["item"],
+        tag=msg["tag"],
+    )
 
     connection.send_result(msg["id"])
 

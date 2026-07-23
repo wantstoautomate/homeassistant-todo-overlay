@@ -1,4 +1,6 @@
 save_list:
+  name: Save list
+  description: Save a named snapshot of a Todo Overlay list's items and hierarchy, for later reuse with load_list.
   fields:
     entity_id:
       required: true
@@ -17,6 +19,8 @@ save_list:
         boolean:
 
 load_list:
+  name: Load list
+  description: Recreate a saved snapshot's items onto a Todo Overlay list.
   fields:
     entity_id:
       required: true
@@ -39,6 +43,8 @@ load_list:
             - full_merge
 
 delete_saved_list:
+  name: Delete saved list
+  description: Delete a named saved list snapshot.
   fields:
     name:
       required: true
@@ -47,6 +53,8 @@ delete_saved_list:
         text:
 
 add_tag:
+  name: Add tag
+  description: Add a tag to a Todo Overlay item.
   fields:
     entity_id:
       required: true
@@ -66,6 +74,8 @@ add_tag:
         text:
 
 remove_tag:
+  name: Remove tag
+  description: Remove a tag from a Todo Overlay item.
   fields:
     entity_id:
       required: true
@@ -85,6 +95,8 @@ remove_tag:
         text:
 
 create_item:
+  name: Create item
+  description: Create a Todo Overlay item, including overlay-only fields like quantity and tags that the native todo.add_item service has no concept of.
   fields:
     entity_id:
       required: true
@@ -120,6 +132,8 @@ create_item:
         object:
 
 set_quantity:
+  name: Set quantity
+  description: Set (or clear) a Todo Overlay item's quantity.
   fields:
     entity_id:
       required: true

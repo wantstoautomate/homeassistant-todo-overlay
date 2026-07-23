@@ -1,5 +1,12 @@
+import asyncio
+
 import pytest
 
+from custom_components.todo_overlay.errors import (
+    CycleError,
+    ItemNotFoundError,
+    SnapshotNotFoundError,
+)
 from custom_components.todo_overlay.manager import TodoManager
 from custom_components.todo_overlay.models import ItemPosition, TodoItem
 
@@ -19,11 +26,27 @@ class FakeAdapter:
         self.remove_item_calls: list[tuple[str, str]] = []
         self.add_item_calls: list[tuple[str, str]] = []
         self._next_id = 0
+        # Only used by the concurrency test: when set, get_items() records
+        # a "start"/"end" marker into get_items_call_order and, on the
+        # first call, waits on this event before returning - letting a
+        # test pause one caller mid-read to see whether a second caller
+        # can interleave with it (see
+        # test_manager_concurrent_calls_on_same_entity_are_serialized).
+        self.get_items_gate: asyncio.Event | None = None
+        self.get_items_call_order: list[str] = []
 
     async def get_items(
         self,
         entity_id: str,
     ) -> list[TodoItem]:
+        if self.get_items_gate is not None:
+            self.get_items_call_order.append("start")
+
+            if len(self.get_items_call_order) == 1:
+                await self.get_items_gate.wait()
+
+            self.get_items_call_order.append("end")
+
         return self._items
 
     async def set_completed(
@@ -1177,3 +1200,215 @@ async def test_manager_save_and_load_list_round_trips_tags():
     todo_list = await manager.get_list("todo.other_list")
     matching = [item for item in todo_list.items if item.title == "Salami"]
     assert any(item.tags == ["deli"] for item in matching)
+
+
+# --- orphaned metadata reconciliation ------------------------------------
+
+@pytest.mark.asyncio
+async def test_manager_get_list_reconciles_orphaned_metadata():
+    """An item removed through any path other than this integration (the
+    native card, a voice assistant, todo.remove_item directly) leaves its
+    position/quantity/tags behind with nothing to clean them up - get_list
+    should notice and drop them rather than let them sit in storage
+    forever (see manager.py's _reconcile_orphaned_metadata)."""
+
+    adapter = FakeAdapter(items=[TodoItem(id="1", title="Milk", completed=False)])
+    metadata_store = FakeMetadataStore({
+        "1": ItemPosition(parent_id=None, order=0),
+        "ghost": ItemPosition(parent_id=None, order=1),
+    })
+    metadata_store._quantities = {"1": "2L", "ghost": "1kg"}
+    metadata_store._tags = {"1": ["dairy"], "ghost": ["stale"]}
+
+    manager = TodoManager(adapter=adapter, metadata_store=metadata_store)
+
+    todo_list = await manager.get_list("todo.shopping")
+
+    assert [item.id for item in todo_list.items] == ["1"]
+    assert "ghost" not in metadata_store._positions
+    assert "ghost" not in metadata_store._quantities
+    assert "ghost" not in metadata_store._tags
+    # The live item's own metadata must survive the sweep.
+    assert metadata_store._positions["1"] == ItemPosition(parent_id=None, order=0)
+    assert metadata_store._quantities["1"] == "2L"
+    assert metadata_store._tags["1"] == ["dairy"]
+
+
+@pytest.mark.asyncio
+async def test_manager_get_list_reconciliation_is_noop_when_nothing_orphaned():
+    adapter = FakeAdapter(items=[TodoItem(id="1", title="Milk", completed=False)])
+    metadata_store = FakeMetadataStore({"1": ItemPosition(parent_id=None, order=0)})
+    metadata_store._quantities = {"1": "2L"}
+
+    manager = TodoManager(adapter=adapter, metadata_store=metadata_store)
+
+    await manager.get_list("todo.shopping")
+
+    assert metadata_store._positions == {"1": ItemPosition(parent_id=None, order=0)}
+    assert metadata_store._quantities == {"1": "2L"}
+
+
+# --- typed exceptions -----------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_manager_move_item_cycle_raises_cycle_error():
+    metadata_store = FakeMetadataStore({
+        "1": ItemPosition(parent_id=None, order=0),
+        "2": ItemPosition(parent_id="1", order=0),
+    })
+    manager = TodoManager(adapter=FakeAdapter(), metadata_store=metadata_store)
+
+    with pytest.raises(CycleError):
+        await manager.move_item(
+            entity_id="todo.shopping", child_id="1", reference_id="2", placement="inside",
+        )
+
+
+@pytest.mark.asyncio
+async def test_manager_move_item_self_reference_raises_cycle_error():
+    manager = TodoManager(adapter=FakeAdapter(), metadata_store=FakeMetadataStore())
+
+    with pytest.raises(CycleError):
+        await manager.move_item(
+            entity_id="todo.shopping", child_id="1", reference_id="1", placement="before",
+        )
+
+
+@pytest.mark.asyncio
+async def test_manager_resolve_item_raises_item_not_found_error():
+    manager = TodoManager(adapter=FakeAdapter(), metadata_store=FakeMetadataStore())
+
+    with pytest.raises(ItemNotFoundError):
+        await manager.add_tag(entity_id="todo.shopping", item="nonexistent", tag="x")
+
+
+@pytest.mark.asyncio
+async def test_manager_load_list_unknown_snapshot_raises_snapshot_not_found_error():
+    manager = TodoManager(adapter=FakeAdapter(), metadata_store=FakeMetadataStore())
+
+    with pytest.raises(SnapshotNotFoundError):
+        await manager.load_list(entity_id="todo.shopping", name="nonexistent")
+
+
+# --- per-entity concurrency -------------------------------------------
+
+@pytest.mark.asyncio
+async def test_manager_concurrent_calls_on_same_entity_are_serialized():
+    """HA's websocket API doesn't serialize command handlers against each
+    other, so two calls against the same entity can genuinely interleave
+    at any await point. TodoManager's per-entity lock (see manager.py's
+    _lock_for) should stop a second caller's read-modify-write window
+    from ever overlapping the first's - proven directly here by
+    controlling exactly when the first call's read is allowed to
+    complete, rather than inferring it from final state."""
+
+    adapter = FakeAdapter(items=[
+        TodoItem(id="1", title="A", completed=False),
+        TodoItem(id="2", title="B", completed=False),
+    ])
+    metadata_store = FakeMetadataStore()
+    manager = TodoManager(adapter=adapter, metadata_store=metadata_store)
+
+    gate = asyncio.Event()
+    adapter.get_items_gate = gate
+
+    task1 = asyncio.create_task(
+        manager.set_completed(entity_id="todo.shopping", item_id="1", completed=True)
+    )
+    await asyncio.sleep(0)
+    # task1 is now blocked inside its own get_items(), holding the lock.
+    assert adapter.get_items_call_order == ["start"]
+
+    task2 = asyncio.create_task(
+        manager.set_completed(entity_id="todo.shopping", item_id="2", completed=True)
+    )
+    await asyncio.sleep(0)
+    # If task2 could interleave, it would have appended its own "start"
+    # here already. With the lock, it's blocked waiting to acquire it,
+    # not blocked inside get_items - so the order is unchanged.
+    assert adapter.get_items_call_order == ["start"]
+
+    gate.set()
+
+    await asyncio.wait_for(task1, timeout=2)
+    await asyncio.wait_for(task2, timeout=2)
+
+    assert adapter.get_items_call_order == ["start", "end", "start", "end"]
+
+
+@pytest.mark.asyncio
+async def test_manager_set_quantity_by_item_does_not_deadlock():
+    """set_quantity_by_item() calls into the same quantity-setting logic
+    as set_quantity() - both lock the same entity, so this only passes if
+    the internal call goes through the unlocked _set_quantity_impl()
+    rather than re-entering _lock_for() (asyncio.Lock isn't reentrant)."""
+
+    manager = TodoManager(adapter=FakeAdapter(), metadata_store=FakeMetadataStore())
+
+    await asyncio.wait_for(
+        manager.set_quantity_by_item(entity_id="todo.shopping", item="1", quantity="2L"),
+        timeout=2,
+    )
+
+
+@pytest.mark.asyncio
+async def test_manager_save_list_does_not_deadlock():
+    """save_list() reads the list via _get_list_impl() directly rather
+    than calling the locked get_list(), for the same reentrancy reason."""
+
+    adapter = FakeAdapter(items=[TodoItem(id="1", title="Salami", completed=False)])
+    manager = TodoManager(adapter=adapter, metadata_store=FakeMetadataStore())
+
+    await asyncio.wait_for(
+        manager.save_list(entity_id="todo.shopping", name="template"),
+        timeout=2,
+    )
+
+
+# --- set_completed cascade optimization (deep nesting) --------------------
+
+@pytest.mark.asyncio
+async def test_manager_set_completed_deep_cascade_repositions_every_level():
+    """Regression test for the _derived_completed() reuse optimization in
+    set_completed(): it's computed once (after all completion flags are
+    settled) and reused for every boundary reposition, rather than
+    recomputed from scratch per touched item and per ancestor level - this
+    is only safe because derived status doesn't depend on order, which a
+    multi-level cascade like this one would expose if that were wrong."""
+
+    adapter = FakeAdapter(items=[
+        TodoItem(id="root", title="Root", completed=False),
+        TodoItem(id="mid", title="Mid", completed=False),
+        TodoItem(id="leaf-a", title="Leaf A", completed=False),
+        TodoItem(id="leaf-b", title="Leaf B", completed=True),
+        TodoItem(id="root-sibling", title="Root Sibling", completed=False),
+    ])
+    metadata_store = FakeMetadataStore({
+        "mid": ItemPosition(parent_id="root", order=0),
+        "leaf-a": ItemPosition(parent_id="mid", order=0),
+        "leaf-b": ItemPosition(parent_id="mid", order=1),
+        "root-sibling": ItemPosition(parent_id=None, order=1),
+    })
+    manager = TodoManager(adapter=adapter, metadata_store=metadata_store)
+
+    # "mid" is not yet derived-complete (leaf-a is still incomplete), so
+    # completing leaf-a should cascade all the way up: mid becomes
+    # derived-complete (both its children now complete), and root
+    # becomes derived-complete too (its only child, mid, now is).
+    changed = await manager.set_completed(
+        entity_id="todo.shopping", item_id="leaf-a", completed=True,
+    )
+
+    assert {c["id"] for c in changed} == {"leaf-a"}
+
+    todo_list = await manager.get_list("todo.shopping")
+    root = next(item for item in todo_list.items if item.id == "root")
+    assert root.completed is True
+
+    mid = next(item for item in root.children if item.id == "mid")
+    assert mid.completed is True
+    assert {child.id for child in mid.children} == {"leaf-a", "leaf-b"}
+
+    # root-sibling was never touched and should keep its own status/position.
+    root_sibling = next(item for item in todo_list.items if item.id == "root-sibling")
+    assert root_sibling.completed is False

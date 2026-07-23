@@ -3,7 +3,8 @@ from pathlib import Path
 from homeassistant.components.http import StaticPathConfig
 from homeassistant.components.lovelace.const import CONF_RESOURCE_TYPE_WS, LOVELACE_DATA
 from homeassistant.const import CONF_ID, CONF_URL, EVENT_HOMEASSISTANT_STARTED
-from homeassistant.core import CoreState, HomeAssistant
+from homeassistant.core import CoreState, Event, HomeAssistant
+from homeassistant.helpers import entity_registry as er
 from homeassistant.loader import async_get_integration
 
 from .const import DATA_MANAGER, DOMAIN
@@ -17,13 +18,17 @@ FRONTEND_URL_PATH = "/todo_overlay_static"
 FRONTEND_DIST = Path(__file__).parent / "frontend_dist"
 CARD_FILENAME = "todo-overlay.js"
 
+TODO_ENTITY_PREFIX = "todo."
+
 
 async def async_setup(hass: HomeAssistant, config) -> bool:
     """Set up Todo Overlay."""
 
+    metadata_store = MetadataStore(hass)
+
     manager = TodoManager(
         adapter=HomeAssistantTodoProvider(hass),
-        metadata_store=MetadataStore(hass),
+        metadata_store=metadata_store,
         hass=hass,
     )
 
@@ -44,7 +49,41 @@ async def async_setup(hass: HomeAssistant, config) -> bool:
     else:
         hass.bus.async_listen_once(EVENT_HOMEASSISTANT_STARTED, _register_lovelace_resource)
 
+    async def _handle_entity_registry_updated(event: Event) -> None:
+        await _async_handle_entity_registry_updated(metadata_store, event)
+
+    hass.bus.async_listen(er.EVENT_ENTITY_REGISTRY_UPDATED, _handle_entity_registry_updated)
+
     return True
+
+
+async def _async_handle_entity_registry_updated(
+    metadata_store: MetadataStore,
+    event: Event,
+) -> None:
+    """Keep stored metadata in sync with the entity registry.
+
+    Nothing else in this integration ever notices an entity disappearing
+    or being renamed outside of it - get_list() only cleans up metadata
+    for individual items it can see are gone, which never runs again for
+    an entity that no longer exists at all. Without this, a removed
+    todo.* entity's whole positions/quantities/tags block - or, for a
+    rename, everything under the old id - would sit in storage forever.
+    """
+
+    data = event.data
+    entity_id = data["entity_id"]
+
+    if not entity_id.startswith(TODO_ENTITY_PREFIX):
+        return
+
+    if data["action"] == "remove":
+        await metadata_store.clear_entity(entity_id)
+    elif data["action"] == "update":
+        old_entity_id = data.get("old_entity_id")
+
+        if old_entity_id and old_entity_id != entity_id:
+            await metadata_store.rename_entity(old_entity_id, entity_id)
 
 
 async def _async_register_lovelace_resource(hass: HomeAssistant) -> None:
