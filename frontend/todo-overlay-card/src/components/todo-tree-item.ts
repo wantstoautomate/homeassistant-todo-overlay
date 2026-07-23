@@ -659,10 +659,13 @@ export class TodoTreeItem extends LitElement {
                                         : html`<span class="collapse-toggle-spacer"></span>`
                                 }
 
-                                <ha-checkbox
-                                    style=${this.checkboxHidden ? "visibility: hidden" : ""}
-                                    .checked=${this.item.completed}
-                                ></ha-checkbox>
+                                ${
+                                    this.checkboxHidden
+                                        ? ""
+                                        : html`
+                                            <ha-checkbox .checked=${this.item.completed}></ha-checkbox>
+                                        `
+                                }
 
                                 <div class="content">
                                     <div class="title-line">

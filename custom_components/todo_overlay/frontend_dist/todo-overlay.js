@@ -822,15 +822,11 @@ function matchesMode(item, mode) {
       return isOverdue(item);
   }
 }
-function matchesQuery(item, query) {
-  return !query || item.title.toLowerCase().includes(query.toLowerCase());
-}
-function filterTree(items, mode, query) {
-  const trimmedQuery = query.trim();
+function filterTree(items, mode) {
   const result = [];
   for (const item of items) {
-    const filteredChildren = filterTree(item.children, mode, trimmedQuery);
-    const selfMatches = matchesMode(item, mode) && matchesQuery(item, trimmedQuery);
+    const filteredChildren = filterTree(item.children, mode);
+    const selfMatches = matchesMode(item, mode);
     if (selfMatches || filteredChildren.length > 0) {
       result.push({ ...item, children: filteredChildren });
     }
@@ -1748,10 +1744,9 @@ var TodoTreeItem = class extends i4 {
                                             </button>
                                         ` : b2`<span class="collapse-toggle-spacer"></span>`}
 
-                                <ha-checkbox
-                                    style=${this.checkboxHidden ? "visibility: hidden" : ""}
-                                    .checked=${this.item.completed}
-                                ></ha-checkbox>
+                                ${this.checkboxHidden ? "" : b2`
+                                            <ha-checkbox .checked=${this.item.completed}></ha-checkbox>
+                                        `}
 
                                 <div class="content">
                                     <div class="title-line">
@@ -2137,6 +2132,24 @@ TodoTree = __decorateClass([
 ], TodoTree);
 
 // src/components/todo-overlay-list.ts
+var PLUS_ICON = b2`
+    <svg viewBox="0 0 24 24"><path d="M19 13H13V19H11V13H5V11H11V5H13V11H19V13Z"></path></svg>
+`;
+var FILTER_ICON = b2`
+    <svg viewBox="0 0 24 24">
+        <path d="M14,12V19.88C14.04,20.18 13.94,20.5 13.71,20.71C13.32,21.1 12.69,21.1 12.3,20.71L10.29,18.7C10.06,18.47 9.96,18.16 10,17.87V12H9.97L4.21,4.62C3.87,4.19 3.95,3.56 4.38,3.22C4.57,3.08 4.78,3 5,3V3H19V3C19.22,3 19.43,3.08 19.62,3.22C20.05,3.56 20.13,4.19 19.79,4.62L14.03,12H14Z"></path>
+    </svg>
+`;
+var SAVE_ICON = b2`
+    <svg viewBox="0 0 24 24">
+        <path d="M17,3H5C3.89,3 3,3.9 3,5V19A2,2 0 0,0 5,21H19A2,2 0 0,0 21,19V7L17,3M19,19H5V5H16.17L19,7.83V19M12,12A3,3 0 0,0 9,15A3,3 0 0,0 12,18A3,3 0 0,0 15,15A3,3 0 0,0 12,12M6,6H15V10H6V6Z"></path>
+    </svg>
+`;
+var LOAD_ICON = b2`
+    <svg viewBox="0 0 24 24">
+        <path d="M20,18H4V8H20M20,6H12L10,4H4C2.89,4 2,4.89 2,6V18A2,2 0 0,0 4,20H20A2,2 0 0,0 22,18V8C22,6.89 21.1,6 20,6Z"></path>
+    </svg>
+`;
 function collectAllRows(root) {
   const rows = [];
   for (const el of Array.from(root.querySelectorAll("*"))) {
@@ -2224,7 +2237,8 @@ var TodoOverlayList = class extends i4 {
     this.showFilterMenu = false;
     this.collapsedIds = /* @__PURE__ */ new Set();
     this.filterMode = "all";
-    this.searchQuery = "";
+    this.filterMenuOpen = false;
+    this.quickAddExpanded = false;
     this.dragGhostOffset = { x: 0, y: 0 };
     this.rowSnapshot = [];
     this.quickAddValue = "";
@@ -2334,7 +2348,9 @@ var TodoOverlayList = class extends i4 {
         const pressDurationMs = e7.detail.pressDurationMs;
         const checkboxHidden = this.hideCompleteForParents && item.children.length > 0;
         if (pressDurationMs < LONG_PRESS_MS) {
-          if (!checkboxHidden) {
+          if (checkboxHidden) {
+            this.toggleCollapseId(item.id);
+          } else {
             await this.toggleComplete(item);
           }
         } else {
@@ -2350,21 +2366,31 @@ var TodoOverlayList = class extends i4 {
     window.removeEventListener("pointerup", this.onGlobalPointerUp, { capture: true });
     window.removeEventListener("pointercancel", this.onGlobalPointerUp, { capture: true });
   }
-  // --- collapse / filter / search --------------------------------------
-  onToggleCollapse(e7) {
+  // --- collapse / filter -------------------------------------------------
+  toggleCollapseId(id) {
     const next = new Set(this.collapsedIds);
-    if (next.has(e7.detail.id)) {
-      next.delete(e7.detail.id);
+    if (next.has(id)) {
+      next.delete(id);
     } else {
-      next.add(e7.detail.id);
+      next.add(id);
     }
     this.collapsedIds = next;
+  }
+  onToggleCollapse(e7) {
+    this.toggleCollapseId(e7.detail.id);
+  }
+  onToggleFilterMenu() {
+    this.filterMenuOpen = !this.filterMenuOpen;
   }
   onFilterModeChanged(mode) {
     this.filterMode = mode;
   }
-  onSearchInput(e7) {
-    this.searchQuery = e7.target.value;
+  onToggleQuickAdd() {
+    if (this.showQuickAdd) {
+      this.quickAddExpanded = !this.quickAddExpanded;
+    } else {
+      this.openCreateDialog();
+    }
   }
   // --- completion + cascade undo --------------------------------------
   async toggleComplete(item) {
@@ -2586,7 +2612,7 @@ var TodoOverlayList = class extends i4 {
     }
   }
   renderTree(list) {
-    const filtered = filterTree(list.items, this.filterMode, this.searchQuery);
+    const filtered = filterTree(list.items, this.filterMode);
     const items = sortTree(filtered, this.sortBy, this.sortOrder);
     const completedItems = items.filter((item) => item.completed);
     if (completedItems.length === 0) {
@@ -2680,55 +2706,87 @@ var TodoOverlayList = class extends i4 {
         `;
   }
   render() {
+    const hasToolbar = this.showQuickAdd || this.showFilterMenu || this.showSaveLoadButtons;
     return b2`
-            ${this.showSaveLoadButtons ? b2`
-                        <div class="list-actions">
-                            <button @click=${this.openSaveDialog}>Save list</button>
-                            <button @click=${this.openLoadDialog}>Load list</button>
+            ${hasToolbar ? b2`
+                        <div class="toolbar">
+                            <button
+                                class=${e6({
+      "toolbar-icon": true,
+      "quick-add-toggle": true,
+      expanded: this.quickAddExpanded
+    })}
+                                aria-label="Add item"
+                                @click=${this.onToggleQuickAdd}
+                            >
+                                ${PLUS_ICON}
+                            </button>
+
+                            <div class="toolbar-spacer"></div>
+
+                            ${this.showFilterMenu ? b2`
+                                        <button
+                                            class=${e6({
+      "toolbar-icon": true,
+      active: this.filterMenuOpen || this.filterMode !== "all"
+    })}
+                                            aria-label="Filter"
+                                            @click=${this.onToggleFilterMenu}
+                                        >
+                                            ${FILTER_ICON}
+                                            ${this.filterMode !== "all" ? b2`<span class="badge-dot"></span>` : ""}
+                                        </button>
+                                    ` : ""}
+
+                            ${this.showSaveLoadButtons ? b2`
+                                        <button
+                                            class="toolbar-icon"
+                                            aria-label="Save list"
+                                            @click=${this.openSaveDialog}
+                                        >
+                                            ${SAVE_ICON}
+                                        </button>
+                                        <button
+                                            class="toolbar-icon"
+                                            aria-label="Load list"
+                                            @click=${this.openLoadDialog}
+                                        >
+                                            ${LOAD_ICON}
+                                        </button>
+                                    ` : ""}
                         </div>
                     ` : ""}
 
-            ${this.showQuickAdd ? b2`
-                        <div class="quick-add">
-                            <input
-                                type="text"
-                                placeholder="Add item"
-                                .value=${this.quickAddValue}
-                                @input=${this.onQuickAddInput}
-                                @keydown=${this.onQuickAddKeydown}
-                            />
-                            <button class="add" @click=${this.submitQuickAdd}>
-                                Add
-                            </button>
-                            <button class="details" @click=${this.openCreateDialog}>
+            ${this.quickAddExpanded ? b2`
+                        <div class="quick-add-panel">
+                            <div class="quick-add-row">
+                                <input
+                                    type="text"
+                                    placeholder="Add item"
+                                    .value=${this.quickAddValue}
+                                    @input=${this.onQuickAddInput}
+                                    @keydown=${this.onQuickAddKeydown}
+                                />
+                                <button @click=${this.submitQuickAdd}>
+                                    Add
+                                </button>
+                            </div>
+                            <button class="quick-add-details" @click=${this.openCreateDialog}>
                                 Details…
                             </button>
                         </div>
-                    ` : b2`
-                        <div class="quick-add-collapsed">
-                            <button @click=${this.openCreateDialog}>+ Add item</button>
-                        </div>
-                    `}
+                    ` : ""}
 
-            ${this.showFilterMenu ? b2`
-                        <div class="filter-bar">
-                            <input
-                                type="text"
-                                class="filter-search"
-                                placeholder="Search"
-                                .value=${this.searchQuery}
-                                @input=${this.onSearchInput}
-                            />
-                            <div class="filter-chips">
-                                ${FILTER_MODES.map((mode) => b2`
-                                    <button
-                                        class=${e6({ "filter-chip": true, active: this.filterMode === mode })}
-                                        @click=${() => this.onFilterModeChanged(mode)}
-                                    >
-                                        ${FILTER_LABELS[mode]}
-                                    </button>
-                                `)}
-                            </div>
+            ${this.filterMenuOpen ? b2`
+                        <div class="filter-panel">
+                            ${FILTER_MODES.map((mode) => b2`
+                                <button
+                                    class=${e6({ "filter-chip": true, active: this.filterMode === mode })}
+                                    @click=${() => this.onFilterModeChanged(mode)}
+                                >
+                                    ${FILTER_LABELS[mode]}
+                                </button>
+                            `)}
                         </div>
                     ` : ""}
 
@@ -2785,15 +2843,77 @@ var TodoOverlayList = class extends i4 {
   }
 };
 TodoOverlayList.styles = i`
-        .quick-add {
+        .toolbar {
             display: flex;
             align-items: center;
-            gap: 8px;
-            padding: 4px 20px 12px;
+            gap: 4px;
+            padding: 8px 12px;
+        }
+
+        .toolbar-spacer {
+            flex: 1;
+        }
+
+        .toolbar-icon {
+            position: relative;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            width: 36px;
+            height: 36px;
+            flex-shrink: 0;
+            border: none;
+            border-radius: 50%;
+            background: none;
+            padding: 0;
+            color: var(--secondary-text-color);
+            cursor: pointer;
+        }
+
+        .toolbar-icon:hover {
+            background: rgba(var(--rgb-primary-text-color, 0, 0, 0), 0.06);
+        }
+
+        .toolbar-icon.active {
+            color: var(--primary-color);
+        }
+
+        .toolbar-icon svg {
+            width: 20px;
+            height: 20px;
+            fill: currentColor;
+        }
+
+        .toolbar-icon .badge-dot {
+            position: absolute;
+            top: 6px;
+            right: 6px;
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: var(--primary-color);
+        }
+
+        .toolbar-icon.quick-add-toggle svg {
+            transition: transform 150ms ease;
+        }
+
+        .toolbar-icon.quick-add-toggle.expanded svg {
+            transform: rotate(45deg);
+        }
+
+        .quick-add-panel {
+            padding: 0 20px 12px;
             font-family: Roboto, "Noto Sans", sans-serif;
         }
 
-        .quick-add input {
+        .quick-add-row {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .quick-add-row input {
             flex: 1;
             font-family: inherit;
             font-size: 14px;
@@ -2805,61 +2925,38 @@ TodoOverlayList.styles = i`
             outline: none;
         }
 
-        .quick-add input:focus {
+        .quick-add-row input:focus {
             border-bottom: 2px solid var(--primary-color);
             padding-bottom: 5px;
         }
 
-        .quick-add button {
+        .quick-add-row button {
             border: none;
             background: none;
             font-family: inherit;
-            cursor: pointer;
-        }
-
-        .quick-add-collapsed {
-            padding: 4px 20px 12px;
-        }
-
-        .quick-add-collapsed button {
-            border: none;
-            background: none;
-            font-family: Roboto, "Noto Sans", sans-serif;
             font-size: 14px;
             color: var(--primary-color);
             font-weight: 500;
             cursor: pointer;
+        }
+
+        .quick-add-details {
+            display: block;
+            margin-top: 4px;
+            border: none;
+            background: none;
+            font-family: inherit;
+            font-size: 12px;
+            color: var(--secondary-text-color);
+            cursor: pointer;
             padding: 4px 0;
         }
 
-        .filter-bar {
-            display: flex;
-            flex-direction: column;
-            gap: 8px;
-            padding: 4px 20px 12px;
-            font-family: Roboto, "Noto Sans", sans-serif;
-        }
-
-        .filter-search {
-            font-family: inherit;
-            font-size: 14px;
-            color: var(--primary-text-color);
-            background: none;
-            border: none;
-            border-bottom: 1px solid var(--divider-color);
-            padding: 6px 0;
-            outline: none;
-        }
-
-        .filter-search:focus {
-            border-bottom: 2px solid var(--primary-color);
-            padding-bottom: 5px;
-        }
-
-        .filter-chips {
+        .filter-panel {
             display: flex;
             gap: 8px;
             flex-wrap: wrap;
+            padding: 0 20px 12px;
         }
 
         .filter-chip {
@@ -2867,7 +2964,7 @@ TodoOverlayList.styles = i`
             background: none;
             border-radius: 12px;
             padding: 4px 12px;
-            font-family: inherit;
+            font-family: Roboto, "Noto Sans", sans-serif;
             font-size: 12px;
             color: var(--secondary-text-color);
             cursor: pointer;
@@ -2877,33 +2974,6 @@ TodoOverlayList.styles = i`
             border-color: var(--primary-color);
             color: var(--primary-color);
             background: rgba(var(--rgb-primary-color, 3, 169, 244), 0.12);
-        }
-
-        .list-actions {
-            display: flex;
-            justify-content: flex-end;
-            gap: 16px;
-            padding: 8px 20px 0;
-        }
-
-        .list-actions button {
-            border: none;
-            background: none;
-            font-family: Roboto, "Noto Sans", sans-serif;
-            font-size: 12px;
-            color: var(--secondary-text-color);
-            cursor: pointer;
-            padding: 4px;
-        }
-
-        .quick-add .add {
-            color: var(--primary-color);
-            font-weight: 500;
-        }
-
-        .quick-add .details {
-            color: var(--secondary-text-color);
-            font-size: 12px;
         }
 
         .undo-snackbar {
@@ -3034,7 +3104,10 @@ __decorateClass([
 ], TodoOverlayList.prototype, "filterMode", 2);
 __decorateClass([
   r5()
-], TodoOverlayList.prototype, "searchQuery", 2);
+], TodoOverlayList.prototype, "filterMenuOpen", 2);
+__decorateClass([
+  r5()
+], TodoOverlayList.prototype, "quickAddExpanded", 2);
 __decorateClass([
   r5()
 ], TodoOverlayList.prototype, "error", 2);
