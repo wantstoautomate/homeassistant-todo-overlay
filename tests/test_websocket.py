@@ -15,11 +15,16 @@ machinery (that's HA's own, not what these tests are for).
 import pytest
 
 from custom_components.todo_overlay import websocket
-from custom_components.todo_overlay.const import DATA_MANAGER, DOMAIN
 from custom_components.todo_overlay.manager import TodoManager
 from custom_components.todo_overlay.models import ItemPosition, TodoItem
 
-from fakes import FakeAdapter, FakeMetadataStore
+from fakes import (
+    FakeAdapter,
+    FakeConfigEntries,
+    FakeMetadataStore,
+    FakeMultiEntityAdapter,
+    FakeMultiEntityMetadataStore,
+)
 
 ENTITY_ID = "todo.shopping"
 
@@ -38,7 +43,7 @@ class FakeConnection:
 
 
 def make_hass(manager: TodoManager):
-    return type("FakeHass", (), {"data": {DOMAIN: {DATA_MANAGER: manager}}})()
+    return type("FakeHass", (), {"config_entries": FakeConfigEntries(manager)})()
 
 
 async def call_handler(handler, manager: TodoManager, msg: dict):
@@ -112,6 +117,67 @@ async def test_websocket_move_item_cycle_sends_cycle_detected_error():
     assert connection.results == []
     msg_id, code, message = connection.errors[0]
     assert code == "cycle_detected"
+
+
+# --- transfer_item ------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_websocket_transfer_item_success():
+    adapter = FakeMultiEntityAdapter({
+        "todo.shopping": [TodoItem(id="1", title="Milk", completed=False)],
+        "todo.chores": [TodoItem(id="a", title="Laundry", completed=False)],
+    })
+    metadata_store = FakeMultiEntityMetadataStore({
+        "todo.shopping": {"1": ItemPosition(parent_id=None, order=0)},
+        "todo.chores": {"a": ItemPosition(parent_id=None, order=0)},
+    })
+    manager = TodoManager(adapter=adapter, metadata_store=metadata_store)
+
+    connection = await call_handler(
+        websocket.websocket_transfer_item, manager,
+        {
+            "source_entity_id": "todo.shopping",
+            "item_id": "1",
+            "target_entity_id": "todo.chores",
+            "reference_id": "a",
+            "placement": "after",
+        },
+    )
+
+    assert connection.errors == []
+    msg_id, result = connection.results[0]
+    assert msg_id == 1
+    assert "id" in result
+
+    assert (await manager.get_list("todo.shopping")).items == []
+
+
+@pytest.mark.asyncio
+async def test_websocket_transfer_item_unknown_item_sends_not_found_error():
+    adapter = FakeMultiEntityAdapter({
+        "todo.shopping": [TodoItem(id="1", title="Milk", completed=False)],
+        "todo.chores": [],
+    })
+    metadata_store = FakeMultiEntityMetadataStore({
+        "todo.shopping": {"1": ItemPosition(parent_id=None, order=0)},
+        "todo.chores": {},
+    })
+    manager = TodoManager(adapter=adapter, metadata_store=metadata_store)
+
+    connection = await call_handler(
+        websocket.websocket_transfer_item, manager,
+        {
+            "source_entity_id": "todo.shopping",
+            "item_id": "does-not-exist",
+            "target_entity_id": "todo.chores",
+            "reference_id": "",
+            "placement": "inside",
+        },
+    )
+
+    assert connection.results == []
+    msg_id, code, message = connection.errors[0]
+    assert code == "not_found"
 
 
 # --- set_completed / restore_completed / clear_completed -----------------
@@ -378,6 +444,7 @@ def test_async_register_websocket_registers_every_handler():
     expected = {
         "todo_overlay/get_list",
         "todo_overlay/move_item",
+        "todo_overlay/transfer_item",
         "todo_overlay/set_completed",
         "todo_overlay/restore_completed",
         "todo_overlay/clear_completed",

@@ -116,4 +116,30 @@ describe("todo-overlay-card-editor", () => {
         const config = await changed;
         expect(config.show_filter_menu).toBe(true);
     });
+
+    it("tucks the less-common toggles behind a collapsed Advanced disclosure", async () => {
+        const el = await renderEditor({entity: "todo.shopping"});
+
+        const advanced = el.shadowRoot?.querySelector("details.advanced") as HTMLDetailsElement;
+        expect(advanced).not.toBeNull();
+        expect(advanced.open).toBe(false);
+
+        const advancedLabels = [...advanced.querySelectorAll("ha-formfield")]
+            .map(f => f.getAttribute("label"));
+        expect(advancedLabels).toEqual([
+            "Move completed items to the bottom",
+            "Confirm before deleting an item",
+            "Save/load list buttons",
+            "Filter icon in toolbar",
+        ]);
+
+        const mainLabels = [...(el.shadowRoot?.querySelectorAll("ha-formfield") ?? [])]
+            .filter(f => !advanced.contains(f))
+            .map(f => f.getAttribute("label"));
+        expect(mainLabels).toEqual([
+            "Hide complete checkbox for parents",
+            "Clear completed button",
+            "Quick-add bar",
+        ]);
+    });
 });

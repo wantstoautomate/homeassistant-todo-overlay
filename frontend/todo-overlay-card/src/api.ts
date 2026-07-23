@@ -33,6 +33,28 @@ export async function moveItem(
 
 }
 
+export async function transferItem(
+    hass: HassLike,
+    sourceEntityId: string,
+    itemId: string,
+    targetEntityId: string,
+    referenceId: string,
+    placement: Placement,
+): Promise<string> {
+
+    const result = await hass.connection.sendMessagePromise<{id: string}>({
+        type: "todo_overlay/transfer_item",
+        source_entity_id: sourceEntityId,
+        item_id: itemId,
+        target_entity_id: targetEntityId,
+        reference_id: referenceId,
+        placement,
+    });
+
+    return result.id;
+
+}
+
 export interface CompletionChange {
     id: string;
     completed: boolean;

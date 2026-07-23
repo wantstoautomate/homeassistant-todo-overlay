@@ -3,6 +3,44 @@
 All notable changes to this project are documented here. Versions follow the
 integration's `manifest.json`/card's `package.json` (kept in lockstep).
 
+## 0.12.0
+
+Follow-up hardening pass after a four-persona review (HA engineer, the
+author, "the wife", and a feature-hungry user): fixes real bugs the
+review surfaced, plus the structural/UX cleanup that came out of it.
+
+- Fixed a real bug: dragging an item onto a row belonging to a
+  *different* todo.* entity (a separate card, or another section of a
+  multi-entity card) previously either threw a raw Python error or
+  silently wrote an invalid parent id. It now genuinely transfers the
+  item - and its whole subtree, with all overlay metadata (quantity,
+  tags, trigger_on_due) - onto the target entity, removing it from the
+  source only once the copy has fully landed.
+- Fixed the checkbox being visually clipped on the left edge - an
+  earlier alignment fix accidentally cropped the real checkbox glyph,
+  not just its invisible touch-target padding.
+- Parent rows (ones with children) now render their title in bold, so
+  they're visually distinguishable from leaf/child rows regardless of
+  whether their own checkbox is hidden.
+- Frontend errors now show a plain, friendly message instead of a raw
+  backend exception - the actual detail still goes to the browser
+  console for anyone debugging.
+- Fixed a stale `trigger_on_due` cleanup bug: clearing N stale flags in
+  one reconciliation pass used to re-enter the whole reconciliation
+  process N times (once per stale item); it's now a single pass.
+- Migrated from an unnamespaced `hass.data` dict to `entry.runtime_data`,
+  the modern Home Assistant convention.
+- Split the 1300+ line `manager.py` into one module per responsibility
+  (tree reading, item/tag/quantity edits, due triggers, positioning and
+  cross-entity transfer, completion, save/load snapshots) composed via
+  mixins on a much smaller `TodoManager`.
+- Added `translations/en.json` and a config flow test suite.
+- Removed `iot_class` from the manifest - the integration registers no
+  entities of its own, so there was nothing for the field to classify.
+- The card editor now tucks the less-common toggles (move completed to
+  bottom, confirm before delete, save/load buttons, filter icon) behind
+  a collapsed "Advanced" section, so the default editor view is shorter.
+
 ## 0.11.0
 
 Production-readiness pass: a full project review, a real frontend test

@@ -96,6 +96,14 @@ describe("todo-overlay-tree-item", () => {
         expect(el.shadowRoot?.querySelector(".checkbox-slot ha-checkbox")).not.toBeNull();
     });
 
+    it("bolds a parent's title so it reads as distinct from a leaf/child row", async () => {
+        const parent = await renderItem(makeItem({children: [makeItem({id: "2"})]}));
+        expect(parent.shadowRoot?.querySelector(".summary")?.classList.contains("has-children")).toBe(true);
+
+        const leaf = await renderItem(makeItem());
+        expect(leaf.shadowRoot?.querySelector(".summary")?.classList.contains("has-children")).toBe(false);
+    });
+
     it("does not render children when collapsed", async () => {
         const el = await renderItem(
             makeItem({id: "parent", children: [makeItem({id: "child", title: "Child"})]}),

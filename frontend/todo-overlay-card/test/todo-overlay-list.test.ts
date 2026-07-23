@@ -1,4 +1,4 @@
-import {afterEach, describe, expect, it} from "vitest";
+import {afterEach, describe, expect, it, vi} from "vitest";
 
 import "../src/components/todo-overlay-list";
 import type {TodoOverlayList} from "../src/components/todo-overlay-list";
@@ -251,6 +251,130 @@ describe("todo-overlay-list quick add", () => {
     });
 });
 
+function mockRect(el: Element, rect: {top: number; bottom: number; height: number}): void {
+    (el as HTMLElement).getBoundingClientRect = () => ({
+        top: rect.top,
+        bottom: rect.bottom,
+        height: rect.height,
+        left: 0,
+        right: 0,
+        width: 0,
+        x: 0,
+        y: rect.top,
+        toJSON() { return {}; },
+    }) as DOMRect;
+}
+
+type DraggableList = TodoOverlayList & {
+    draggedId?: string;
+    onDragStart: (e: CustomEvent) => void;
+    onGlobalPointerMove: (e: PointerEvent) => void;
+    onGlobalPointerUp: () => Promise<void>;
+};
+
+describe("todo-overlay-list cross-entity drag", () => {
+    it("calls transferItem (not moveItem) when dropped on a row belonging to a different entity", async () => {
+        const hassA = makeFakeHass({
+            "todo.a": {state: "0", last_updated: "2026-01-01T00:00:00Z", attributes: {supported_features: 127}},
+        });
+        hassA.connection.responses["todo_overlay/get_list"] = {
+            entity_id: "todo.a",
+            items: [makeItem({id: "1", title: "Milk"})],
+        };
+
+        const hassB = makeFakeHass({
+            "todo.b": {state: "0", last_updated: "2026-01-01T00:00:00Z", attributes: {supported_features: 127}},
+        });
+        hassB.connection.responses["todo_overlay/get_list"] = {
+            entity_id: "todo.b",
+            items: [makeItem({id: "a", title: "Laundry"})],
+        };
+
+        const elA = document.createElement("todo-overlay-list") as TodoOverlayList;
+        elA.entity = "todo.a";
+        elA.hass = hassA;
+        document.body.appendChild(elA);
+
+        const elB = document.createElement("todo-overlay-list") as TodoOverlayList;
+        elB.entity = "todo.b";
+        elB.hass = hassB;
+        document.body.appendChild(elB);
+
+        await settle(elA);
+        await settle(elB);
+
+        const rowA = deepQueryAll(elA.shadowRoot!, "todo-overlay-tree-item")[0] as Element & {shadowRoot: ShadowRoot};
+        const rowB = deepQueryAll(elB.shadowRoot!, "todo-overlay-tree-item")[0] as Element & {shadowRoot: ShadowRoot};
+
+        mockRect(rowA.shadowRoot.querySelector(".row")!, {top: 0, bottom: 40, height: 40});
+        mockRect(rowB.shadowRoot.querySelector(".row")!, {top: 100, bottom: 140, height: 40});
+
+        // collectAllRows(document) walks the whole page, threading each row's
+        // entity from the nearest enclosing todo-overlay-list - both lists
+        // are light-DOM siblings under document.body here, same as two
+        // sections of a real multi-entity dashboard.
+        const draggableA = elA as unknown as DraggableList;
+
+        draggableA.draggedId = "1";
+        draggableA.onDragStart(new CustomEvent("tree-drag-start", {
+            detail: {rect: undefined, pointerX: 0, pointerY: 0, grabOffsetX: 0, grabOffsetY: 0},
+        }));
+
+        // Drop squarely inside row B's mocked rect (100-140).
+        draggableA.onGlobalPointerMove(new PointerEvent("pointermove", {clientY: 120}));
+        await draggableA.onGlobalPointerUp();
+
+        expect(hassA.connection.sent).toContainEqual(expect.objectContaining({
+            type: "todo_overlay/transfer_item",
+            source_entity_id: "todo.a",
+            item_id: "1",
+            target_entity_id: "todo.b",
+        }));
+        expect(hassA.connection.sent.some(m => m.type === "todo_overlay/move_item")).toBe(false);
+    });
+
+    it("calls moveItem (not transferItem) when dropped on a row belonging to the same entity", async () => {
+        const hassA = makeFakeHass({
+            "todo.a": {state: "0", last_updated: "2026-01-01T00:00:00Z", attributes: {supported_features: 127}},
+        });
+        hassA.connection.responses["todo_overlay/get_list"] = {
+            entity_id: "todo.a",
+            items: [
+                makeItem({id: "1", title: "Milk"}),
+                makeItem({id: "2", title: "Bread"}),
+            ],
+        };
+
+        const elA = document.createElement("todo-overlay-list") as TodoOverlayList;
+        elA.entity = "todo.a";
+        elA.hass = hassA;
+        document.body.appendChild(elA);
+
+        await settle(elA);
+
+        const rows = deepQueryAll(elA.shadowRoot!, "todo-overlay-tree-item") as (Element & {shadowRoot: ShadowRoot})[];
+        mockRect(rows[0].shadowRoot.querySelector(".row")!, {top: 0, bottom: 40, height: 40});
+        mockRect(rows[1].shadowRoot.querySelector(".row")!, {top: 100, bottom: 140, height: 40});
+
+        const draggableA = elA as unknown as DraggableList;
+
+        draggableA.draggedId = "1";
+        draggableA.onDragStart(new CustomEvent("tree-drag-start", {
+            detail: {rect: undefined, pointerX: 0, pointerY: 0, grabOffsetX: 0, grabOffsetY: 0},
+        }));
+
+        draggableA.onGlobalPointerMove(new PointerEvent("pointermove", {clientY: 120}));
+        await draggableA.onGlobalPointerUp();
+
+        expect(hassA.connection.sent).toContainEqual(expect.objectContaining({
+            type: "todo_overlay/move_item",
+            entity_id: "todo.a",
+            child_id: "1",
+        }));
+        expect(hassA.connection.sent.some(m => m.type === "todo_overlay/transfer_item")).toBe(false);
+    });
+});
+
 describe("todo-overlay-list non-completable parent tap", () => {
     it("toggles collapse instead of completing when hideCompleteForParents hides the checkbox", async () => {
         const {el} = await renderList(
@@ -276,5 +400,63 @@ describe("todo-overlay-list non-completable parent tap", () => {
         await settle(el);
 
         expect(summaryTexts(el)).toEqual(["Parent"]);
+    });
+});
+
+describe("todo-overlay-list error handling", () => {
+    it("shows a friendly generic message (not the raw exception) when loading fails, and logs the detail", async () => {
+        const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+
+        const hass = makeFakeHass({
+            [ENTITY_ID]: {state: "0", last_updated: "2026-01-01T00:00:00Z", attributes: {supported_features: 127}},
+        });
+        hass.connection.errors["todo_overlay/get_list"] = new Error("KeyError: 'todo.shopping' not found");
+
+        const el = document.createElement("todo-overlay-list") as TodoOverlayList;
+        el.entity = ENTITY_ID;
+        el.hass = hass;
+
+        document.body.appendChild(el);
+        await el.updateComplete;
+        await flushAsync();
+        await el.updateComplete;
+
+        const errorText = el.shadowRoot?.querySelector("[style*='error-color']")?.textContent?.trim();
+        expect(errorText).toBe("Something went wrong. Check the browser console for details.");
+        expect(errorText).not.toContain("KeyError");
+
+        expect(consoleError).toHaveBeenCalledWith(
+            expect.stringContaining("loading the list"),
+            expect.any(Error),
+        );
+
+        consoleError.mockRestore();
+    });
+
+    it("shows the same friendly message (not the raw exception) when an action fails", async () => {
+        const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+
+        const {el, hass} = await renderList({
+            entity_id: ENTITY_ID,
+            items: [makeItem({id: "1", title: "Milk"})],
+        });
+
+        hass.connection.errors["todo_overlay/set_completed"] = new Error("ValueError: item not found");
+
+        const treeItem = deepQueryAll(el.shadowRoot!, "todo-overlay-tree-item")[0];
+        treeItem.dispatchEvent(new CustomEvent("tree-pointer-down", {
+            detail: {id: "1"}, bubbles: true, composed: true,
+        }));
+        treeItem.dispatchEvent(new CustomEvent("tree-pointer-up", {
+            detail: {id: "1", pressDurationMs: 100, moved: false}, bubbles: true, composed: true,
+        }));
+        await flushAsync();
+        await el.updateComplete;
+
+        const errorText = el.shadowRoot?.querySelector("[style*='error-color']")?.textContent?.trim();
+        expect(errorText).toBe("Something went wrong. Check the browser console for details.");
+        expect(errorText).not.toContain("ValueError");
+
+        consoleError.mockRestore();
     });
 });

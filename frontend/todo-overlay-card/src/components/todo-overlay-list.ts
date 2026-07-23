@@ -18,6 +18,7 @@ import {
     setQuantity,
     setTags,
     setTriggerOnDue,
+    transferItem,
 } from "../api";
 import type {FilterMode} from "../filter";
 import {filterTree} from "../filter";
@@ -78,30 +79,52 @@ interface TreeItemElement extends Element {
     item?: TodoItem;
 }
 
-type RowSnapshot = {id: string; children: TodoItem[]; rect: DOMRect};
+interface TodoListElement extends Element {
+    entity?: string;
+}
 
-// Recursively collects every rendered row across all nested shadow roots.
+type RowSnapshot = {id: string; entityId: string; children: TodoItem[]; rect: DOMRect};
+
+// Recursively collects every rendered row across all nested shadow roots,
+// across every todo-overlay-list on the page (not just this one) - a drop
+// target can belong to a different entity than the one being dragged from,
+// whether that's a sibling section on the same multi-entity card or an
+// entirely separate card on the same dashboard, so hit-testing has to see
+// all of them to find it. Each row's entityId is tracked by remembering
+// the nearest enclosing todo-overlay-list's own .entity as the walk
+// descends into its shadow root - todo-overlay-tree/-tree-item carry no
+// entity information of their own.
+//
 // Reaching even the FIRST todo-overlay-tree-item at all means crossing
 // several ancestor shadow roots (ha-card, todo-overlay-list,
 // todo-overlay-tree) that don't themselves match the selector - so this has
 // to walk every element's shadow root, not just the ones that happen to
 // match.
-function collectAllRows(root: ParentNode): RowSnapshot[] {
+function collectAllRows(root: ParentNode, currentEntity?: string): RowSnapshot[] {
     const rows: RowSnapshot[] = [];
 
     for (const el of Array.from(root.querySelectorAll("*"))) {
         const itemEl = el as TreeItemElement;
 
-        if (el.localName === "todo-overlay-tree-item" && itemEl.item) {
+        if (el.localName === "todo-overlay-tree-item" && itemEl.item && currentEntity) {
             const rowEl = itemEl.shadowRoot?.querySelector(".row");
 
             if (rowEl) {
-                rows.push({id: itemEl.item.id, children: itemEl.item.children, rect: rowEl.getBoundingClientRect()});
+                rows.push({
+                    id: itemEl.item.id,
+                    entityId: currentEntity,
+                    children: itemEl.item.children,
+                    rect: rowEl.getBoundingClientRect(),
+                });
             }
         }
 
         if (el.shadowRoot) {
-            rows.push(...collectAllRows(el.shadowRoot));
+            const nextEntity = el.localName === "todo-overlay-list"
+                ? (el as TodoListElement).entity
+                : currentEntity;
+
+            rows.push(...collectAllRows(el.shadowRoot, nextEntity));
         }
     }
 
@@ -158,7 +181,10 @@ function resolvePlacement(
 // output. Distance-to-nearest-row (rather than requiring the pointer land
 // inside a row's rect) also naturally covers dragging above the first item
 // or below the last, where a direct hit would otherwise find nothing.
-function findDropTarget(y: number, rows: RowSnapshot[]): {id: string; placement: Placement} | undefined {
+function findDropTarget(
+    y: number,
+    rows: RowSnapshot[],
+): {id: string; entityId: string; placement: Placement} | undefined {
     if (rows.length === 0) {
         return undefined;
     }
@@ -181,7 +207,10 @@ function findDropTarget(y: number, rows: RowSnapshot[]): {id: string; placement:
 
     const relativeY = (y - nearest.rect.top) / nearest.rect.height;
 
-    return resolvePlacement(nearest.id, nearest.children, relativeY);
+    // resolvePlacement may pick a different id (nearest's own, or its
+    // first child's) depending on placement, but never a different
+    // entity - a row's children always live on the same entity it does.
+    return {...resolvePlacement(nearest.id, nearest.children, relativeY), entityId: nearest.entityId};
 }
 
 function findItem(items: TodoItem[], id: string): TodoItem | undefined {
@@ -504,6 +533,12 @@ export class TodoOverlayList extends LitElement {
     @state()
     private hoverPlacement?: Placement;
 
+    // Which entity hoverId's row belongs to - may differ from this.entity
+    // when hovering over a row from another entity's section (same
+    // multi-entity card, or an entirely different card) - see
+    // onGlobalPointerUp for how that's handled.
+    private hoverEntityId?: string;
+
     @state()
     private ghostPosition?: {x: number; y: number};
 
@@ -555,6 +590,15 @@ export class TodoOverlayList extends LitElement {
         }
     }
 
+    // A raw backend exception (a Python traceback line, an "already
+    // exists" ValueError, etc.) is meaningless to whoever's actually
+    // using this card - it's logged in full for whoever's debugging,
+    // and everyone else just sees one plain, consistent message.
+    private reportError(action: string, err: unknown): void {
+        console.error(`todo-overlay-card: ${action} failed`, err);
+        this.error = "Something went wrong. Check the browser console for details.";
+    }
+
     private async load() {
         try {
             this.list = await getList(
@@ -565,7 +609,7 @@ export class TodoOverlayList extends LitElement {
 
             this.error = undefined;
         } catch (err) {
-            this.error = err instanceof Error ? err.message : String(err);
+            this.reportError("loading the list", err);
         }
     }
 
@@ -645,9 +689,11 @@ export class TodoOverlayList extends LitElement {
         this.ghostPosition = {x: e.clientX, y: e.clientY};
 
         const hit = findDropTarget(e.clientY, this.rowSnapshot);
+        const valid = hit && hit.id !== this.draggedId;
 
-        this.hoverId = hit && hit.id !== this.draggedId ? hit.id : undefined;
-        this.hoverPlacement = hit && hit.id !== this.draggedId ? hit.placement : undefined;
+        this.hoverId = valid ? hit.id : undefined;
+        this.hoverPlacement = valid ? hit.placement : undefined;
+        this.hoverEntityId = valid ? hit.entityId : undefined;
     };
 
     private onGlobalPointerUp = async () => {
@@ -658,26 +704,44 @@ export class TodoOverlayList extends LitElement {
         const draggedId = this.draggedId;
         const hoverId = this.hoverId;
         const hoverPlacement = this.hoverPlacement;
+        const hoverEntityId = this.hoverEntityId;
 
         this.ghostPosition = undefined;
         this.draggedId = undefined;
         this.hoverId = undefined;
         this.hoverPlacement = undefined;
+        this.hoverEntityId = undefined;
         this.rowSnapshot = [];
 
         if (draggedId && hoverId && draggedId !== hoverId) {
             try {
-                await moveItem(
-                    this.hass,
-                    this.entity,
-                    draggedId,
-                    hoverId,
-                    hoverPlacement ?? "inside",
-                );
+                if (hoverEntityId && hoverEntityId !== this.entity) {
+                    // Dropped onto a row belonging to a different entity
+                    // (another section of a multi-entity card, or a
+                    // separate card entirely) - a physical move across
+                    // two independent todo.* lists, not just a metadata
+                    // reshuffle within one.
+                    await transferItem(
+                        this.hass,
+                        this.entity,
+                        draggedId,
+                        hoverEntityId,
+                        hoverId,
+                        hoverPlacement ?? "inside",
+                    );
+                } else {
+                    await moveItem(
+                        this.hass,
+                        this.entity,
+                        draggedId,
+                        hoverId,
+                        hoverPlacement ?? "inside",
+                    );
+                }
 
                 await this.load();
             } catch (err) {
-                this.error = err instanceof Error ? err.message : String(err);
+                this.reportError("moving the item", err);
             }
         }
     };
@@ -773,7 +837,7 @@ export class TodoOverlayList extends LitElement {
                 );
             }
         } catch (err) {
-            this.error = err instanceof Error ? err.message : String(err);
+            this.reportError("updating completion", err);
         }
     }
 
@@ -798,7 +862,7 @@ export class TodoOverlayList extends LitElement {
             await restoreCompleted(this.hass, this.entity, this.undoState.changes);
             await this.load();
         } catch (err) {
-            this.error = err instanceof Error ? err.message : String(err);
+            this.reportError("undoing", err);
         }
 
         this.undoState = undefined;
@@ -809,7 +873,7 @@ export class TodoOverlayList extends LitElement {
             await clearCompleted(this.hass, this.entity);
             await this.load();
         } catch (err) {
-            this.error = err instanceof Error ? err.message : String(err);
+            this.reportError("clearing completed items", err);
         }
     }
 
@@ -819,7 +883,7 @@ export class TodoOverlayList extends LitElement {
         try {
             this.savedNames = await listSaved(this.hass);
         } catch (err) {
-            this.error = err instanceof Error ? err.message : String(err);
+            this.reportError("loading saved list names", err);
             return;
         }
 
@@ -831,7 +895,7 @@ export class TodoOverlayList extends LitElement {
         try {
             this.savedNames = await listSaved(this.hass);
         } catch (err) {
-            this.error = err instanceof Error ? err.message : String(err);
+            this.reportError("loading saved list names", err);
             return;
         }
 
@@ -855,7 +919,10 @@ export class TodoOverlayList extends LitElement {
 
             await this.load();
         } catch (err) {
-            this.error = err instanceof Error ? err.message : String(err);
+            this.reportError(
+                this.saveLoadAction === "save" ? "saving the list" : "loading the saved list",
+                err,
+            );
         }
 
         this.closeSaveLoadDialog();
@@ -867,7 +934,7 @@ export class TodoOverlayList extends LitElement {
             this.savedNames = await listSaved(this.hass);
             this.saveLoadValue = {...this.saveLoadValue, name: ""};
         } catch (err) {
-            this.error = err instanceof Error ? err.message : String(err);
+            this.reportError("deleting the saved list", err);
         }
     }
 
@@ -979,7 +1046,7 @@ export class TodoOverlayList extends LitElement {
 
             await this.load();
         } catch (err) {
-            this.error = err instanceof Error ? err.message : String(err);
+            this.reportError("saving the item", err);
         }
 
         this.closeDialog();
@@ -998,7 +1065,7 @@ export class TodoOverlayList extends LitElement {
 
             await this.load();
         } catch (err) {
-            this.error = err instanceof Error ? err.message : String(err);
+            this.reportError("deleting the item", err);
         }
 
         this.closeDialog();
@@ -1033,7 +1100,7 @@ export class TodoOverlayList extends LitElement {
 
             await this.load();
         } catch (err) {
-            this.error = err instanceof Error ? err.message : String(err);
+            this.reportError("adding the item", err);
         }
     }
 

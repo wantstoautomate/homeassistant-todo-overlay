@@ -6,11 +6,16 @@ import type {HassLike} from "../src/hass";
 export class FakeConnection {
     sent: Record<string, unknown>[] = [];
     responses: Record<string, unknown> = {};
+    errors: Record<string, Error> = {};
 
     async sendMessagePromise<T>(message: Record<string, unknown>): Promise<T> {
         this.sent.push(message);
 
         const type = message.type as string;
+
+        if (type in this.errors) {
+            throw this.errors[type];
+        }
 
         if (type in this.responses) {
             return this.responses[type] as T;

@@ -14,6 +14,7 @@ import {
     setQuantity,
     setTags,
     setTriggerOnDue,
+    transferItem,
 } from "../src/api";
 import {makeFakeHass} from "./fakes";
 
@@ -42,6 +43,23 @@ describe("api", () => {
             reference_id: "ref-1",
             placement: "inside",
         }]);
+    });
+
+    it("transferItem sends source/target entity ids and returns the new id", async () => {
+        const hass = makeFakeHass();
+        hass.connection.responses["todo_overlay/transfer_item"] = {id: "new-1"};
+
+        const result = await transferItem(hass, "todo.a", "child-1", "todo.b", "ref-1", "after");
+
+        expect(hass.connection.sent).toEqual([{
+            type: "todo_overlay/transfer_item",
+            source_entity_id: "todo.a",
+            item_id: "child-1",
+            target_entity_id: "todo.b",
+            reference_id: "ref-1",
+            placement: "after",
+        }]);
+        expect(result).toBe("new-1");
     });
 
     it("setCompleted sends reposition and returns the changed list", async () => {

@@ -17,7 +17,6 @@ from .const import (
     ATTR_TAGS,
     ATTR_TITLE,
     ATTR_TRIGGER_ON_DUE,
-    DATA_MANAGER,
     DOMAIN,
     SERVICE_ADD_TAG,
     SERVICE_CREATE_ITEM,
@@ -28,6 +27,7 @@ from .const import (
     SERVICE_SET_QUANTITY,
     SERVICE_SET_TRIGGER_ON_DUE,
 )
+from .runtime_data import get_manager
 
 SAVE_LIST_SCHEMA = vol.Schema(
     {
@@ -96,7 +96,7 @@ def async_register_services(hass: HomeAssistant) -> None:
     so they can be triggered from automations and scripts."""
 
     async def handle_save_list(call: ServiceCall) -> None:
-        manager = hass.data[DOMAIN][DATA_MANAGER]
+        manager = get_manager(hass)
 
         await manager.save_list(
             entity_id=call.data["entity_id"],
@@ -105,7 +105,7 @@ def async_register_services(hass: HomeAssistant) -> None:
         )
 
     async def handle_load_list(call: ServiceCall) -> None:
-        manager = hass.data[DOMAIN][DATA_MANAGER]
+        manager = get_manager(hass)
 
         await manager.load_list(
             entity_id=call.data["entity_id"],
@@ -114,14 +114,14 @@ def async_register_services(hass: HomeAssistant) -> None:
         )
 
     async def handle_delete_saved_list(call: ServiceCall) -> None:
-        manager = hass.data[DOMAIN][DATA_MANAGER]
+        manager = get_manager(hass)
 
         await manager.delete_saved(
             name=call.data[ATTR_NAME],
         )
 
     async def handle_add_tag(call: ServiceCall) -> None:
-        manager = hass.data[DOMAIN][DATA_MANAGER]
+        manager = get_manager(hass)
 
         await manager.add_tag(
             entity_id=call.data["entity_id"],
@@ -130,7 +130,7 @@ def async_register_services(hass: HomeAssistant) -> None:
         )
 
     async def handle_remove_tag(call: ServiceCall) -> None:
-        manager = hass.data[DOMAIN][DATA_MANAGER]
+        manager = get_manager(hass)
 
         await manager.remove_tag(
             entity_id=call.data["entity_id"],
@@ -139,7 +139,7 @@ def async_register_services(hass: HomeAssistant) -> None:
         )
 
     async def handle_create_item(call: ServiceCall) -> None:
-        manager = hass.data[DOMAIN][DATA_MANAGER]
+        manager = get_manager(hass)
 
         await manager.create_item(
             entity_id=call.data["entity_id"],
@@ -153,7 +153,7 @@ def async_register_services(hass: HomeAssistant) -> None:
         )
 
     async def handle_set_quantity(call: ServiceCall) -> None:
-        manager = hass.data[DOMAIN][DATA_MANAGER]
+        manager = get_manager(hass)
 
         await manager.set_quantity_by_item(
             entity_id=call.data["entity_id"],
@@ -162,7 +162,7 @@ def async_register_services(hass: HomeAssistant) -> None:
         )
 
     async def handle_set_trigger_on_due(call: ServiceCall) -> None:
-        manager = hass.data[DOMAIN][DATA_MANAGER]
+        manager = get_manager(hass)
 
         await manager.set_trigger_on_due_by_item(
             entity_id=call.data["entity_id"],

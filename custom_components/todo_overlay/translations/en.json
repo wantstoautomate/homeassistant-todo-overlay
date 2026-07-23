@@ -1,0 +1,13 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Set up Todo Overlay",
+        "description": "Todo Overlay works against your existing todo.* entities directly - there's nothing to configure here. Select Submit to finish setup, then add the \"Todo Overlay\" card to a dashboard."
+      }
+    },
+    "abort": {
+      "already_configured": "Todo Overlay is already set up - only one instance is needed, since it works across every todo.* entity automatically."
+    }
+  }
+}

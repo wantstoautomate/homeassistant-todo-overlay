@@ -2,18 +2,19 @@ from pathlib import Path
 
 from homeassistant.components.http import StaticPathConfig
 from homeassistant.components.lovelace.const import CONF_RESOURCE_TYPE_WS, LOVELACE_DATA
-from homeassistant.config_entries import SOURCE_IMPORT, ConfigEntry
+from homeassistant.config_entries import SOURCE_IMPORT
 from homeassistant.const import CONF_ID, CONF_URL, EVENT_HOMEASSISTANT_STARTED
 from homeassistant.core import CoreState, Event, HomeAssistant
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.typing import ConfigType
 from homeassistant.loader import async_get_integration
 
-from .const import DATA_MANAGER, DOMAIN
+from .const import DOMAIN
 from .due_scheduler import DueScheduler
 from .ha_adapter import HomeAssistantTodoProvider
 from .manager import TodoManager
 from .metadata_store import MetadataStore
+from .runtime_data import TodoOverlayConfigEntry, TodoOverlayData
 from .services import async_register_services
 from .websocket import async_register_websocket
 
@@ -22,11 +23,6 @@ FRONTEND_DIST = Path(__file__).parent / "frontend_dist"
 CARD_FILENAME = "todo-overlay.js"
 
 TODO_ENTITY_PREFIX = "todo."
-
-# Internal hass.data keys alongside DATA_MANAGER - not part of the
-# websocket/service surface, just what async_unload_entry() needs back.
-_DATA_DUE_SCHEDULER = "due_scheduler"
-_DATA_UNSUB_ENTITY_REGISTRY = "unsub_entity_registry"
 
 
 async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
@@ -48,7 +44,7 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     return True
 
 
-async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
+async def async_setup_entry(hass: HomeAssistant, entry: TodoOverlayConfigEntry) -> bool:
     """Set up Todo Overlay from a config entry."""
 
     metadata_store = MetadataStore(hass)
@@ -59,12 +55,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         hass=hass,
     )
 
-    domain_data = hass.data.setdefault(DOMAIN, {})
-    domain_data[DATA_MANAGER] = manager
-
     due_scheduler = DueScheduler(hass, manager)
     await due_scheduler.async_start()
-    domain_data[_DATA_DUE_SCHEDULER] = due_scheduler
 
     async_register_websocket(hass)
     async_register_services(hass)
@@ -84,27 +76,24 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     async def _handle_entity_registry_updated(event: Event) -> None:
         await _async_handle_entity_registry_updated(metadata_store, due_scheduler, event)
 
-    domain_data[_DATA_UNSUB_ENTITY_REGISTRY] = hass.bus.async_listen(
+    unsub_entity_registry = hass.bus.async_listen(
         er.EVENT_ENTITY_REGISTRY_UPDATED, _handle_entity_registry_updated,
+    )
+
+    entry.runtime_data = TodoOverlayData(
+        manager=manager,
+        due_scheduler=due_scheduler,
+        unsub_entity_registry=unsub_entity_registry,
     )
 
     return True
 
 
-async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
+async def async_unload_entry(hass: HomeAssistant, entry: TodoOverlayConfigEntry) -> bool:
     """Unload a config entry."""
 
-    domain_data = hass.data.pop(DOMAIN, {})
-
-    due_scheduler: DueScheduler | None = domain_data.get(_DATA_DUE_SCHEDULER)
-
-    if due_scheduler is not None:
-        due_scheduler.async_stop()
-
-    unsub_entity_registry = domain_data.get(_DATA_UNSUB_ENTITY_REGISTRY)
-
-    if unsub_entity_registry is not None:
-        unsub_entity_registry()
+    entry.runtime_data.due_scheduler.async_stop()
+    entry.runtime_data.unsub_entity_registry()
 
     return True
 

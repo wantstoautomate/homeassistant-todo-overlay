@@ -185,8 +185,8 @@ class DueScheduler:
 
         walk(todo_list.items)
 
-        for stale_id in stale_trigger_ids:
-            await self._manager.set_trigger_on_due(entity_id, stale_id, False)
+        if stale_trigger_ids:
+            await self._manager.clear_stale_trigger_on_due(entity_id, stale_trigger_ids)
 
         due_fired = await self._manager.get_due_fired(entity_id)
 

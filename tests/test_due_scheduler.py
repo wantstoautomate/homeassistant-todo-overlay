@@ -584,3 +584,46 @@ async def test_reconcile_leaves_trigger_on_due_alone_when_due_datetime_present()
 
     assert manager._metadata_store._trigger_on_due == {"1"}
     assert len(track.scheduled) == 1
+
+
+@pytest.mark.asyncio
+async def test_reconcile_cleans_up_multiple_stale_items_without_reentering_itself():
+    """Regression test: cleaning up N stale trigger_on_due flags in one
+    pass must not re-enter reconcile_entity() N times (once per stale
+    item). It used to, because the cleanup went through the notifying
+    TodoManager.set_trigger_on_due(), which calls back into
+    reconcile_entity() via the due-schedule hook - so 3 stale items
+    meant 3 extra nested full reconciliation passes on top of this one."""
+
+    hass = FakeHass(entity_ids=[ENTITY_ID])
+    manager = make_manager(
+        hass,
+        items=[
+            TodoItem(id="1", title="A", completed=False, due_datetime=None),
+            TodoItem(id="2", title="B", completed=False, due_datetime=None),
+            TodoItem(id="3", title="C", completed=False, due_datetime=None),
+        ],
+        positions={
+            "1": ItemPosition(parent_id=None, order=0),
+            "2": ItemPosition(parent_id=None, order=1),
+            "3": ItemPosition(parent_id=None, order=2),
+        },
+    )
+    manager._metadata_store._trigger_on_due = {"1", "2", "3"}
+
+    scheduler, _track = make_scheduler(hass, manager, NOW)
+
+    call_count = 0
+    original_reconcile = scheduler.reconcile_entity
+
+    async def counting_reconcile(entity_id):
+        nonlocal call_count
+        call_count += 1
+        await original_reconcile(entity_id)
+
+    scheduler.reconcile_entity = counting_reconcile
+
+    await scheduler.async_start()
+
+    assert call_count == 1
+    assert manager._metadata_store._trigger_on_due == set()

@@ -84,6 +84,22 @@ export class TodoOverlayCardEditor extends LitElement {
         ha-formfield {
             display: block;
         }
+
+        .advanced {
+            margin-top: 24px;
+        }
+
+        .advanced summary {
+            font-size: 12px;
+            font-weight: 500;
+            text-transform: uppercase;
+            color: var(--secondary-text-color);
+            cursor: pointer;
+        }
+
+        .advanced-content {
+            margin-top: 8px;
+        }
     `;
 
     @property({attribute: false})
@@ -222,33 +238,12 @@ export class TodoOverlayCardEditor extends LitElement {
                 ></ha-switch>
             </ha-formfield>
 
-            <ha-formfield label="Move completed items to the bottom">
-                <ha-switch
-                    .checked=${this._config.move_completed_items ?? false}
-                    @change=${this.onSwitchChanged("move_completed_items", false)}
-                ></ha-switch>
-            </ha-formfield>
-
-            <ha-formfield label="Confirm before deleting an item">
-                <ha-switch
-                    .checked=${this._config.confirm_delete ?? true}
-                    @change=${this.onSwitchChanged("confirm_delete", true)}
-                ></ha-switch>
-            </ha-formfield>
-
             <div class="section-title">Show</div>
 
             <ha-formfield label="Clear completed button">
                 <ha-switch
                     .checked=${this._config.show_clear_completed_button ?? true}
                     @change=${this.onSwitchChanged("show_clear_completed_button", true)}
-                ></ha-switch>
-            </ha-formfield>
-
-            <ha-formfield label="Save/load list buttons">
-                <ha-switch
-                    .checked=${this._config.show_save_load_buttons ?? true}
-                    @change=${this.onSwitchChanged("show_save_load_buttons", true)}
                 ></ha-switch>
             </ha-formfield>
 
@@ -259,12 +254,38 @@ export class TodoOverlayCardEditor extends LitElement {
                 ></ha-switch>
             </ha-formfield>
 
-            <ha-formfield label="Filter icon in toolbar">
-                <ha-switch
-                    .checked=${this._config.show_filter_menu ?? false}
-                    @change=${this.onSwitchChanged("show_filter_menu", false)}
-                ></ha-switch>
-            </ha-formfield>
+            <details class="advanced">
+                <summary>Advanced</summary>
+                <div class="advanced-content">
+                    <ha-formfield label="Move completed items to the bottom">
+                        <ha-switch
+                            .checked=${this._config.move_completed_items ?? false}
+                            @change=${this.onSwitchChanged("move_completed_items", false)}
+                        ></ha-switch>
+                    </ha-formfield>
+
+                    <ha-formfield label="Confirm before deleting an item">
+                        <ha-switch
+                            .checked=${this._config.confirm_delete ?? true}
+                            @change=${this.onSwitchChanged("confirm_delete", true)}
+                        ></ha-switch>
+                    </ha-formfield>
+
+                    <ha-formfield label="Save/load list buttons">
+                        <ha-switch
+                            .checked=${this._config.show_save_load_buttons ?? true}
+                            @change=${this.onSwitchChanged("show_save_load_buttons", true)}
+                        ></ha-switch>
+                    </ha-formfield>
+
+                    <ha-formfield label="Filter icon in toolbar">
+                        <ha-switch
+                            .checked=${this._config.show_filter_menu ?? false}
+                            @change=${this.onSwitchChanged("show_filter_menu", false)}
+                        ></ha-switch>
+                    </ha-formfield>
+                </div>
+            </details>
         `;
     }
 }

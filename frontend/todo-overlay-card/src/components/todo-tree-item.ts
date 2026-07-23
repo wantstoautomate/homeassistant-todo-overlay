@@ -216,6 +216,16 @@ export class TodoTreeItem extends LitElement {
             color: var(--secondary-text-color);
         }
 
+        /* A row with children needs to read as a group header at a
+           glance, regardless of whether its own checkbox happens to be
+           showing (see hideCompleteForParents) - otherwise a
+           non-completable parent is visually indistinguishable from a
+           plain leaf item, since the chevron alone isn't a strong enough
+           signal on its own. */
+        .summary.has-children {
+            font-weight: 600;
+        }
+
         ha-checkbox {
             pointer-events: none;
             flex-shrink: 0;
@@ -226,18 +236,20 @@ export class TodoTreeItem extends LitElement {
            hide_complete_for_parents active and a plain leaf item are
            logically siblings at the same level, and need to align the
            same way regardless of which one happens to show a checkbox.
-           overflow:hidden clips ha-checkbox's own oversized touch-target
-           box down to this slot's tighter footprint - harmless, since
-           the checkbox here is purely decorative (pointer-events: none;
-           the row itself owns tap handling). */
+           Deliberately does NOT clip overflow: an earlier version used
+           overflow:hidden to crop ha-checkbox's own larger touch-target
+           box down to this slot's tighter footprint, but ha-checkbox's
+           actual VISIBLE glyph (not just its invisible touch padding) is
+           wider than that box, so it was cropping part of the real
+           checkmark - left un-clipped and centered instead, same
+           alignment contribution, nothing gets cut off. */
         .checkbox-slot {
             flex-shrink: 0;
-            width: 24px;
+            width: 28px;
             height: 24px;
             display: flex;
             align-items: center;
             justify-content: center;
-            overflow: hidden;
         }
 
         .collapse-toggle {
@@ -709,7 +721,7 @@ export class TodoTreeItem extends LitElement {
 
                                 <div class="content">
                                     <div class="title-line">
-                                        <span class="summary">${this.item.title}</span>
+                                        <span class=${classMap({summary: true, "has-children": this.hasChildren})}>${this.item.title}</span>
                                         ${
                                             this.item.quantity
                                                 ? html`<span class="quantity-chip">${this.item.quantity}</span>`

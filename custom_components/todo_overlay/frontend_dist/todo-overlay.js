@@ -691,6 +691,17 @@ async function moveItem(hass, entityId, childId, referenceId, placement) {
     placement
   });
 }
+async function transferItem(hass, sourceEntityId, itemId, targetEntityId, referenceId, placement) {
+  const result = await hass.connection.sendMessagePromise({
+    type: "todo_overlay/transfer_item",
+    source_entity_id: sourceEntityId,
+    item_id: itemId,
+    target_entity_id: targetEntityId,
+    reference_id: referenceId,
+    placement
+  });
+  return result.id;
+}
 async function setCompleted(hass, entityId, itemId, completed, reposition) {
   const result = await hass.connection.sendMessagePromise({
     type: "todo_overlay/set_completed",
@@ -1759,7 +1770,7 @@ var TodoTreeItem = class extends i4 {
 
                                 <div class="content">
                                     <div class="title-line">
-                                        <span class="summary">${this.item.title}</span>
+                                        <span class=${e6({ summary: true, "has-children": this.hasChildren })}>${this.item.title}</span>
                                         ${this.item.quantity ? b2`<span class="quantity-chip">${this.item.quantity}</span>` : ""}
                                         ${status ? b2`
                                                     <span class=${e6({
@@ -1932,6 +1943,16 @@ TodoTreeItem.styles = i`
             color: var(--secondary-text-color);
         }
 
+        /* A row with children needs to read as a group header at a
+           glance, regardless of whether its own checkbox happens to be
+           showing (see hideCompleteForParents) - otherwise a
+           non-completable parent is visually indistinguishable from a
+           plain leaf item, since the chevron alone isn't a strong enough
+           signal on its own. */
+        .summary.has-children {
+            font-weight: 600;
+        }
+
         ha-checkbox {
             pointer-events: none;
             flex-shrink: 0;
@@ -1942,18 +1963,20 @@ TodoTreeItem.styles = i`
            hide_complete_for_parents active and a plain leaf item are
            logically siblings at the same level, and need to align the
            same way regardless of which one happens to show a checkbox.
-           overflow:hidden clips ha-checkbox's own oversized touch-target
-           box down to this slot's tighter footprint - harmless, since
-           the checkbox here is purely decorative (pointer-events: none;
-           the row itself owns tap handling). */
+           Deliberately does NOT clip overflow: an earlier version used
+           overflow:hidden to crop ha-checkbox's own larger touch-target
+           box down to this slot's tighter footprint, but ha-checkbox's
+           actual VISIBLE glyph (not just its invisible touch padding) is
+           wider than that box, so it was cropping part of the real
+           checkmark - left un-clipped and centered instead, same
+           alignment contribution, nothing gets cut off. */
         .checkbox-slot {
             flex-shrink: 0;
-            width: 24px;
+            width: 28px;
             height: 24px;
             display: flex;
             align-items: center;
             justify-content: center;
-            overflow: hidden;
         }
 
         .collapse-toggle {
@@ -2197,18 +2220,24 @@ var CLEAR_COMPLETED_ICON = b2`
         <path d="M9,3V4H4V6H5V19A2,2 0 0,0 7,21H17A2,2 0 0,0 19,19V6H20V4H15V3H9M7,6H17V19H7V6M9,8V17H11V8H9M13,8V17H15V8H13Z"></path>
     </svg>
 `;
-function collectAllRows(root) {
+function collectAllRows(root, currentEntity) {
   const rows = [];
   for (const el of Array.from(root.querySelectorAll("*"))) {
     const itemEl = el;
-    if (el.localName === "todo-overlay-tree-item" && itemEl.item) {
+    if (el.localName === "todo-overlay-tree-item" && itemEl.item && currentEntity) {
       const rowEl = itemEl.shadowRoot?.querySelector(".row");
       if (rowEl) {
-        rows.push({ id: itemEl.item.id, children: itemEl.item.children, rect: rowEl.getBoundingClientRect() });
+        rows.push({
+          id: itemEl.item.id,
+          entityId: currentEntity,
+          children: itemEl.item.children,
+          rect: rowEl.getBoundingClientRect()
+        });
       }
     }
     if (el.shadowRoot) {
-      rows.push(...collectAllRows(el.shadowRoot));
+      const nextEntity = el.localName === "todo-overlay-list" ? el.entity : currentEntity;
+      rows.push(...collectAllRows(el.shadowRoot, nextEntity));
     }
   }
   return rows;
@@ -2242,7 +2271,7 @@ function findDropTarget(y3, rows) {
     }
   }
   const relativeY = (y3 - nearest.rect.top) / nearest.rect.height;
-  return resolvePlacement(nearest.id, nearest.children, relativeY);
+  return { ...resolvePlacement(nearest.id, nearest.children, relativeY), entityId: nearest.entityId };
 }
 function findItem(items, id) {
   for (const item of items) {
@@ -2294,8 +2323,10 @@ var TodoOverlayList = class extends i4 {
     this.onGlobalPointerMove = (e7) => {
       this.ghostPosition = { x: e7.clientX, y: e7.clientY };
       const hit = findDropTarget(e7.clientY, this.rowSnapshot);
-      this.hoverId = hit && hit.id !== this.draggedId ? hit.id : void 0;
-      this.hoverPlacement = hit && hit.id !== this.draggedId ? hit.placement : void 0;
+      const valid = hit && hit.id !== this.draggedId;
+      this.hoverId = valid ? hit.id : void 0;
+      this.hoverPlacement = valid ? hit.placement : void 0;
+      this.hoverEntityId = valid ? hit.entityId : void 0;
     };
     this.onGlobalPointerUp = async () => {
       window.removeEventListener("pointermove", this.onGlobalPointerMove, { capture: true });
@@ -2304,23 +2335,36 @@ var TodoOverlayList = class extends i4 {
       const draggedId = this.draggedId;
       const hoverId = this.hoverId;
       const hoverPlacement = this.hoverPlacement;
+      const hoverEntityId = this.hoverEntityId;
       this.ghostPosition = void 0;
       this.draggedId = void 0;
       this.hoverId = void 0;
       this.hoverPlacement = void 0;
+      this.hoverEntityId = void 0;
       this.rowSnapshot = [];
       if (draggedId && hoverId && draggedId !== hoverId) {
         try {
-          await moveItem(
-            this.hass,
-            this.entity,
-            draggedId,
-            hoverId,
-            hoverPlacement ?? "inside"
-          );
+          if (hoverEntityId && hoverEntityId !== this.entity) {
+            await transferItem(
+              this.hass,
+              this.entity,
+              draggedId,
+              hoverEntityId,
+              hoverId,
+              hoverPlacement ?? "inside"
+            );
+          } else {
+            await moveItem(
+              this.hass,
+              this.entity,
+              draggedId,
+              hoverId,
+              hoverPlacement ?? "inside"
+            );
+          }
           await this.load();
         } catch (err) {
-          this.error = err instanceof Error ? err.message : String(err);
+          this.reportError("moving the item", err);
         }
       }
     };
@@ -2338,6 +2382,14 @@ var TodoOverlayList = class extends i4 {
       this.load();
     }
   }
+  // A raw backend exception (a Python traceback line, an "already
+  // exists" ValueError, etc.) is meaningless to whoever's actually
+  // using this card - it's logged in full for whoever's debugging,
+  // and everyone else just sees one plain, consistent message.
+  reportError(action, err) {
+    console.error(`todo-overlay-card: ${action} failed`, err);
+    this.error = "Something went wrong. Check the browser console for details.";
+  }
   async load() {
     try {
       this.list = await getList(
@@ -2347,7 +2399,7 @@ var TodoOverlayList = class extends i4 {
       );
       this.error = void 0;
     } catch (err) {
-      this.error = err instanceof Error ? err.message : String(err);
+      this.reportError("loading the list", err);
     }
   }
   get fieldSupport() {
@@ -2455,7 +2507,7 @@ var TodoOverlayList = class extends i4 {
         );
       }
     } catch (err) {
-      this.error = err instanceof Error ? err.message : String(err);
+      this.reportError("updating completion", err);
     }
   }
   showUndo(message, changes) {
@@ -2474,7 +2526,7 @@ var TodoOverlayList = class extends i4 {
       await restoreCompleted(this.hass, this.entity, this.undoState.changes);
       await this.load();
     } catch (err) {
-      this.error = err instanceof Error ? err.message : String(err);
+      this.reportError("undoing", err);
     }
     this.undoState = void 0;
   }
@@ -2483,7 +2535,7 @@ var TodoOverlayList = class extends i4 {
       await clearCompleted(this.hass, this.entity);
       await this.load();
     } catch (err) {
-      this.error = err instanceof Error ? err.message : String(err);
+      this.reportError("clearing completed items", err);
     }
   }
   // --- save / load ---------------------------------------------------
@@ -2491,7 +2543,7 @@ var TodoOverlayList = class extends i4 {
     try {
       this.savedNames = await listSaved(this.hass);
     } catch (err) {
-      this.error = err instanceof Error ? err.message : String(err);
+      this.reportError("loading saved list names", err);
       return;
     }
     this.saveLoadValue = EMPTY_SAVE_LOAD_VALUE;
@@ -2501,7 +2553,7 @@ var TodoOverlayList = class extends i4 {
     try {
       this.savedNames = await listSaved(this.hass);
     } catch (err) {
-      this.error = err instanceof Error ? err.message : String(err);
+      this.reportError("loading saved list names", err);
       return;
     }
     this.saveLoadValue = EMPTY_SAVE_LOAD_VALUE;
@@ -2520,7 +2572,10 @@ var TodoOverlayList = class extends i4 {
       }
       await this.load();
     } catch (err) {
-      this.error = err instanceof Error ? err.message : String(err);
+      this.reportError(
+        this.saveLoadAction === "save" ? "saving the list" : "loading the saved list",
+        err
+      );
     }
     this.closeSaveLoadDialog();
   }
@@ -2530,7 +2585,7 @@ var TodoOverlayList = class extends i4 {
       this.savedNames = await listSaved(this.hass);
       this.saveLoadValue = { ...this.saveLoadValue, name: "" };
     } catch (err) {
-      this.error = err instanceof Error ? err.message : String(err);
+      this.reportError("deleting the saved list", err);
     }
   }
   // --- add / edit / delete dialog --------------------------------------
@@ -2613,7 +2668,7 @@ var TodoOverlayList = class extends i4 {
       }
       await this.load();
     } catch (err) {
-      this.error = err instanceof Error ? err.message : String(err);
+      this.reportError("saving the item", err);
     }
     this.closeDialog();
   }
@@ -2628,7 +2683,7 @@ var TodoOverlayList = class extends i4 {
       });
       await this.load();
     } catch (err) {
-      this.error = err instanceof Error ? err.message : String(err);
+      this.reportError("deleting the item", err);
     }
     this.closeDialog();
   }
@@ -2654,7 +2709,7 @@ var TodoOverlayList = class extends i4 {
       this.quickAddValue = "";
       await this.load();
     } catch (err) {
-      this.error = err instanceof Error ? err.message : String(err);
+      this.reportError("adding the item", err);
     }
   }
   renderTree(list) {
@@ -3319,33 +3374,12 @@ var TodoOverlayCardEditor = class extends i4 {
                 ></ha-switch>
             </ha-formfield>
 
-            <ha-formfield label="Move completed items to the bottom">
-                <ha-switch
-                    .checked=${this._config.move_completed_items ?? false}
-                    @change=${this.onSwitchChanged("move_completed_items", false)}
-                ></ha-switch>
-            </ha-formfield>
-
-            <ha-formfield label="Confirm before deleting an item">
-                <ha-switch
-                    .checked=${this._config.confirm_delete ?? true}
-                    @change=${this.onSwitchChanged("confirm_delete", true)}
-                ></ha-switch>
-            </ha-formfield>
-
             <div class="section-title">Show</div>
 
             <ha-formfield label="Clear completed button">
                 <ha-switch
                     .checked=${this._config.show_clear_completed_button ?? true}
                     @change=${this.onSwitchChanged("show_clear_completed_button", true)}
-                ></ha-switch>
-            </ha-formfield>
-
-            <ha-formfield label="Save/load list buttons">
-                <ha-switch
-                    .checked=${this._config.show_save_load_buttons ?? true}
-                    @change=${this.onSwitchChanged("show_save_load_buttons", true)}
                 ></ha-switch>
             </ha-formfield>
 
@@ -3356,12 +3390,38 @@ var TodoOverlayCardEditor = class extends i4 {
                 ></ha-switch>
             </ha-formfield>
 
-            <ha-formfield label="Filter icon in toolbar">
-                <ha-switch
-                    .checked=${this._config.show_filter_menu ?? false}
-                    @change=${this.onSwitchChanged("show_filter_menu", false)}
-                ></ha-switch>
-            </ha-formfield>
+            <details class="advanced">
+                <summary>Advanced</summary>
+                <div class="advanced-content">
+                    <ha-formfield label="Move completed items to the bottom">
+                        <ha-switch
+                            .checked=${this._config.move_completed_items ?? false}
+                            @change=${this.onSwitchChanged("move_completed_items", false)}
+                        ></ha-switch>
+                    </ha-formfield>
+
+                    <ha-formfield label="Confirm before deleting an item">
+                        <ha-switch
+                            .checked=${this._config.confirm_delete ?? true}
+                            @change=${this.onSwitchChanged("confirm_delete", true)}
+                        ></ha-switch>
+                    </ha-formfield>
+
+                    <ha-formfield label="Save/load list buttons">
+                        <ha-switch
+                            .checked=${this._config.show_save_load_buttons ?? true}
+                            @change=${this.onSwitchChanged("show_save_load_buttons", true)}
+                        ></ha-switch>
+                    </ha-formfield>
+
+                    <ha-formfield label="Filter icon in toolbar">
+                        <ha-switch
+                            .checked=${this._config.show_filter_menu ?? false}
+                            @change=${this.onSwitchChanged("show_filter_menu", false)}
+                        ></ha-switch>
+                    </ha-formfield>
+                </div>
+            </details>
         `;
   }
 };
@@ -3417,6 +3477,22 @@ TodoOverlayCardEditor.styles = i`
 
         ha-formfield {
             display: block;
+        }
+
+        .advanced {
+            margin-top: 24px;
+        }
+
+        .advanced summary {
+            font-size: 12px;
+            font-weight: 500;
+            text-transform: uppercase;
+            color: var(--secondary-text-color);
+            cursor: pointer;
+        }
+
+        .advanced-content {
+            margin-top: 8px;
         }
     `;
 __decorateClass([

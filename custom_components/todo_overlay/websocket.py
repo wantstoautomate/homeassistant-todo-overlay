@@ -8,8 +8,6 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers import config_validation as cv
 
 from .const import (
-    DATA_MANAGER,
-    DOMAIN,
     WS_TYPE_ADD_TAG,
     WS_TYPE_CLEAR_COMPLETED,
     WS_TYPE_CREATE_ITEM,
@@ -25,6 +23,7 @@ from .const import (
     WS_TYPE_SET_QUANTITY,
     WS_TYPE_SET_TAGS,
     WS_TYPE_SET_TRIGGER_ON_DUE,
+    WS_TYPE_TRANSFER_ITEM,
 )
 from .errors import (
     CycleError,
@@ -33,6 +32,7 @@ from .errors import (
     ItemNotFoundError,
     SnapshotNotFoundError,
 )
+from .runtime_data import get_manager
 
 # Every TodoManager method that validates its input (a missing item,
 # entity, or saved list) raises one of these - all ValueError subclasses,
@@ -96,7 +96,7 @@ async def websocket_get_list(
 ) -> None:
     """Return a Todo list."""
 
-    manager = hass.data[DOMAIN][DATA_MANAGER]
+    manager = get_manager(hass)
 
     todo_list = await manager.get_list(
         msg["entity_id"],
@@ -127,7 +127,7 @@ async def websocket_move_item(
 ) -> None:
     """Move an item before, after, or inside another item."""
 
-    manager = hass.data[DOMAIN][DATA_MANAGER]
+    manager = get_manager(hass)
 
     await manager.move_item(
         entity_id=msg["entity_id"],
@@ -137,6 +137,38 @@ async def websocket_move_item(
     )
 
     connection.send_result(msg["id"])
+
+
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): WS_TYPE_TRANSFER_ITEM,
+        vol.Required("source_entity_id"): cv.entity_id,
+        vol.Required("item_id"): str,
+        vol.Required("target_entity_id"): cv.entity_id,
+        vol.Required("reference_id"): str,
+        vol.Required("placement"): vol.In(["before", "after", "inside"]),
+    }
+)
+@websocket_api.async_response
+@_handle_manager_errors
+async def websocket_transfer_item(
+    hass: HomeAssistant,
+    connection: websocket_api.ActiveConnection,
+    msg,
+) -> None:
+    """Move an item (and its subtree) from one todo.* entity to another."""
+
+    manager = get_manager(hass)
+
+    new_id = await manager.transfer_item(
+        source_entity_id=msg["source_entity_id"],
+        item_id=msg["item_id"],
+        target_entity_id=msg["target_entity_id"],
+        reference_id=msg["reference_id"],
+        placement=msg["placement"],
+    )
+
+    connection.send_result(msg["id"], {"id": new_id})
 
 
 @websocket_api.websocket_command(
@@ -157,7 +189,7 @@ async def websocket_set_completed(
 ) -> None:
     """Set an item's completion, cascading to its descendants."""
 
-    manager = hass.data[DOMAIN][DATA_MANAGER]
+    manager = get_manager(hass)
 
     changed = await manager.set_completed(
         entity_id=msg["entity_id"],
@@ -190,7 +222,7 @@ async def websocket_restore_completed(
 ) -> None:
     """Undo a completion cascade by writing back exact prior states."""
 
-    manager = hass.data[DOMAIN][DATA_MANAGER]
+    manager = get_manager(hass)
 
     await manager.restore_completed(
         entity_id=msg["entity_id"],
@@ -215,7 +247,7 @@ async def websocket_clear_completed(
 ) -> None:
     """Remove every completed top-level item (and its descendants)."""
 
-    manager = hass.data[DOMAIN][DATA_MANAGER]
+    manager = get_manager(hass)
 
     removed = await manager.clear_completed(
         entity_id=msg["entity_id"],
@@ -241,7 +273,7 @@ async def websocket_save_list(
 ) -> None:
     """Save a named snapshot of the list."""
 
-    manager = hass.data[DOMAIN][DATA_MANAGER]
+    manager = get_manager(hass)
 
     await manager.save_list(
         entity_id=msg["entity_id"],
@@ -269,7 +301,7 @@ async def websocket_load_list(
 ) -> None:
     """Load a named snapshot back onto the list."""
 
-    manager = hass.data[DOMAIN][DATA_MANAGER]
+    manager = get_manager(hass)
 
     await manager.load_list(
         entity_id=msg["entity_id"],
@@ -294,7 +326,7 @@ async def websocket_list_saved(
 ) -> None:
     """Return the names of every saved snapshot, across all entities."""
 
-    manager = hass.data[DOMAIN][DATA_MANAGER]
+    manager = get_manager(hass)
 
     names = await manager.list_saved()
 
@@ -316,7 +348,7 @@ async def websocket_delete_saved_list(
 ) -> None:
     """Delete a saved snapshot by name."""
 
-    manager = hass.data[DOMAIN][DATA_MANAGER]
+    manager = get_manager(hass)
 
     await manager.delete_saved(name=msg["name"])
 
@@ -345,7 +377,7 @@ async def websocket_create_item(
 ) -> None:
     """Create an item, including overlay-only fields like quantity."""
 
-    manager = hass.data[DOMAIN][DATA_MANAGER]
+    manager = get_manager(hass)
 
     item_id = await manager.create_item(
         entity_id=msg["entity_id"],
@@ -378,7 +410,7 @@ async def websocket_set_quantity(
 ) -> None:
     """Set (or clear) an item's quantity."""
 
-    manager = hass.data[DOMAIN][DATA_MANAGER]
+    manager = get_manager(hass)
 
     await manager.set_quantity(
         entity_id=msg["entity_id"],
@@ -406,7 +438,7 @@ async def websocket_set_tags(
 ) -> None:
     """Replace an item's full tag list."""
 
-    manager = hass.data[DOMAIN][DATA_MANAGER]
+    manager = get_manager(hass)
 
     await manager.set_tags(
         entity_id=msg["entity_id"],
@@ -434,7 +466,7 @@ async def websocket_add_tag(
 ) -> None:
     """Add a tag to an item, identified by uid or title."""
 
-    manager = hass.data[DOMAIN][DATA_MANAGER]
+    manager = get_manager(hass)
 
     await manager.add_tag(
         entity_id=msg["entity_id"],
@@ -462,7 +494,7 @@ async def websocket_remove_tag(
 ) -> None:
     """Remove a tag from an item, identified by uid or title."""
 
-    manager = hass.data[DOMAIN][DATA_MANAGER]
+    manager = get_manager(hass)
 
     await manager.remove_tag(
         entity_id=msg["entity_id"],
@@ -490,7 +522,7 @@ async def websocket_set_trigger_on_due(
 ) -> None:
     """Enable or disable the "due" trigger event for an item."""
 
-    manager = hass.data[DOMAIN][DATA_MANAGER]
+    manager = get_manager(hass)
 
     await manager.set_trigger_on_due(
         entity_id=msg["entity_id"],
@@ -505,6 +537,7 @@ def async_register_websocket(hass: HomeAssistant) -> None:
     for handler in (
         websocket_get_list,
         websocket_move_item,
+        websocket_transfer_item,
         websocket_set_completed,
         websocket_restore_completed,
         websocket_clear_completed,

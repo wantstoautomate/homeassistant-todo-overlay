@@ -10,7 +10,12 @@ from custom_components.todo_overlay.errors import (
 from custom_components.todo_overlay.manager import TodoManager
 from custom_components.todo_overlay.models import ItemPosition, TodoItem
 
-from fakes import FakeAdapter, FakeMetadataStore
+from fakes import (
+    FakeAdapter,
+    FakeMetadataStore,
+    FakeMultiEntityAdapter,
+    FakeMultiEntityMetadataStore,
+)
 
 
 @pytest.mark.asyncio
@@ -1505,3 +1510,236 @@ async def test_manager_set_completed_deep_cascade_repositions_every_level():
     # root-sibling was never touched and should keep its own status/position.
     root_sibling = next(item for item in todo_list.items if item.id == "root-sibling")
     assert root_sibling.completed is False
+
+
+# --- transfer_item (cross-entity drag-and-drop) ----------------------------
+
+@pytest.mark.asyncio
+async def test_manager_transfer_item_same_entity_delegates_to_move_item():
+
+    adapter = FakeMultiEntityAdapter({
+        "todo.shopping": [
+            TodoItem(id="1", title="Shopping", completed=False),
+            TodoItem(id="2", title="Milk", completed=False),
+        ],
+    })
+    metadata_store = FakeMultiEntityMetadataStore({
+        "todo.shopping": {
+            "1": ItemPosition(parent_id=None, order=0),
+            "2": ItemPosition(parent_id=None, order=1),
+        },
+    })
+    manager = TodoManager(adapter=adapter, metadata_store=metadata_store)
+
+    new_id = await manager.transfer_item(
+        source_entity_id="todo.shopping",
+        item_id="2",
+        target_entity_id="todo.shopping",
+        reference_id="1",
+        placement="inside",
+    )
+
+    assert new_id == "2"
+    # No item was recreated/removed - move_item() only rewrites positions.
+    assert adapter.add_item_calls == []
+    assert adapter.remove_item_calls == []
+
+    todo_list = await manager.get_list("todo.shopping")
+    assert todo_list.items[0].children[0].id == "2"
+
+
+@pytest.mark.asyncio
+async def test_manager_transfer_item_moves_leaf_to_target_entity():
+
+    adapter = FakeMultiEntityAdapter({
+        "todo.shopping": [TodoItem(id="1", title="Milk", completed=False)],
+        "todo.chores": [TodoItem(id="a", title="Laundry", completed=False)],
+    })
+    metadata_store = FakeMultiEntityMetadataStore({
+        "todo.shopping": {"1": ItemPosition(parent_id=None, order=0)},
+        "todo.chores": {"a": ItemPosition(parent_id=None, order=0)},
+    })
+    manager = TodoManager(adapter=adapter, metadata_store=metadata_store)
+
+    new_id = await manager.transfer_item(
+        source_entity_id="todo.shopping",
+        item_id="1",
+        target_entity_id="todo.chores",
+        reference_id="a",
+        placement="after",
+    )
+
+    # Removed from the source entirely.
+    source_list = await manager.get_list("todo.shopping")
+    assert source_list.items == []
+
+    # Recreated on the target, after "a".
+    target_list = await manager.get_list("todo.chores")
+    assert [item.id for item in target_list.items] == ["a", new_id]
+    assert target_list.items[1].title == "Milk"
+
+
+@pytest.mark.asyncio
+async def test_manager_transfer_item_preserves_subtree_hierarchy():
+
+    adapter = FakeMultiEntityAdapter({
+        "todo.shopping": [
+            TodoItem(id="parent", title="Groceries", completed=False),
+            TodoItem(id="child", title="Milk", completed=True),
+        ],
+        "todo.chores": [TodoItem(id="anchor", title="Laundry", completed=False)],
+    })
+    metadata_store = FakeMultiEntityMetadataStore({
+        "todo.shopping": {
+            "parent": ItemPosition(parent_id=None, order=0),
+            "child": ItemPosition(parent_id="parent", order=0),
+        },
+        "todo.chores": {"anchor": ItemPosition(parent_id=None, order=0)},
+    })
+    manager = TodoManager(adapter=adapter, metadata_store=metadata_store)
+
+    new_root_id = await manager.transfer_item(
+        source_entity_id="todo.shopping",
+        item_id="parent",
+        target_entity_id="todo.chores",
+        reference_id="anchor",
+        placement="after",
+    )
+
+    target_list = await manager.get_list("todo.chores")
+    assert [item.id for item in target_list.items] == ["anchor", new_root_id]
+    root = target_list.items[1]
+    assert root.title == "Groceries"
+    assert len(root.children) == 1
+    assert root.children[0].title == "Milk"
+    assert root.children[0].completed is True
+
+    source_list = await manager.get_list("todo.shopping")
+    assert source_list.items == []
+
+
+@pytest.mark.asyncio
+async def test_manager_transfer_item_preserves_quantity_and_tags():
+
+    adapter = FakeMultiEntityAdapter({
+        "todo.shopping": [TodoItem(id="1", title="Milk", completed=False)],
+        "todo.chores": [TodoItem(id="anchor", title="Laundry", completed=False)],
+    })
+    metadata_store = FakeMultiEntityMetadataStore({
+        "todo.shopping": {"1": ItemPosition(parent_id=None, order=0)},
+        "todo.chores": {"anchor": ItemPosition(parent_id=None, order=0)},
+    })
+    await metadata_store.set_quantity("todo.shopping", "1", "2L")
+    await metadata_store.set_tags("todo.shopping", "1", ["dairy", "urgent"])
+
+    manager = TodoManager(adapter=adapter, metadata_store=metadata_store)
+
+    new_id = await manager.transfer_item(
+        source_entity_id="todo.shopping",
+        item_id="1",
+        target_entity_id="todo.chores",
+        reference_id="anchor",
+        placement="after",
+    )
+
+    quantities = await metadata_store.get_quantities("todo.chores")
+    tags = await metadata_store.get_tags("todo.chores")
+    assert quantities[new_id] == "2L"
+    assert set(tags[new_id]) == {"dairy", "urgent"}
+
+    # Source metadata for the transferred item is gone.
+    assert await metadata_store.get_quantities("todo.shopping") == {}
+    assert await metadata_store.get_tags("todo.shopping") == {}
+
+
+@pytest.mark.asyncio
+async def test_manager_transfer_item_carries_trigger_on_due_when_target_keeps_due_datetime():
+
+    adapter = FakeMultiEntityAdapter({
+        "todo.shopping": [
+            TodoItem(
+                id="1",
+                title="Pay rent",
+                completed=False,
+                due_datetime="2026-08-01T09:00:00+00:00",
+            ),
+        ],
+        "todo.chores": [TodoItem(id="anchor", title="Laundry", completed=False)],
+    })
+    metadata_store = FakeMultiEntityMetadataStore({
+        "todo.shopping": {"1": ItemPosition(parent_id=None, order=0)},
+        "todo.chores": {"anchor": ItemPosition(parent_id=None, order=0)},
+    })
+    await metadata_store.set_trigger_on_due("todo.shopping", "1", True)
+
+    manager = TodoManager(adapter=adapter, metadata_store=metadata_store)
+
+    new_id = await manager.transfer_item(
+        source_entity_id="todo.shopping",
+        item_id="1",
+        target_entity_id="todo.chores",
+        reference_id="anchor",
+        placement="after",
+    )
+
+    assert await metadata_store.get_trigger_on_due("todo.chores") == {new_id}
+    assert await metadata_store.get_trigger_on_due("todo.shopping") == set()
+
+
+@pytest.mark.asyncio
+async def test_manager_transfer_item_raises_for_unknown_item():
+
+    adapter = FakeMultiEntityAdapter({
+        "todo.shopping": [TodoItem(id="1", title="Milk", completed=False)],
+        "todo.chores": [],
+    })
+    metadata_store = FakeMultiEntityMetadataStore({
+        "todo.shopping": {"1": ItemPosition(parent_id=None, order=0)},
+        "todo.chores": {},
+    })
+    manager = TodoManager(adapter=adapter, metadata_store=metadata_store)
+
+    with pytest.raises(ItemNotFoundError):
+        await manager.transfer_item(
+            source_entity_id="todo.shopping",
+            item_id="does-not-exist",
+            target_entity_id="todo.chores",
+            reference_id="",
+            placement="inside",
+        )
+
+    # Nothing should have been created on the target or removed from the
+    # source - the failure happens before any mutation begins.
+    assert adapter.add_item_calls == []
+    assert adapter.remove_item_calls == []
+
+
+@pytest.mark.asyncio
+async def test_manager_transfer_item_places_root_before_reference_sibling():
+
+    adapter = FakeMultiEntityAdapter({
+        "todo.shopping": [TodoItem(id="1", title="Milk", completed=False)],
+        "todo.chores": [
+            TodoItem(id="a", title="Laundry", completed=False),
+            TodoItem(id="b", title="Dishes", completed=False),
+        ],
+    })
+    metadata_store = FakeMultiEntityMetadataStore({
+        "todo.shopping": {"1": ItemPosition(parent_id=None, order=0)},
+        "todo.chores": {
+            "a": ItemPosition(parent_id=None, order=0),
+            "b": ItemPosition(parent_id=None, order=1),
+        },
+    })
+    manager = TodoManager(adapter=adapter, metadata_store=metadata_store)
+
+    new_id = await manager.transfer_item(
+        source_entity_id="todo.shopping",
+        item_id="1",
+        target_entity_id="todo.chores",
+        reference_id="b",
+        placement="before",
+    )
+
+    target_list = await manager.get_list("todo.chores")
+    assert [item.id for item in target_list.items] == ["a", new_id, "b"]

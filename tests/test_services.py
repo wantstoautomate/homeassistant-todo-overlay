@@ -12,11 +12,11 @@ a real validated call would have, defaults included.
 
 import pytest
 
-from custom_components.todo_overlay.const import DATA_MANAGER, DOMAIN
+from custom_components.todo_overlay.const import DOMAIN
 from custom_components.todo_overlay.manager import TodoManager
 from custom_components.todo_overlay.services import async_register_services
 
-from fakes import FakeAdapter, FakeMetadataStore
+from fakes import FakeAdapter, FakeConfigEntries, FakeMetadataStore
 
 ENTITY_ID = "todo.shopping"
 
@@ -40,7 +40,7 @@ class FakeServices:
 def make_hass(manager: TodoManager) -> tuple[object, FakeServices]:
     services = FakeServices()
     hass = type("FakeHass", (), {
-        "data": {DOMAIN: {DATA_MANAGER: manager}},
+        "config_entries": FakeConfigEntries(manager),
         "services": services,
     })()
     async_register_services(hass)
