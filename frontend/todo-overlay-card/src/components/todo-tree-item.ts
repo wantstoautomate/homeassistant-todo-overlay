@@ -110,9 +110,9 @@ export class TodoTreeItem extends LitElement {
             position: relative;
             display: flex;
             align-items: center;
-            gap: 12px;
-            min-height: 40px;
-            padding: 8px 20px;
+            gap: 10px;
+            min-height: 32px;
+            padding: 5px 16px;
             border-radius: 4px;
             outline: 2px solid transparent;
             outline-offset: -2px;
@@ -208,6 +208,25 @@ export class TodoTreeItem extends LitElement {
         ha-checkbox {
             pointer-events: none;
             flex-shrink: 0;
+        }
+
+        /* Always reserves the same width whether a checkbox is actually
+           rendered inside it or not (see checkboxHidden) - a parent with
+           hide_complete_for_parents active and a plain leaf item are
+           logically siblings at the same level, and need to align the
+           same way regardless of which one happens to show a checkbox.
+           overflow:hidden clips ha-checkbox's own oversized touch-target
+           box down to this slot's tighter footprint - harmless, since
+           the checkbox here is purely decorative (pointer-events: none;
+           the row itself owns tap handling). */
+        .checkbox-slot {
+            flex-shrink: 0;
+            width: 24px;
+            height: 24px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            overflow: hidden;
         }
 
         .collapse-toggle {
@@ -659,13 +678,13 @@ export class TodoTreeItem extends LitElement {
                                         : html`<span class="collapse-toggle-spacer"></span>`
                                 }
 
-                                ${
-                                    this.checkboxHidden
-                                        ? ""
-                                        : html`
-                                            <ha-checkbox .checked=${this.item.completed}></ha-checkbox>
-                                        `
-                                }
+                                <div class="checkbox-slot">
+                                    ${
+                                        this.checkboxHidden
+                                            ? ""
+                                            : html`<ha-checkbox .checked=${this.item.completed}></ha-checkbox>`
+                                    }
+                                </div>
 
                                 <div class="content">
                                     <div class="title-line">

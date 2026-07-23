@@ -1744,9 +1744,9 @@ var TodoTreeItem = class extends i4 {
                                             </button>
                                         ` : b2`<span class="collapse-toggle-spacer"></span>`}
 
-                                ${this.checkboxHidden ? "" : b2`
-                                            <ha-checkbox .checked=${this.item.completed}></ha-checkbox>
-                                        `}
+                                <div class="checkbox-slot">
+                                    ${this.checkboxHidden ? "" : b2`<ha-checkbox .checked=${this.item.completed}></ha-checkbox>`}
+                                </div>
 
                                 <div class="content">
                                     <div class="title-line">
@@ -1824,9 +1824,9 @@ TodoTreeItem.styles = i`
             position: relative;
             display: flex;
             align-items: center;
-            gap: 12px;
-            min-height: 40px;
-            padding: 8px 20px;
+            gap: 10px;
+            min-height: 32px;
+            padding: 5px 16px;
             border-radius: 4px;
             outline: 2px solid transparent;
             outline-offset: -2px;
@@ -1922,6 +1922,25 @@ TodoTreeItem.styles = i`
         ha-checkbox {
             pointer-events: none;
             flex-shrink: 0;
+        }
+
+        /* Always reserves the same width whether a checkbox is actually
+           rendered inside it or not (see checkboxHidden) - a parent with
+           hide_complete_for_parents active and a plain leaf item are
+           logically siblings at the same level, and need to align the
+           same way regardless of which one happens to show a checkbox.
+           overflow:hidden clips ha-checkbox's own oversized touch-target
+           box down to this slot's tighter footprint - harmless, since
+           the checkbox here is purely decorative (pointer-events: none;
+           the row itself owns tap handling). */
+        .checkbox-slot {
+            flex-shrink: 0;
+            width: 24px;
+            height: 24px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            overflow: hidden;
         }
 
         .collapse-toggle {
@@ -2237,7 +2256,6 @@ var TodoOverlayList = class extends i4 {
     this.showFilterMenu = false;
     this.collapsedIds = /* @__PURE__ */ new Set();
     this.filterMode = "all";
-    this.filterMenuOpen = false;
     this.quickAddExpanded = false;
     this.dragGhostOffset = { x: 0, y: 0 };
     this.rowSnapshot = [];
@@ -2379,11 +2397,8 @@ var TodoOverlayList = class extends i4 {
   onToggleCollapse(e7) {
     this.toggleCollapseId(e7.detail.id);
   }
-  onToggleFilterMenu() {
-    this.filterMenuOpen = !this.filterMenuOpen;
-  }
-  onFilterModeChanged(mode) {
-    this.filterMode = mode;
+  onFilterSelectChange(e7) {
+    this.filterMode = e7.target.value;
   }
   onToggleQuickAdd() {
     if (this.showQuickAdd) {
@@ -2725,17 +2740,26 @@ var TodoOverlayList = class extends i4 {
                             <div class="toolbar-spacer"></div>
 
                             ${this.showFilterMenu ? b2`
-                                        <button
+                                        <div
                                             class=${e6({
       "toolbar-icon": true,
-      active: this.filterMenuOpen || this.filterMode !== "all"
+      "filter-select-wrapper": true,
+      active: this.filterMode !== "all"
     })}
-                                            aria-label="Filter"
-                                            @click=${this.onToggleFilterMenu}
                                         >
                                             ${FILTER_ICON}
                                             ${this.filterMode !== "all" ? b2`<span class="badge-dot"></span>` : ""}
-                                        </button>
+                                            <select
+                                                class="filter-select"
+                                                aria-label="Filter"
+                                                .value=${this.filterMode}
+                                                @change=${this.onFilterSelectChange}
+                                            >
+                                                ${FILTER_MODES.map((mode) => b2`
+                                                    <option value=${mode}>${FILTER_LABELS[mode]}</option>
+                                                `)}
+                                            </select>
+                                        </div>
                                     ` : ""}
 
                             ${this.showSaveLoadButtons ? b2`
@@ -2774,19 +2798,6 @@ var TodoOverlayList = class extends i4 {
                             <button class="quick-add-details" @click=${this.openCreateDialog}>
                                 Details…
                             </button>
-                        </div>
-                    ` : ""}
-
-            ${this.filterMenuOpen ? b2`
-                        <div class="filter-panel">
-                            ${FILTER_MODES.map((mode) => b2`
-                                <button
-                                    class=${e6({ "filter-chip": true, active: this.filterMode === mode })}
-                                    @click=${() => this.onFilterModeChanged(mode)}
-                                >
-                                    ${FILTER_LABELS[mode]}
-                                </button>
-                            `)}
                         </div>
                     ` : ""}
 
@@ -2903,7 +2914,7 @@ TodoOverlayList.styles = i`
         }
 
         .quick-add-panel {
-            padding: 0 20px 12px;
+            padding: 0 16px 10px;
             font-family: Roboto, "Noto Sans", sans-serif;
         }
 
@@ -2952,28 +2963,29 @@ TodoOverlayList.styles = i`
             padding: 4px 0;
         }
 
-        .filter-panel {
-            display: flex;
-            gap: 8px;
-            flex-wrap: wrap;
-            padding: 0 20px 12px;
+        /* The visible icon is purely decorative - an invisible native
+           <select> is stretched over the whole button, so a click
+           anywhere on the icon opens the browser's own dropdown. This
+           gives a genuinely transient "pop out, pick one, gone" menu for
+           free (native selects always auto-dismiss on choice or
+           click-away) instead of a panel that has to be toggled open
+           and closed by hand. */
+        .filter-select-wrapper {
+            padding: 0;
         }
 
-        .filter-chip {
-            border: 1px solid var(--divider-color);
+        .filter-select {
+            position: absolute;
+            inset: 0;
+            width: 100%;
+            height: 100%;
+            margin: 0;
+            border: none;
             background: none;
-            border-radius: 12px;
-            padding: 4px 12px;
-            font-family: Roboto, "Noto Sans", sans-serif;
-            font-size: 12px;
-            color: var(--secondary-text-color);
+            opacity: 0;
             cursor: pointer;
-        }
-
-        .filter-chip.active {
-            border-color: var(--primary-color);
-            color: var(--primary-color);
-            background: rgba(var(--rgb-primary-color, 3, 169, 244), 0.12);
+            appearance: none;
+            -webkit-appearance: none;
         }
 
         .undo-snackbar {
@@ -3007,10 +3019,12 @@ TodoOverlayList.styles = i`
             display: flex;
             align-items: center;
             justify-content: space-between;
-            padding: 16px 20px 4px;
+            padding: 14px 16px 6px;
             font-family: Roboto, "Noto Sans", sans-serif;
-            font-size: 14px;
-            font-weight: 500;
+            font-size: 12px;
+            font-weight: 700;
+            letter-spacing: 0.06em;
+            text-transform: uppercase;
             color: var(--secondary-text-color);
         }
 
@@ -3102,9 +3116,6 @@ __decorateClass([
 __decorateClass([
   r5()
 ], TodoOverlayList.prototype, "filterMode", 2);
-__decorateClass([
-  r5()
-], TodoOverlayList.prototype, "filterMenuOpen", 2);
 __decorateClass([
   r5()
 ], TodoOverlayList.prototype, "quickAddExpanded", 2);

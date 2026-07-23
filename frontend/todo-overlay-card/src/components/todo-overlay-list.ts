@@ -286,7 +286,7 @@ export class TodoOverlayList extends LitElement {
         }
 
         .quick-add-panel {
-            padding: 0 20px 12px;
+            padding: 0 16px 10px;
             font-family: Roboto, "Noto Sans", sans-serif;
         }
 
@@ -335,28 +335,29 @@ export class TodoOverlayList extends LitElement {
             padding: 4px 0;
         }
 
-        .filter-panel {
-            display: flex;
-            gap: 8px;
-            flex-wrap: wrap;
-            padding: 0 20px 12px;
+        /* The visible icon is purely decorative - an invisible native
+           <select> is stretched over the whole button, so a click
+           anywhere on the icon opens the browser's own dropdown. This
+           gives a genuinely transient "pop out, pick one, gone" menu for
+           free (native selects always auto-dismiss on choice or
+           click-away) instead of a panel that has to be toggled open
+           and closed by hand. */
+        .filter-select-wrapper {
+            padding: 0;
         }
 
-        .filter-chip {
-            border: 1px solid var(--divider-color);
+        .filter-select {
+            position: absolute;
+            inset: 0;
+            width: 100%;
+            height: 100%;
+            margin: 0;
+            border: none;
             background: none;
-            border-radius: 12px;
-            padding: 4px 12px;
-            font-family: Roboto, "Noto Sans", sans-serif;
-            font-size: 12px;
-            color: var(--secondary-text-color);
+            opacity: 0;
             cursor: pointer;
-        }
-
-        .filter-chip.active {
-            border-color: var(--primary-color);
-            color: var(--primary-color);
-            background: rgba(var(--rgb-primary-color, 3, 169, 244), 0.12);
+            appearance: none;
+            -webkit-appearance: none;
         }
 
         .undo-snackbar {
@@ -390,10 +391,12 @@ export class TodoOverlayList extends LitElement {
             display: flex;
             align-items: center;
             justify-content: space-between;
-            padding: 16px 20px 4px;
+            padding: 14px 16px 6px;
             font-family: Roboto, "Noto Sans", sans-serif;
-            font-size: 14px;
-            font-weight: 500;
+            font-size: 12px;
+            font-weight: 700;
+            letter-spacing: 0.06em;
+            text-transform: uppercase;
             color: var(--secondary-text-color);
         }
 
@@ -485,9 +488,6 @@ export class TodoOverlayList extends LitElement {
 
     @state()
     private filterMode: FilterMode = "all";
-
-    @state()
-    private filterMenuOpen = false;
 
     @state()
     private quickAddExpanded = false;
@@ -739,12 +739,8 @@ export class TodoOverlayList extends LitElement {
         this.toggleCollapseId(e.detail.id);
     }
 
-    private onToggleFilterMenu() {
-        this.filterMenuOpen = !this.filterMenuOpen;
-    }
-
-    private onFilterModeChanged(mode: FilterMode) {
-        this.filterMode = mode;
+    private onFilterSelectChange(e: Event) {
+        this.filterMode = (e.target as HTMLSelectElement).value as FilterMode;
     }
 
     private onToggleQuickAdd() {
@@ -1179,17 +1175,26 @@ export class TodoOverlayList extends LitElement {
                             ${
                                 this.showFilterMenu
                                     ? html`
-                                        <button
+                                        <div
                                             class=${classMap({
                                                 "toolbar-icon": true,
-                                                active: this.filterMenuOpen || this.filterMode !== "all",
+                                                "filter-select-wrapper": true,
+                                                active: this.filterMode !== "all",
                                             })}
-                                            aria-label="Filter"
-                                            @click=${this.onToggleFilterMenu}
                                         >
                                             ${FILTER_ICON}
                                             ${this.filterMode !== "all" ? html`<span class="badge-dot"></span>` : ""}
-                                        </button>
+                                            <select
+                                                class="filter-select"
+                                                aria-label="Filter"
+                                                .value=${this.filterMode}
+                                                @change=${this.onFilterSelectChange}
+                                            >
+                                                ${FILTER_MODES.map(mode => html`
+                                                    <option value=${mode}>${FILTER_LABELS[mode]}</option>
+                                                `)}
+                                            </select>
+                                        </div>
                                     `
                                     : ""
                             }
@@ -1238,23 +1243,6 @@ export class TodoOverlayList extends LitElement {
                             <button class="quick-add-details" @click=${this.openCreateDialog}>
                                 Details…
                             </button>
-                        </div>
-                    `
-                    : ""
-            }
-
-            ${
-                this.filterMenuOpen
-                    ? html`
-                        <div class="filter-panel">
-                            ${FILTER_MODES.map(mode => html`
-                                <button
-                                    class=${classMap({"filter-chip": true, active: this.filterMode === mode})}
-                                    @click=${() => this.onFilterModeChanged(mode)}
-                                >
-                                    ${FILTER_LABELS[mode]}
-                                </button>
-                            `)}
                         </div>
                     `
                     : ""
