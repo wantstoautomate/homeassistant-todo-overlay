@@ -1,4 +1,4 @@
-import {afterEach, describe, expect, it} from "vitest";
+import {afterEach, describe, expect, it, vi} from "vitest";
 
 import "../src/components/todo-tree-item";
 import type {TodoTreeItem} from "../src/components/todo-tree-item";
@@ -43,8 +43,14 @@ describe("todo-overlay-tree-item", () => {
         expect(el.shadowRoot?.querySelector(".summary")?.textContent).toBe("Buy milk");
     });
 
-    it("renders a checkbox for a plain leaf item", async () => {
+    it("hides the checkbox for a plain leaf item by default", async () => {
         const el = await renderItem(makeItem());
+
+        expect(el.shadowRoot?.querySelector("ha-checkbox")).toBeNull();
+    });
+
+    it("renders a checkbox for a plain leaf item when showCheckboxes is on", async () => {
+        const el = await renderItem(makeItem(), {showCheckboxes: true});
 
         expect(el.shadowRoot?.querySelector("ha-checkbox")).not.toBeNull();
     });
@@ -80,17 +86,17 @@ describe("todo-overlay-tree-item", () => {
         expect(el.shadowRoot?.querySelector(".status-chip.all-done")).not.toBeNull();
     });
 
-    it("drops the checkbox slot entirely for a parent when hideCompleteForParents is set", async () => {
+    it("drops the checkbox slot entirely for a parent when hideCompleteForParents is set, even with checkboxes on", async () => {
         const el = await renderItem(
             makeItem({children: [makeItem({id: "2"})]}),
-            {hideCompleteForParents: true},
+            {hideCompleteForParents: true, showCheckboxes: true},
         );
 
         expect(el.shadowRoot?.querySelector(".checkbox-slot")).toBeNull();
     });
 
     it("still shows a leaf item's own checkbox even when hideCompleteForParents is set", async () => {
-        const el = await renderItem(makeItem(), {hideCompleteForParents: true});
+        const el = await renderItem(makeItem(), {hideCompleteForParents: true, showCheckboxes: true});
 
         expect(el.shadowRoot?.querySelector(".checkbox-slot ha-checkbox")).not.toBeNull();
     });
@@ -98,10 +104,21 @@ describe("todo-overlay-tree-item", () => {
     it("still shows a parent's checkbox when hideCompleteForParents is off", async () => {
         const el = await renderItem(
             makeItem({children: [makeItem({id: "2"})]}),
-            {hideCompleteForParents: false},
+            {hideCompleteForParents: false, showCheckboxes: true},
         );
 
         expect(el.shadowRoot?.querySelector(".checkbox-slot ha-checkbox")).not.toBeNull();
+    });
+
+    it("hides checkboxes everywhere when showCheckboxes is off, regardless of hideCompleteForParents", async () => {
+        const leaf = await renderItem(makeItem(), {showCheckboxes: false, hideCompleteForParents: false});
+        expect(leaf.shadowRoot?.querySelector(".checkbox-slot")).toBeNull();
+
+        const parent = await renderItem(
+            makeItem({children: [makeItem({id: "2"})]}),
+            {showCheckboxes: false, hideCompleteForParents: false},
+        );
+        expect(parent.shadowRoot?.querySelector(".checkbox-slot")).toBeNull();
     });
 
     it("bolds a parent's title so it reads as distinct from a leaf/child row", async () => {
@@ -162,5 +179,78 @@ describe("todo-overlay-tree-item", () => {
 
         const chips = [...(el.shadowRoot?.querySelectorAll(".tag-chip") ?? [])];
         expect(chips.map(chip => chip.textContent)).toEqual(["urgent", "deli"]);
+    });
+
+    describe("delete button", () => {
+        it("shows a delete button on a leaf row", async () => {
+            const el = await renderItem(makeItem());
+
+            expect(el.shadowRoot?.querySelector(".delete-button")).not.toBeNull();
+        });
+
+        it("does not show a delete button on a parent row", async () => {
+            const el = await renderItem(makeItem({children: [makeItem({id: "2"})]}));
+
+            expect(el.shadowRoot?.querySelector(".delete-button")).toBeNull();
+        });
+
+        it("deletes immediately (one click) when confirmDelete is off", async () => {
+            const el = await renderItem(makeItem(), {confirmDelete: false});
+
+            let detail: {id: string} | undefined;
+            el.addEventListener("tree-delete-item", (e) => {
+                detail = (e as CustomEvent<{id: string}>).detail;
+            });
+
+            (el.shadowRoot?.querySelector(".delete-button") as HTMLElement).click();
+
+            expect(detail).toEqual({id: "1"});
+        });
+
+        it("requires a second click to confirm when confirmDelete is on (the default)", async () => {
+            const el = await renderItem(makeItem());
+
+            let fired = false;
+            el.addEventListener("tree-delete-item", () => { fired = true; });
+
+            const button = el.shadowRoot?.querySelector(".delete-button") as HTMLElement;
+            button.click();
+            await el.updateComplete;
+
+            expect(fired).toBe(false);
+            expect(el.shadowRoot?.querySelector(".delete-button.confirming")).not.toBeNull();
+
+            button.click();
+
+            expect(fired).toBe(true);
+        });
+
+        it("disarms the confirm state after the confirm window elapses", async () => {
+            vi.useFakeTimers();
+
+            try {
+                const el = await renderItem(makeItem());
+
+                let fired = false;
+                el.addEventListener("tree-delete-item", () => { fired = true; });
+
+                const button = el.shadowRoot?.querySelector(".delete-button") as HTMLElement;
+                button.click();
+                await el.updateComplete;
+
+                expect(el.shadowRoot?.querySelector(".delete-button.confirming")).not.toBeNull();
+
+                vi.advanceTimersByTime(3100);
+                await el.updateComplete;
+
+                expect(el.shadowRoot?.querySelector(".delete-button.confirming")).toBeNull();
+
+                // A click now arms it again rather than deleting outright.
+                button.click();
+                expect(fired).toBe(false);
+            } finally {
+                vi.useRealTimers();
+            }
+        });
     });
 });

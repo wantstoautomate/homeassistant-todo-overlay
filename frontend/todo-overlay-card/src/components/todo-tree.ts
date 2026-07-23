@@ -32,6 +32,12 @@ export class TodoTree extends LitElement {
     hideCompleteForParents = false;
 
     @property({attribute: false})
+    showCheckboxes = false;
+
+    @property({attribute: false})
+    confirmDelete = true;
+
+    @property({attribute: false})
     dragDisabled = false;
 
     @property({attribute: false})
@@ -48,6 +54,8 @@ export class TodoTree extends LitElement {
                             .hoverId=${this.hoverId}
                             .hoverPlacement=${this.hoverPlacement}
                             .hideCompleteForParents=${this.hideCompleteForParents}
+                            .showCheckboxes=${this.showCheckboxes}
+                            .confirmDelete=${this.confirmDelete}
                             .dragDisabled=${this.dragDisabled}
                             .collapsedIds=${this.collapsedIds}
                         ></todo-overlay-tree-item>

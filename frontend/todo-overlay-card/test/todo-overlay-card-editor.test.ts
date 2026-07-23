@@ -117,6 +117,22 @@ describe("todo-overlay-card-editor", () => {
         expect(config.show_filter_menu).toBe(true);
     });
 
+    it("show_checkboxes toggle sets an explicit value when turned on", async () => {
+        const el = await renderEditor({entity: "todo.shopping"});
+        const changed = lastConfigChange(el);
+
+        const formfields = [...(el.shadowRoot?.querySelectorAll("ha-formfield") ?? [])];
+        const checkboxSwitch = formfields
+            .find(f => f.getAttribute("label") === "Show checkboxes")
+            ?.querySelector("ha-switch") as HTMLInputElement;
+
+        checkboxSwitch.checked = true;
+        checkboxSwitch.dispatchEvent(new Event("change"));
+
+        const config = await changed;
+        expect(config.show_checkboxes).toBe(true);
+    });
+
     it("tucks the less-common toggles behind a collapsed Advanced disclosure", async () => {
         const el = await renderEditor({entity: "todo.shopping"});
 
@@ -138,6 +154,7 @@ describe("todo-overlay-card-editor", () => {
             .map(f => f.getAttribute("label"));
         expect(mainLabels).toEqual([
             "Hide complete checkbox for parents",
+            "Show checkboxes",
             "Clear completed button",
             "Quick-add bar",
         ]);

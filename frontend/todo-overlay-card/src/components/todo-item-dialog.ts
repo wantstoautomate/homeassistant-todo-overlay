@@ -145,6 +145,7 @@ export class TodoItemDialog extends LitElement {
         .confirm-delete {
             display: flex;
             align-items: center;
+            flex-wrap: wrap;
             gap: 8px;
             width: 100%;
             font-family: Roboto, "Noto Sans", sans-serif;
@@ -152,8 +153,15 @@ export class TodoItemDialog extends LitElement {
             color: var(--primary-text-color);
         }
 
+        /* flex-basis 100% forces this onto its own row rather than
+           shrinking, so on a narrow (phone) dialog the Cancel/Delete
+           buttons wrap onto the next line instead of ever being pushed
+           out past the dialog's edge - a real risk with the plain
+           flex:1 this used to have, since nothing capped how wide the
+           text could push. */
         .confirm-delete span {
-            flex: 1;
+            flex: 1 1 100%;
+            min-width: 0;
         }
 
         .field-hint {

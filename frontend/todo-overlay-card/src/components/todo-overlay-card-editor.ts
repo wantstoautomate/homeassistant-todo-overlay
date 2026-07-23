@@ -238,6 +238,13 @@ export class TodoOverlayCardEditor extends LitElement {
                 ></ha-switch>
             </ha-formfield>
 
+            <ha-formfield label="Show checkboxes">
+                <ha-switch
+                    .checked=${this._config.show_checkboxes ?? false}
+                    @change=${this.onSwitchChanged("show_checkboxes", false)}
+                ></ha-switch>
+            </ha-formfield>
+
             <div class="section-title">Show</div>
 
             <ha-formfield label="Clear completed button">

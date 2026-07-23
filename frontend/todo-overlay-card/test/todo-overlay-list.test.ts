@@ -81,6 +81,7 @@ async function renderList(
 
 afterEach(() => {
     document.body.innerHTML = "";
+    localStorage.clear();
 });
 
 describe("todo-overlay-list loading", () => {
@@ -185,6 +186,48 @@ describe("todo-overlay-list collapse", () => {
         await settle(el);
 
         expect(summaryTexts(el)).toEqual(["Parent"]);
+    });
+
+    it("persists collapse state across a full reload of the card (e.g. a phone reconnecting)", async () => {
+        const items = [makeItem({
+            id: "parent", title: "Parent",
+            children: [makeItem({id: "child", title: "Child"})],
+        })];
+
+        const {el: firstMount} = await renderList({entity_id: ENTITY_ID, items});
+        expect(summaryTexts(firstMount)).toEqual(["Parent", "Child"]);
+
+        firstMount.shadowRoot?.querySelector("todo-overlay-tree")?.dispatchEvent(
+            new CustomEvent("tree-toggle-collapse", {detail: {id: "parent"}, bubbles: true, composed: true}),
+        );
+        await settle(firstMount);
+        expect(summaryTexts(firstMount)).toEqual(["Parent"]);
+
+        // A real reload tears down and recreates the whole element, not
+        // just its properties - a fresh instance, same entity, is what
+        // actually happens on a page refresh.
+        document.body.innerHTML = "";
+        const {el: secondMount} = await renderList({entity_id: ENTITY_ID, items});
+
+        expect(summaryTexts(secondMount)).toEqual(["Parent"]);
+    });
+
+    it("keeps collapse state separate per entity", async () => {
+        const items = [makeItem({
+            id: "parent", title: "Parent",
+            children: [makeItem({id: "child", title: "Child"})],
+        })];
+
+        const {el: entityA} = await renderList({entity_id: ENTITY_ID, items});
+        entityA.shadowRoot?.querySelector("todo-overlay-tree")?.dispatchEvent(
+            new CustomEvent("tree-toggle-collapse", {detail: {id: "parent"}, bubbles: true, composed: true}),
+        );
+        await settle(entityA);
+
+        document.body.innerHTML = "";
+
+        const {el: entityB} = await renderList({entity_id: "todo.other", items}, {entity: "todo.other"});
+        expect(summaryTexts(entityB)).toEqual(["Parent", "Child"]);
     });
 });
 
@@ -458,5 +501,72 @@ describe("todo-overlay-list error handling", () => {
         expect(errorText).not.toContain("ValueError");
 
         consoleError.mockRestore();
+    });
+});
+
+describe("todo-overlay-list edit-dialog delete (diagnostic)", () => {
+    it("holding a row opens the edit dialog, and confirming Delete twice actually removes the item", async () => {
+        const {el, hass} = await renderList({
+            entity_id: ENTITY_ID,
+            items: [makeItem({id: "1", title: "Milk"})],
+        });
+
+        const treeItem = deepQueryAll(el.shadowRoot!, "todo-overlay-tree-item")[0];
+        treeItem.dispatchEvent(new CustomEvent("tree-pointer-down", {
+            detail: {id: "1"}, bubbles: true, composed: true,
+        }));
+        treeItem.dispatchEvent(new CustomEvent("tree-pointer-up", {
+            detail: {id: "1", pressDurationMs: 600, moved: false}, bubbles: true, composed: true,
+        }));
+        await el.updateComplete;
+
+        const dialog = el.shadowRoot?.querySelector("todo-overlay-item-dialog");
+        expect(dialog, "edit dialog should be open after a long press").not.toBeNull();
+
+        const deleteButton = [...(dialog?.shadowRoot?.querySelectorAll("button") ?? [])]
+            .find(b => b.textContent?.trim() === "Delete") as HTMLButtonElement;
+        expect(deleteButton, "dialog should show a Delete button").toBeDefined();
+
+        deleteButton.click();
+        await (dialog as unknown as {updateComplete: Promise<unknown>}).updateComplete;
+
+        const confirmButton = [...(dialog?.shadowRoot?.querySelectorAll(".confirm-delete button") ?? [])]
+            .find(b => b.textContent?.trim() === "Delete") as HTMLButtonElement;
+        expect(confirmButton, "confirm-delete step should render a second Delete button").toBeDefined();
+
+        confirmButton.click();
+        await flushAsync();
+
+        expect(hass.serviceCalls).toContainEqual({
+            domain: "todo",
+            service: "remove_item",
+            data: {entity_id: ENTITY_ID, item: "1"},
+        });
+    });
+});
+
+describe("todo-overlay-list row delete button", () => {
+    it("a tree-delete-item event from a row removes that item and reloads", async () => {
+        const {el, hass} = await renderList({
+            entity_id: ENTITY_ID,
+            items: [makeItem({id: "1", title: "Milk"}), makeItem({id: "2", title: "Bread"})],
+        });
+
+        const sentBefore = hass.connection.sent.length;
+
+        const treeItem = deepQueryAll(el.shadowRoot!, "todo-overlay-tree-item")[0];
+        treeItem.dispatchEvent(new CustomEvent("tree-delete-item", {
+            detail: {id: "1"}, bubbles: true, composed: true,
+        }));
+        await flushAsync();
+
+        expect(hass.serviceCalls).toContainEqual({
+            domain: "todo",
+            service: "remove_item",
+            data: {entity_id: ENTITY_ID, item: "1"},
+        });
+        expect(hass.connection.sent.filter(m => m.type === "todo_overlay/get_list").length)
+            .toBeGreaterThan(hass.connection.sent.slice(0, sentBefore)
+                .filter(m => m.type === "todo_overlay/get_list").length);
     });
 });

@@ -34,6 +34,11 @@ export interface TodoOverlayCardConfig {
     // own (hidden) checkbox - or tap the row, which toggles collapse
     // instead of completion for a row with no checkbox to tap.
     hide_complete_for_parents?: boolean;
+    // Off by default - a row's completion checkbox is purely a visual
+    // affordance (tapping anywhere on the row already completes it, see
+    // todo-overlay-list.ts's onPointerUp), so most configs don't need
+    // the extra glyph at all. Turn this on to show it anyway.
+    show_checkboxes?: boolean;
     // When set (off by default), completing/uncompleting an item
     // repositions it to the boundary of its own sibling group (newly-
     // completed to the top of the completed ones, newly-uncompleted to
@@ -163,6 +168,7 @@ export class TodoOverlayCard extends LitElement {
                             .hass=${this.hass}
                             .entity=${entityId}
                             .hideCompleteForParents=${this.config.hide_complete_for_parents ?? true}
+                            .showCheckboxes=${this.config.show_checkboxes ?? false}
                             .sortBy=${this.config.sort_by ?? "manual"}
                             .sortOrder=${this.config.sort_order ?? "asc"}
                             .showClearButton=${this.config.show_clear_completed_button ?? true}

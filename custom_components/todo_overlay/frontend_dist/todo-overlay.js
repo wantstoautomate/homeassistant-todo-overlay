@@ -793,6 +793,27 @@ async function deleteSavedList(hass, name) {
   });
 }
 
+// src/collapse-storage.ts
+var STORAGE_KEY_PREFIX = "todo-overlay-card:collapsed:";
+function loadCollapsedIds(entityId) {
+  try {
+    const raw = window.localStorage.getItem(STORAGE_KEY_PREFIX + entityId);
+    if (!raw) {
+      return /* @__PURE__ */ new Set();
+    }
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? new Set(parsed.filter((id) => typeof id === "string")) : /* @__PURE__ */ new Set();
+  } catch {
+    return /* @__PURE__ */ new Set();
+  }
+}
+function saveCollapsedIds(entityId, collapsedIds) {
+  try {
+    window.localStorage.setItem(STORAGE_KEY_PREFIX + entityId, JSON.stringify([...collapsedIds]));
+  } catch {
+  }
+}
+
 // src/models.ts
 var LONG_PRESS_MS = 500;
 var TodoListEntityFeature = {
@@ -1197,6 +1218,7 @@ TodoItemDialog.styles = i`
         .confirm-delete {
             display: flex;
             align-items: center;
+            flex-wrap: wrap;
             gap: 8px;
             width: 100%;
             font-family: Roboto, "Noto Sans", sans-serif;
@@ -1204,8 +1226,15 @@ TodoItemDialog.styles = i`
             color: var(--primary-text-color);
         }
 
+        /* flex-basis 100% forces this onto its own row rather than
+           shrinking, so on a narrow (phone) dialog the Cancel/Delete
+           buttons wrap onto the next line instead of ever being pushed
+           out past the dialog's edge - a real risk with the plain
+           flex:1 this used to have, since nothing capped how wide the
+           text could push. */
         .confirm-delete span {
-            flex: 1;
+            flex: 1 1 100%;
+            min-width: 0;
         }
 
         .field-hint {
@@ -1517,6 +1546,12 @@ var BELL_ICON = b2`
         ></path>
     </svg>
 `;
+var CROSS_ICON = b2`
+    <svg viewBox="0 0 24 24">
+        <path d="M19,6.41L17.59,5L12,10.59L6.41,5L5,6.41L10.59,12L5,17.59L6.41,19L12,13.41L17.59,19L19,17.59L13.41,12L19,6.41Z"></path>
+    </svg>
+`;
+var DELETE_CONFIRM_WINDOW_MS = 3e3;
 function formatDue(item) {
   const raw = item.due_datetime ?? (item.due_date ? `${item.due_date}T00:00:00` : null);
   if (!raw) {
@@ -1550,9 +1585,12 @@ var TodoTreeItem = class extends i4 {
   constructor() {
     super(...arguments);
     this.hideCompleteForParents = false;
+    this.showCheckboxes = false;
+    this.confirmDelete = true;
     this.dragDisabled = false;
     this.collapsedIds = /* @__PURE__ */ new Set();
     this.dragEngaged = false;
+    this.confirmingDelete = false;
     this.pointerDownAt = 0;
     this.hasMoved = false;
     // Mouse users have no reason to wait out the hold timer before a drag
@@ -1614,6 +1652,9 @@ var TodoTreeItem = class extends i4 {
   // edit dialog instead (see todo-overlay.ts's onPointerUp and
   // todo-item-dialog.ts's complete toggle).
   get checkboxHidden() {
+    if (!this.showCheckboxes) {
+      return true;
+    }
     return this.hideCompleteForParents && this.item.children.length > 0;
   }
   get hasChildren() {
@@ -1635,6 +1676,25 @@ var TodoTreeItem = class extends i4 {
     e7.stopPropagation();
     this.dispatchEvent(
       new CustomEvent("tree-toggle-collapse", {
+        detail: { id: this.item.id },
+        bubbles: true,
+        composed: true
+      })
+    );
+  }
+  onDeleteClick(e7) {
+    e7.stopPropagation();
+    window.clearTimeout(this.deleteConfirmTimer);
+    if (this.confirmDelete && !this.confirmingDelete) {
+      this.confirmingDelete = true;
+      this.deleteConfirmTimer = window.setTimeout(() => {
+        this.confirmingDelete = false;
+      }, DELETE_CONFIRM_WINDOW_MS);
+      return;
+    }
+    this.confirmingDelete = false;
+    this.dispatchEvent(
+      new CustomEvent("tree-delete-item", {
         detail: { id: this.item.id },
         bubbles: true,
         composed: true
@@ -1801,6 +1861,21 @@ var TodoTreeItem = class extends i4 {
                                             ` : ""}
                                 </div>
 
+                                ${this.hasChildren ? "" : b2`
+                                            <button
+                                                class=${e6({
+      "delete-button": true,
+      confirming: this.confirmingDelete
+    })}
+                                                aria-label=${this.confirmingDelete ? "Confirm delete" : "Delete"}
+                                                @click=${this.onDeleteClick}
+                                                @dblclick=${(e7) => e7.stopPropagation()}
+                                                @pointerdown=${(e7) => e7.stopPropagation()}
+                                            >
+                                                ${CROSS_ICON}
+                                            </button>
+                                        `}
+
                                 ${this.holdRippleOrigin ? b2`
                                             <div
                                                 class=${e6({ "hold-ripple": true, active: this.holdReady })}
@@ -1823,6 +1898,8 @@ var TodoTreeItem = class extends i4 {
                                             .hoverId=${this.hoverId}
                                             .hoverPlacement=${this.hoverPlacement}
                                             .hideCompleteForParents=${this.hideCompleteForParents}
+                                            .showCheckboxes=${this.showCheckboxes}
+                                            .confirmDelete=${this.confirmDelete}
                                             .dragDisabled=${this.dragDisabled}
                                             .collapsedIds=${this.collapsedIds}
                                         ></todo-overlay-tree-item>
@@ -2090,6 +2167,49 @@ TodoTreeItem.styles = i`
             white-space: nowrap;
         }
 
+        /* Only ever shown on a leaf row (see hasChildren in the
+           template) - a group header is deleted via its own edit
+           dialog, same as before, since removing a whole subtree in one
+           tap is a much bigger action than removing a single item. */
+        .delete-button {
+            flex-shrink: 0;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            width: 24px;
+            height: 24px;
+            margin-inline-end: -4px;
+            border: none;
+            background: none;
+            padding: 0;
+            border-radius: 50%;
+            cursor: pointer;
+            color: var(--secondary-text-color);
+            opacity: 0.5;
+            transition: opacity 0.15s ease, background-color 0.15s ease, color 0.15s ease;
+        }
+
+        .row:hover .delete-button {
+            opacity: 1;
+        }
+
+        .delete-button svg {
+            width: 16px;
+            height: 16px;
+            fill: currentColor;
+        }
+
+        /* Armed by a first tap - a second tap within
+           DELETE_CONFIRM_WINDOW_MS actually deletes, otherwise it quietly
+           disarms itself. Red + a filled background makes that state
+           change unmistakable even on a small screen, since there's no
+           room in the row for a second "are you sure" button. */
+        .delete-button.confirming {
+            opacity: 1;
+            color: var(--error-color);
+            background: rgba(var(--rgb-error-color, 219, 68, 55), 0.15);
+        }
+
         .hold-ripple {
             position: absolute;
             width: ${holdRippleSizePx};
@@ -2125,6 +2245,12 @@ __decorateClass([
 ], TodoTreeItem.prototype, "hideCompleteForParents", 2);
 __decorateClass([
   n4({ attribute: false })
+], TodoTreeItem.prototype, "showCheckboxes", 2);
+__decorateClass([
+  n4({ attribute: false })
+], TodoTreeItem.prototype, "confirmDelete", 2);
+__decorateClass([
+  n4({ attribute: false })
 ], TodoTreeItem.prototype, "dragDisabled", 2);
 __decorateClass([
   n4({ attribute: false })
@@ -2135,6 +2261,9 @@ __decorateClass([
 __decorateClass([
   r5()
 ], TodoTreeItem.prototype, "dragEngaged", 2);
+__decorateClass([
+  r5()
+], TodoTreeItem.prototype, "confirmingDelete", 2);
 TodoTreeItem = __decorateClass([
   t3("todo-overlay-tree-item")
 ], TodoTreeItem);
@@ -2145,6 +2274,8 @@ var TodoTree = class extends i4 {
     super(...arguments);
     this.items = [];
     this.hideCompleteForParents = false;
+    this.showCheckboxes = false;
+    this.confirmDelete = true;
     this.dragDisabled = false;
     this.collapsedIds = /* @__PURE__ */ new Set();
   }
@@ -2159,6 +2290,8 @@ var TodoTree = class extends i4 {
                             .hoverId=${this.hoverId}
                             .hoverPlacement=${this.hoverPlacement}
                             .hideCompleteForParents=${this.hideCompleteForParents}
+                            .showCheckboxes=${this.showCheckboxes}
+                            .confirmDelete=${this.confirmDelete}
                             .dragDisabled=${this.dragDisabled}
                             .collapsedIds=${this.collapsedIds}
                         ></todo-overlay-tree-item>
@@ -2190,6 +2323,12 @@ __decorateClass([
 __decorateClass([
   n4({ attribute: false })
 ], TodoTree.prototype, "hideCompleteForParents", 2);
+__decorateClass([
+  n4({ attribute: false })
+], TodoTree.prototype, "showCheckboxes", 2);
+__decorateClass([
+  n4({ attribute: false })
+], TodoTree.prototype, "confirmDelete", 2);
 __decorateClass([
   n4({ attribute: false })
 ], TodoTree.prototype, "dragDisabled", 2);
@@ -2308,6 +2447,7 @@ var TodoOverlayList = class extends i4 {
   constructor() {
     super(...arguments);
     this.hideCompleteForParents = false;
+    this.showCheckboxes = false;
     this.sortBy = "manual";
     this.sortOrder = "asc";
     this.showClearButton = true;
@@ -2374,6 +2514,9 @@ var TodoOverlayList = class extends i4 {
     };
   }
   updated(changed) {
+    if (changed.has("entity") && this.entity) {
+      this.collapsedIds = loadCollapsedIds(this.entity);
+    }
     if (!changed.has("hass") || !this.hass || !this.entity) {
       return;
     }
@@ -2479,6 +2622,7 @@ var TodoOverlayList = class extends i4 {
       next.add(id);
     }
     this.collapsedIds = next;
+    saveCollapsedIds(this.entity, next);
   }
   onToggleCollapse(e7) {
     this.toggleCollapseId(e7.detail.id);
@@ -2691,6 +2835,21 @@ var TodoOverlayList = class extends i4 {
     }
     this.closeDialog();
   }
+  // A row's own delete cross (see todo-tree-item.ts - leaf rows only,
+  // already confirmed there before this ever fires) rather than the
+  // edit dialog's Delete button - a separate, more direct path to the
+  // same native service call.
+  async onDeleteItem(e7) {
+    try {
+      await this.hass.callService("todo", "remove_item", {
+        entity_id: this.entity,
+        item: e7.detail.id
+      });
+      await this.load();
+    } catch (err) {
+      this.reportError("deleting the item", err);
+    }
+  }
   // --- quick add ---------------------------------------------------
   onQuickAddInput(e7) {
     this.quickAddValue = e7.target.value;
@@ -2727,6 +2886,8 @@ var TodoOverlayList = class extends i4 {
                     .hoverId=${this.hoverId}
                     .hoverPlacement=${this.hoverPlacement}
                     .hideCompleteForParents=${this.hideCompleteForParents}
+                    .showCheckboxes=${this.showCheckboxes}
+                    .confirmDelete=${this.confirmDelete}
                     .dragDisabled=${this.dragDisabled}
                     .collapsedIds=${this.collapsedIds}
 
@@ -2734,6 +2895,7 @@ var TodoOverlayList = class extends i4 {
                     @tree-drag-start=${this.onDragStart}
                     @tree-pointer-up=${this.onPointerUp}
                     @tree-toggle-collapse=${this.onToggleCollapse}
+                    @tree-delete-item=${this.onDeleteItem}
 
                 ></todo-overlay-tree>
             `;
@@ -2747,6 +2909,8 @@ var TodoOverlayList = class extends i4 {
                     .hoverId=${this.hoverId}
                     .hoverPlacement=${this.hoverPlacement}
                     .hideCompleteForParents=${this.hideCompleteForParents}
+                    .showCheckboxes=${this.showCheckboxes}
+                    .confirmDelete=${this.confirmDelete}
                     .dragDisabled=${this.dragDisabled}
                     .collapsedIds=${this.collapsedIds}
 
@@ -2754,6 +2918,7 @@ var TodoOverlayList = class extends i4 {
                     @tree-drag-start=${this.onDragStart}
                     @tree-pointer-up=${this.onPointerUp}
                     @tree-toggle-collapse=${this.onToggleCollapse}
+                    @tree-delete-item=${this.onDeleteItem}
 
                 ></todo-overlay-tree>
             `;
@@ -2768,6 +2933,8 @@ var TodoOverlayList = class extends i4 {
                             .hoverId=${this.hoverId}
                             .hoverPlacement=${this.hoverPlacement}
                             .hideCompleteForParents=${this.hideCompleteForParents}
+                            .showCheckboxes=${this.showCheckboxes}
+                            .confirmDelete=${this.confirmDelete}
                             .dragDisabled=${this.dragDisabled}
                             .collapsedIds=${this.collapsedIds}
 
@@ -2775,6 +2942,7 @@ var TodoOverlayList = class extends i4 {
                             @tree-drag-start=${this.onDragStart}
                             @tree-pointer-up=${this.onPointerUp}
                             @tree-toggle-collapse=${this.onToggleCollapse}
+                            @tree-delete-item=${this.onDeleteItem}
 
                         ></todo-overlay-tree>
                     ` : ""}
@@ -2786,6 +2954,8 @@ var TodoOverlayList = class extends i4 {
                 .hoverId=${this.hoverId}
                 .hoverPlacement=${this.hoverPlacement}
                 .hideCompleteForParents=${this.hideCompleteForParents}
+                .showCheckboxes=${this.showCheckboxes}
+                .confirmDelete=${this.confirmDelete}
                 .dragDisabled=${this.dragDisabled}
                 .collapsedIds=${this.collapsedIds}
 
@@ -2793,6 +2963,7 @@ var TodoOverlayList = class extends i4 {
                 @tree-drag-start=${this.onDragStart}
                 @tree-pointer-up=${this.onPointerUp}
                 @tree-toggle-collapse=${this.onToggleCollapse}
+                @tree-delete-item=${this.onDeleteItem}
 
             ></todo-overlay-tree>
         `;
@@ -3185,6 +3356,9 @@ __decorateClass([
   n4({ type: Boolean })
 ], TodoOverlayList.prototype, "hideCompleteForParents", 2);
 __decorateClass([
+  n4({ type: Boolean })
+], TodoOverlayList.prototype, "showCheckboxes", 2);
+__decorateClass([
   n4()
 ], TodoOverlayList.prototype, "sortBy", 2);
 __decorateClass([
@@ -3378,6 +3552,13 @@ var TodoOverlayCardEditor = class extends i4 {
                 ></ha-switch>
             </ha-formfield>
 
+            <ha-formfield label="Show checkboxes">
+                <ha-switch
+                    .checked=${this._config.show_checkboxes ?? false}
+                    @change=${this.onSwitchChanged("show_checkboxes", false)}
+                ></ha-switch>
+            </ha-formfield>
+
             <div class="section-title">Show</div>
 
             <ha-formfield label="Clear completed button">
@@ -3555,6 +3736,7 @@ var TodoOverlayCard = class extends i4 {
                             .hass=${this.hass}
                             .entity=${entityId}
                             .hideCompleteForParents=${this.config.hide_complete_for_parents ?? true}
+                            .showCheckboxes=${this.config.show_checkboxes ?? false}
                             .sortBy=${this.config.sort_by ?? "manual"}
                             .sortOrder=${this.config.sort_order ?? "asc"}
                             .showClearButton=${this.config.show_clear_completed_button ?? true}

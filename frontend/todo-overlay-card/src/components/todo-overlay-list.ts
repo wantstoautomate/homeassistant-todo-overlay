@@ -20,6 +20,7 @@ import {
     setTriggerOnDue,
     transferItem,
 } from "../api";
+import {loadCollapsedIds, saveCollapsedIds} from "../collapse-storage";
 import type {FilterMode} from "../filter";
 import {filterTree} from "../filter";
 import type {HassLike} from "../hass";
@@ -480,6 +481,12 @@ export class TodoOverlayList extends LitElement {
     @property({type: Boolean})
     public hideCompleteForParents = false;
 
+    // Off by default - see todo-tree-item.ts's own showCheckboxes
+    // property doc for why hiding the checkbox glyph never affects
+    // whether a tap actually completes an item.
+    @property({type: Boolean})
+    public showCheckboxes = false;
+
     @property()
     public sortBy: SortBy = "manual";
 
@@ -571,6 +578,16 @@ export class TodoOverlayList extends LitElement {
     private lastEntityUpdate?: string;
 
     protected updated(changed: Map<string, unknown>) {
+        // Restores whatever collapse state this entity was left in on a
+        // previous visit - before anything else runs, so the very first
+        // render already reflects it rather than flashing fully-expanded
+        // first. Re-checked whenever `entity` itself changes (not just on
+        // first connect), in case a live card-editor edit repoints this
+        // same list instance at a different entity.
+        if (changed.has("entity") && this.entity) {
+            this.collapsedIds = loadCollapsedIds(this.entity);
+        }
+
         if (!changed.has("hass") || !this.hass || !this.entity) {
             return;
         }
@@ -798,6 +815,7 @@ export class TodoOverlayList extends LitElement {
         }
 
         this.collapsedIds = next;
+        saveCollapsedIds(this.entity, next);
     }
 
     private onToggleCollapse(e: CustomEvent<{id: string}>) {
@@ -1071,6 +1089,23 @@ export class TodoOverlayList extends LitElement {
         this.closeDialog();
     }
 
+    // A row's own delete cross (see todo-tree-item.ts - leaf rows only,
+    // already confirmed there before this ever fires) rather than the
+    // edit dialog's Delete button - a separate, more direct path to the
+    // same native service call.
+    private async onDeleteItem(e: CustomEvent<{id: string}>) {
+        try {
+            await this.hass.callService("todo", "remove_item", {
+                entity_id: this.entity,
+                item: e.detail.id,
+            });
+
+            await this.load();
+        } catch (err) {
+            this.reportError("deleting the item", err);
+        }
+    }
+
     // --- quick add ---------------------------------------------------
 
     private onQuickAddInput(e: InputEvent) {
@@ -1123,6 +1158,8 @@ export class TodoOverlayList extends LitElement {
                     .hoverId=${this.hoverId}
                     .hoverPlacement=${this.hoverPlacement}
                     .hideCompleteForParents=${this.hideCompleteForParents}
+                    .showCheckboxes=${this.showCheckboxes}
+                    .confirmDelete=${this.confirmDelete}
                     .dragDisabled=${this.dragDisabled}
                     .collapsedIds=${this.collapsedIds}
 
@@ -1130,6 +1167,7 @@ export class TodoOverlayList extends LitElement {
                     @tree-drag-start=${this.onDragStart}
                     @tree-pointer-up=${this.onPointerUp}
                     @tree-toggle-collapse=${this.onToggleCollapse}
+                    @tree-delete-item=${this.onDeleteItem}
 
                 ></todo-overlay-tree>
             `;
@@ -1145,6 +1183,8 @@ export class TodoOverlayList extends LitElement {
                     .hoverId=${this.hoverId}
                     .hoverPlacement=${this.hoverPlacement}
                     .hideCompleteForParents=${this.hideCompleteForParents}
+                    .showCheckboxes=${this.showCheckboxes}
+                    .confirmDelete=${this.confirmDelete}
                     .dragDisabled=${this.dragDisabled}
                     .collapsedIds=${this.collapsedIds}
 
@@ -1152,6 +1192,7 @@ export class TodoOverlayList extends LitElement {
                     @tree-drag-start=${this.onDragStart}
                     @tree-pointer-up=${this.onPointerUp}
                     @tree-toggle-collapse=${this.onToggleCollapse}
+                    @tree-delete-item=${this.onDeleteItem}
 
                 ></todo-overlay-tree>
             `;
@@ -1170,6 +1211,8 @@ export class TodoOverlayList extends LitElement {
                             .hoverId=${this.hoverId}
                             .hoverPlacement=${this.hoverPlacement}
                             .hideCompleteForParents=${this.hideCompleteForParents}
+                            .showCheckboxes=${this.showCheckboxes}
+                            .confirmDelete=${this.confirmDelete}
                             .dragDisabled=${this.dragDisabled}
                             .collapsedIds=${this.collapsedIds}
 
@@ -1177,6 +1220,7 @@ export class TodoOverlayList extends LitElement {
                             @tree-drag-start=${this.onDragStart}
                             @tree-pointer-up=${this.onPointerUp}
                             @tree-toggle-collapse=${this.onToggleCollapse}
+                            @tree-delete-item=${this.onDeleteItem}
 
                         ></todo-overlay-tree>
                     `
@@ -1190,6 +1234,8 @@ export class TodoOverlayList extends LitElement {
                 .hoverId=${this.hoverId}
                 .hoverPlacement=${this.hoverPlacement}
                 .hideCompleteForParents=${this.hideCompleteForParents}
+                .showCheckboxes=${this.showCheckboxes}
+                .confirmDelete=${this.confirmDelete}
                 .dragDisabled=${this.dragDisabled}
                 .collapsedIds=${this.collapsedIds}
 
@@ -1197,6 +1243,7 @@ export class TodoOverlayList extends LitElement {
                 @tree-drag-start=${this.onDragStart}
                 @tree-pointer-up=${this.onPointerUp}
                 @tree-toggle-collapse=${this.onToggleCollapse}
+                @tree-delete-item=${this.onDeleteItem}
 
             ></todo-overlay-tree>
         `;

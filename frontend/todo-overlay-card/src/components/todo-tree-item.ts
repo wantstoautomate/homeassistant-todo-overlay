@@ -56,6 +56,19 @@ const BELL_ICON = html`
     </svg>
 `;
 
+const CROSS_ICON = html`
+    <svg viewBox="0 0 24 24">
+        <path d="M19,6.41L17.59,5L12,10.59L6.41,5L5,6.41L10.59,12L5,17.59L6.41,19L12,13.41L17.59,19L19,17.59L13.41,12L19,6.41Z"></path>
+    </svg>
+`;
+
+// A tap arms the delete button (turns it red, "Confirm delete"); a
+// second tap within this window actually deletes. Not clicking again
+// before it elapses quietly disarms it - the same "brief confirm window"
+// idea as the item dialog's own confirm-delete step, just without a
+// second button competing for the same tight row width.
+const DELETE_CONFIRM_WINDOW_MS = 3000;
+
 function formatDue(item: TodoItem): {label: string; overdue: boolean} | undefined {
     const raw = item.due_datetime ?? (item.due_date ? `${item.due_date}T00:00:00` : null);
 
@@ -361,6 +374,49 @@ export class TodoTreeItem extends LitElement {
             white-space: nowrap;
         }
 
+        /* Only ever shown on a leaf row (see hasChildren in the
+           template) - a group header is deleted via its own edit
+           dialog, same as before, since removing a whole subtree in one
+           tap is a much bigger action than removing a single item. */
+        .delete-button {
+            flex-shrink: 0;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            width: 24px;
+            height: 24px;
+            margin-inline-end: -4px;
+            border: none;
+            background: none;
+            padding: 0;
+            border-radius: 50%;
+            cursor: pointer;
+            color: var(--secondary-text-color);
+            opacity: 0.5;
+            transition: opacity 0.15s ease, background-color 0.15s ease, color 0.15s ease;
+        }
+
+        .row:hover .delete-button {
+            opacity: 1;
+        }
+
+        .delete-button svg {
+            width: 16px;
+            height: 16px;
+            fill: currentColor;
+        }
+
+        /* Armed by a first tap - a second tap within
+           DELETE_CONFIRM_WINDOW_MS actually deletes, otherwise it quietly
+           disarms itself. Red + a filled background makes that state
+           change unmistakable even on a small screen, since there's no
+           room in the row for a second "are you sure" button. */
+        .delete-button.confirming {
+            opacity: 1;
+            color: var(--error-color);
+            background: rgba(var(--rgb-error-color, 219, 68, 55), 0.15);
+        }
+
         .hold-ripple {
             position: absolute;
             width: ${holdRippleSizePx};
@@ -395,6 +451,18 @@ export class TodoTreeItem extends LitElement {
     @property({attribute: false})
     hideCompleteForParents = false;
 
+    // Off by default: most users complete an item by tapping the row
+    // itself (see todo-overlay-list.ts's onPointerUp - the checkbox has
+    // pointer-events:none and was never the actual tap target), so the
+    // checkbox glyph is purely a visual affordance, not a required one.
+    // Purely visual: turning this off never changes what a tap on the
+    // row does, only whether the little checkbox renders.
+    @property({attribute: false})
+    showCheckboxes = false;
+
+    @property({attribute: false})
+    confirmDelete = true;
+
     // When a sort mode other than "manual" is active, drag-to-reorder
     // would be actively misleading - the position it visually ends up in
     // has nothing to do with where it was dropped, since sort order
@@ -417,11 +485,15 @@ export class TodoTreeItem extends LitElement {
     @state()
     private dragEngaged = false;
 
+    @state()
+    private confirmingDelete = false;
+
     private pointerDownAt = 0;
     private pointerDownScreenPos?: {x: number; y: number};
     private hasMoved = false;
     private holdTimer?: number;
     private clickTimer?: number;
+    private deleteConfirmTimer?: number;
     // Mouse users have no reason to wait out the hold timer before a drag
     // picks up - there's no competing "swipe to scroll" gesture to protect
     // against, unlike touch, where a quick swipe must be left alone (see
@@ -451,6 +523,10 @@ export class TodoTreeItem extends LitElement {
     // edit dialog instead (see todo-overlay.ts's onPointerUp and
     // todo-item-dialog.ts's complete toggle).
     private get checkboxHidden(): boolean {
+        if (!this.showCheckboxes) {
+            return true;
+        }
+
         return this.hideCompleteForParents && this.item.children.length > 0;
     }
 
@@ -478,6 +554,30 @@ export class TodoTreeItem extends LitElement {
 
         this.dispatchEvent(
             new CustomEvent("tree-toggle-collapse", {
+                detail: {id: this.item.id},
+                bubbles: true,
+                composed: true,
+            }),
+        );
+    }
+
+    private onDeleteClick(e: Event) {
+        e.stopPropagation();
+
+        window.clearTimeout(this.deleteConfirmTimer);
+
+        if (this.confirmDelete && !this.confirmingDelete) {
+            this.confirmingDelete = true;
+            this.deleteConfirmTimer = window.setTimeout(() => {
+                this.confirmingDelete = false;
+            }, DELETE_CONFIRM_WINDOW_MS);
+            return;
+        }
+
+        this.confirmingDelete = false;
+
+        this.dispatchEvent(
+            new CustomEvent("tree-delete-item", {
                 detail: {id: this.item.id},
                 bubbles: true,
                 composed: true,
@@ -775,6 +875,25 @@ export class TodoTreeItem extends LitElement {
                                 </div>
 
                                 ${
+                                    this.hasChildren
+                                        ? ""
+                                        : html`
+                                            <button
+                                                class=${classMap({
+                                                    "delete-button": true,
+                                                    confirming: this.confirmingDelete,
+                                                })}
+                                                aria-label=${this.confirmingDelete ? "Confirm delete" : "Delete"}
+                                                @click=${this.onDeleteClick}
+                                                @dblclick=${(e: Event) => e.stopPropagation()}
+                                                @pointerdown=${(e: Event) => e.stopPropagation()}
+                                            >
+                                                ${CROSS_ICON}
+                                            </button>
+                                        `
+                                }
+
+                                ${
                                     this.holdRippleOrigin
                                         ? html`
                                             <div
@@ -803,6 +922,8 @@ export class TodoTreeItem extends LitElement {
                                             .hoverId=${this.hoverId}
                                             .hoverPlacement=${this.hoverPlacement}
                                             .hideCompleteForParents=${this.hideCompleteForParents}
+                                            .showCheckboxes=${this.showCheckboxes}
+                                            .confirmDelete=${this.confirmDelete}
                                             .dragDisabled=${this.dragDisabled}
                                             .collapsedIds=${this.collapsedIds}
                                         ></todo-overlay-tree-item>

@@ -3,6 +3,30 @@
 All notable changes to this project are documented here. Versions follow the
 integration's `manifest.json`/card's `package.json` (kept in lockstep).
 
+## 0.12.2
+
+- Checkboxes are now an optional, off-by-default row element (`show_checkboxes`
+  in the card config). Tapping a row still completes it exactly as before -
+  the checkbox was always a visual affordance layered on top of that, never
+  the actual tap target (it has `pointer-events: none`), so hiding it changes
+  nothing about how completion works.
+- Added a delete (✕) button to the right side of every leaf row, as a
+  quicker path to removing a single item than opening its edit dialog. A
+  first tap arms it (turns red); a second tap within 3 seconds confirms the
+  delete, honoring the same `confirm_delete` setting as the dialog's own
+  Delete button. Not shown on parent rows - deleting a whole subtree still
+  goes through the edit dialog.
+- Diagnosed a report that the edit dialog's Delete button "did nothing":
+  added an end-to-end regression test driving the exact flow (long-press to
+  open the dialog, click Delete, confirm) and confirmed the underlying logic
+  and service call are correct. Hardened the confirm-delete row's CSS to
+  wrap onto its own line on a narrow (phone) dialog instead of risking the
+  Cancel/Delete buttons being pushed off-screen, the most likely real-world
+  cause.
+- Collapsed/expanded group state now persists per entity in `localStorage`,
+  so a page reload - notably a phone browser's connection dropping and the
+  dashboard reloading - no longer resets every group back to expanded.
+
 ## 0.12.1
 
 Follow-up polish on the card row layout, reported live right after 0.12.0:
