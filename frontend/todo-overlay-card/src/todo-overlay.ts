@@ -83,14 +83,6 @@ export class TodoOverlayCard extends LitElement {
         .entity-section + .entity-section {
             border-top: 1px solid var(--divider-color);
         }
-
-        .entity-header {
-            padding: 16px 20px 4px;
-            font-family: Roboto, "Noto Sans", sans-serif;
-            font-size: 16px;
-            font-weight: 500;
-            color: var(--primary-text-color);
-        }
     `;
 
     @property({attribute: false})
@@ -151,22 +143,26 @@ export class TodoOverlayCard extends LitElement {
 
         const isMulti = entityIds.length > 1;
 
-        const header = isMulti
-            ? this.config.title
-            : (this.config.title ?? "Todo Overlay");
+        // In multi-entity mode the card-level header is optional (there's
+        // no default - the per-entity titles below already label each
+        // list). In single-entity mode there's always a title, but it's
+        // rendered by todo-overlay-list itself, merged into the same row
+        // as its own +/icons toolbar, rather than via ha-card's separate
+        // header slot - that's what keeps a list's title and its toolbar
+        // on one visual line instead of stacked.
+        const cardHeader = isMulti ? this.config.title : undefined;
+
+        const entityTitle = (entityId: string) =>
+            isMulti ? friendlyName(this.hass, entityId) : (this.config.title ?? "Todo Overlay");
 
         return html`
-            <ha-card header=${header || nothing}>
+            <ha-card header=${cardHeader || nothing}>
                 ${entityIds.map(entityId => html`
                     <div class="entity-section">
-                        ${
-                            isMulti
-                                ? html`<div class="entity-header">${friendlyName(this.hass, entityId)}</div>`
-                                : ""
-                        }
                         <todo-overlay-list
                             .hass=${this.hass}
                             .entity=${entityId}
+                            .headerTitle=${entityTitle(entityId)}
                             .hideCompleteForParents=${this.config.hide_complete_for_parents ?? true}
                             .showCheckboxes=${this.config.show_checkboxes ?? false}
                             .sortBy=${this.config.sort_by ?? "manual"}

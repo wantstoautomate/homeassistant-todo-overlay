@@ -183,6 +183,45 @@ async def test_manager_move_item_before_reorders_siblings():
 
 
 @pytest.mark.asyncio
+async def test_manager_move_item_reparents_root_but_leaves_children_attached():
+    """Repositioning a parent (e.g. promoting a nested parent to the root
+    level, or reordering it among its own top-level siblings) only ever
+    rewrites that one item's own position - never its children's - so the
+    whole subtree relocates as a unit, the same outcome a file manager's
+    cut/paste gives you for a folder and everything inside it."""
+
+    adapter = FakeAdapter(items=[
+        TodoItem(id="1", title="Groceries", completed=False),
+        TodoItem(id="2", title="Milk", completed=False),
+        TodoItem(id="3", title="Eggs", completed=False),
+        TodoItem(id="4", title="Chores", completed=False),
+    ])
+
+    metadata_store = FakeMetadataStore({
+        "1": ItemPosition(parent_id=None, order=0),
+        "2": ItemPosition(parent_id="1", order=0),
+        "3": ItemPosition(parent_id="1", order=1),
+        "4": ItemPosition(parent_id=None, order=1),
+    })
+
+    manager = TodoManager(adapter=adapter, metadata_store=metadata_store)
+
+    # Move "Groceries" (a parent with two children) to after "Chores".
+    await manager.move_item(
+        entity_id="todo.shopping",
+        child_id="1",
+        reference_id="4",
+        placement="after",
+    )
+
+    todo_list = await manager.get_list("todo.shopping")
+
+    assert [item.id for item in todo_list.items] == ["4", "1"]
+    groceries = next(item for item in todo_list.items if item.id == "1")
+    assert [child.id for child in groceries.children] == ["2", "3"]
+
+
+@pytest.mark.asyncio
 async def test_manager_set_completed_cascades_to_descendants():
 
     adapter = FakeAdapter(items=[
@@ -1743,3 +1782,67 @@ async def test_manager_transfer_item_places_root_before_reference_sibling():
 
     target_list = await manager.get_list("todo.chores")
     assert [item.id for item in target_list.items] == ["a", new_id, "b"]
+
+
+@pytest.mark.asyncio
+async def test_manager_transfer_item_into_a_wholly_empty_target_entity():
+    """Live-reported bug: dragging an item into a completely empty list
+    (e.g. a fresh Shopping List with nothing on it yet) silently didn't
+    work. There's no existing item on an empty target to position
+    relative to, so reference_id is None in that case - the transferred
+    subtree just becomes the target's first root-level item."""
+
+    adapter = FakeMultiEntityAdapter({
+        "todo.shopping": [
+            TodoItem(id="parent", title="Groceries", completed=False),
+            TodoItem(id="child", title="Milk", completed=False),
+        ],
+        "todo.chores": [],
+    })
+    metadata_store = FakeMultiEntityMetadataStore({
+        "todo.shopping": {
+            "parent": ItemPosition(parent_id=None, order=0),
+            "child": ItemPosition(parent_id="parent", order=0),
+        },
+        "todo.chores": {},
+    })
+    manager = TodoManager(adapter=adapter, metadata_store=metadata_store)
+
+    new_root_id = await manager.transfer_item(
+        source_entity_id="todo.shopping",
+        item_id="parent",
+        target_entity_id="todo.chores",
+        reference_id=None,
+        placement="inside",
+    )
+
+    target_list = await manager.get_list("todo.chores")
+    assert [item.id for item in target_list.items] == [new_root_id]
+    assert target_list.items[0].title == "Groceries"
+    assert len(target_list.items[0].children) == 1
+    assert target_list.items[0].children[0].title == "Milk"
+
+    source_list = await manager.get_list("todo.shopping")
+    assert source_list.items == []
+
+
+@pytest.mark.asyncio
+async def test_manager_transfer_item_same_entity_with_no_reference_id_raises():
+    """reference_id is only ever None for a genuine cross-entity transfer
+    into an empty target - can't happen from the real frontend for a
+    same-entity move (the dragged item already lives there, so that
+    entity can't be empty), but this documents/enforces the invariant
+    rather than letting it silently misbehave if ever called this way."""
+
+    adapter = FakeAdapter(items=[TodoItem(id="1", title="Milk", completed=False)])
+    metadata_store = FakeMetadataStore({"1": ItemPosition(parent_id=None, order=0)})
+    manager = TodoManager(adapter=adapter, metadata_store=metadata_store)
+
+    with pytest.raises(ItemNotFoundError):
+        await manager.transfer_item(
+            source_entity_id="todo.shopping",
+            item_id="1",
+            target_entity_id="todo.shopping",
+            reference_id=None,
+            placement="inside",
+        )

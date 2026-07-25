@@ -256,6 +256,61 @@ describe("todo-overlay-list toolbar visibility", () => {
     });
 });
 
+describe("todo-overlay-list header row (title level with the toolbar)", () => {
+    it("renders the title and the toolbar as siblings inside one header row", async () => {
+        const {el} = await renderList(
+            {entity_id: ENTITY_ID, items: []},
+            {headerTitle: "Groceries", showQuickAdd: true, showSaveLoadButtons: true},
+        );
+
+        const row = el.shadowRoot?.querySelector(".list-header-row");
+        expect(row).not.toBeNull();
+
+        const title = row?.querySelector(".list-title");
+        expect(title?.textContent).toBe("Groceries");
+
+        const toolbar = row?.querySelector(".toolbar");
+        expect(toolbar).not.toBeNull();
+
+        // Both are direct children of the same row, i.e. genuinely on one
+        // line together rather than the toolbar being nested under the
+        // title or living in some other ancestor.
+        expect(title?.parentElement).toBe(row);
+        expect(toolbar?.parentElement).toBe(row);
+    });
+
+    it("still shows the title-only row when every toolbar flag is off", async () => {
+        const {el} = await renderList(
+            {entity_id: ENTITY_ID, items: []},
+            {
+                headerTitle: "Groceries",
+                showQuickAdd: false,
+                showFilterMenu: false,
+                showSaveLoadButtons: false,
+                showClearButton: false,
+            },
+        );
+
+        expect(el.shadowRoot?.querySelector(".list-title")?.textContent).toBe("Groceries");
+        expect(el.shadowRoot?.querySelector(".toolbar")).toBeNull();
+    });
+
+    it("renders no header row at all when there's no title and no toolbar", async () => {
+        const {el} = await renderList(
+            {entity_id: ENTITY_ID, items: []},
+            {
+                headerTitle: undefined,
+                showQuickAdd: false,
+                showFilterMenu: false,
+                showSaveLoadButtons: false,
+                showClearButton: false,
+            },
+        );
+
+        expect(el.shadowRoot?.querySelector(".list-header-row")).toBeNull();
+    });
+});
+
 describe("todo-overlay-list quick add", () => {
     it("expands the quick-add row when the plus icon is clicked", async () => {
         const {el} = await renderList({entity_id: ENTITY_ID, items: []}, {showQuickAdd: true});
@@ -376,6 +431,140 @@ describe("todo-overlay-list cross-entity drag", () => {
         expect(hassA.connection.sent.some(m => m.type === "todo_overlay/move_item")).toBe(false);
     });
 
+    // Live-reported bug: dragging an item into a completely empty list
+    // (e.g. a fresh Shopping List with nothing on it yet) silently did
+    // nothing - there was no existing row anywhere in that section for
+    // the card's own hit-testing to land on, so it could never resolve
+    // as a valid drop target at all.
+    it("calls transferItem with no reference_id when dropped on an empty target list's own placeholder", async () => {
+        const hassA = makeFakeHass({
+            "todo.a": {state: "0", last_updated: "2026-01-01T00:00:00Z", attributes: {supported_features: 127}},
+        });
+        hassA.connection.responses["todo_overlay/get_list"] = {
+            entity_id: "todo.a",
+            items: [makeItem({id: "1", title: "Milk"})],
+        };
+
+        const hassB = makeFakeHass({
+            "todo.b": {state: "0", last_updated: "2026-01-01T00:00:00Z", attributes: {supported_features: 127}},
+        });
+        hassB.connection.responses["todo_overlay/get_list"] = {
+            entity_id: "todo.b",
+            items: [],
+        };
+
+        const elA = document.createElement("todo-overlay-list") as TodoOverlayList;
+        elA.entity = "todo.a";
+        elA.hass = hassA;
+        document.body.appendChild(elA);
+
+        const elB = document.createElement("todo-overlay-list") as TodoOverlayList;
+        elB.entity = "todo.b";
+        elB.hass = hassB;
+        document.body.appendChild(elB);
+
+        await settle(elA);
+        await settle(elB);
+
+        const rowA = deepQueryAll(elA.shadowRoot!, "todo-overlay-tree-item")[0] as Element & {shadowRoot: ShadowRoot};
+        const emptyZoneB = deepQueryAll(elB.shadowRoot!, "[data-empty-drop-zone]")[0] as HTMLElement;
+        expect(emptyZoneB, "list B should render its empty-state placeholder").toBeDefined();
+
+        mockRect(rowA.shadowRoot.querySelector(".row")!, {top: 0, bottom: 40, height: 40});
+        mockRect(emptyZoneB, {top: 100, bottom: 140, height: 40});
+
+        const draggableA = elA as unknown as DraggableList;
+
+        draggableA.draggedId = "1";
+        draggableA.onDragStart(new CustomEvent("tree-drag-start", {
+            detail: {rect: undefined, pointerX: 0, pointerY: 0, grabOffsetX: 0, grabOffsetY: 0},
+        }));
+
+        draggableA.onGlobalPointerMove(new PointerEvent("pointermove", {clientY: 120}));
+        await draggableA.onGlobalPointerUp();
+
+        expect(hassA.connection.sent).toContainEqual(expect.objectContaining({
+            type: "todo_overlay/transfer_item",
+            source_entity_id: "todo.a",
+            item_id: "1",
+            target_entity_id: "todo.b",
+            reference_id: undefined,
+        }));
+    });
+
+    // Real-browser-caught bug: draggedId/hoverId/hoverEntityId are only
+    // ever populated on the ONE instance a drag actually started from -
+    // an empty list's own placeholder belongs to a DIFFERENT instance
+    // (the entity being dragged FROM can't simultaneously be empty), so
+    // without cross-instance broadcasting, that placeholder could never
+    // find out it was the current hover target at all. The transfer
+    // itself already worked regardless (previous test) - this is
+    // specifically about the "Drop here" highlight actually appearing.
+    it("highlights list B's own empty placeholder while list A's drag hovers it, and clears it after drop", async () => {
+        const hassA = makeFakeHass({
+            "todo.a": {state: "0", last_updated: "2026-01-01T00:00:00Z", attributes: {supported_features: 127}},
+        });
+        hassA.connection.responses["todo_overlay/get_list"] = {
+            entity_id: "todo.a",
+            items: [makeItem({id: "1", title: "Milk"})],
+        };
+
+        const hassB = makeFakeHass({
+            "todo.b": {state: "0", last_updated: "2026-01-01T00:00:00Z", attributes: {supported_features: 127}},
+        });
+        hassB.connection.responses["todo_overlay/get_list"] = {
+            entity_id: "todo.b",
+            items: [],
+        };
+
+        const elA = document.createElement("todo-overlay-list") as TodoOverlayList;
+        elA.entity = "todo.a";
+        elA.hass = hassA;
+        document.body.appendChild(elA);
+
+        const elB = document.createElement("todo-overlay-list") as TodoOverlayList;
+        elB.entity = "todo.b";
+        elB.hass = hassB;
+        document.body.appendChild(elB);
+
+        await settle(elA);
+        await settle(elB);
+
+        const rowA = deepQueryAll(elA.shadowRoot!, "todo-overlay-tree-item")[0] as Element & {shadowRoot: ShadowRoot};
+        const emptyZoneB = deepQueryAll(elB.shadowRoot!, "[data-empty-drop-zone]")[0] as HTMLElement;
+
+        expect(emptyZoneB.classList.contains("drop-target")).toBe(false);
+        expect(emptyZoneB.textContent?.trim()).toBe("No items");
+
+        mockRect(rowA.shadowRoot.querySelector(".row")!, {top: 0, bottom: 40, height: 40});
+        mockRect(emptyZoneB, {top: 100, bottom: 140, height: 40});
+
+        const draggableA = elA as unknown as DraggableList;
+
+        draggableA.draggedId = "1";
+        draggableA.onDragStart(new CustomEvent("tree-drag-start", {
+            detail: {rect: undefined, pointerX: 0, pointerY: 0, grabOffsetX: 0, grabOffsetY: 0},
+        }));
+
+        draggableA.onGlobalPointerMove(new PointerEvent("pointermove", {clientY: 120}));
+        await elB.updateComplete;
+
+        const emptyZoneBAfterHover = deepQueryAll(elB.shadowRoot!, "[data-empty-drop-zone]")[0] as HTMLElement;
+        expect(emptyZoneBAfterHover.classList.contains("drop-target")).toBe(true);
+        expect(emptyZoneBAfterHover.textContent?.trim()).toBe("Drop here");
+
+        await draggableA.onGlobalPointerUp();
+        await elB.updateComplete;
+
+        // The drag has ended - the placeholder must not stay highlighted
+        // forever (list B's own mocked hass never reloads its item list
+        // here, so the placeholder itself is still present; what matters
+        // is that it's no longer marked as the active drop target).
+        const emptyZoneBAfterDrop = deepQueryAll(elB.shadowRoot!, "[data-empty-drop-zone]")[0] as HTMLElement;
+        expect(emptyZoneBAfterDrop.classList.contains("drop-target")).toBe(false);
+        expect(emptyZoneBAfterDrop.textContent?.trim()).toBe("No items");
+    });
+
     it("calls moveItem (not transferItem) when dropped on a row belonging to the same entity", async () => {
         const hassA = makeFakeHass({
             "todo.a": {state: "0", last_updated: "2026-01-01T00:00:00Z", attributes: {supported_features: 127}},
@@ -415,6 +604,92 @@ describe("todo-overlay-list cross-entity drag", () => {
             child_id: "1",
         }));
         expect(hassA.connection.sent.some(m => m.type === "todo_overlay/transfer_item")).toBe(false);
+    });
+});
+
+// Dragging a parent item never hides its children (see todo-tree-item.ts -
+// only the dragged row's own content collapses, its child <ul> keeps
+// rendering exactly where it always did). Reproduced the reported "move a
+// parent to the top level" crash: with the parent as the topmost item,
+// pulling it further up leaves its own first child as the nearest rendered
+// row - the backend then rejects reparenting it under its own child as a
+// cycle, and (before the render() fix in the same change) that error used
+// to blank out the whole list until a manual page refresh.
+describe("todo-overlay-list dragging a parent never targets its own descendants", () => {
+    it("skips a dragged parent's own child row when it's the nearest one, landing on the next real sibling instead", async () => {
+        const {el, hass} = await renderList({
+            entity_id: ENTITY_ID,
+            items: [
+                makeItem({
+                    id: "parent", title: "Groceries",
+                    children: [makeItem({id: "child", title: "Milk"})],
+                }),
+                makeItem({id: "other", title: "Chores"}),
+            ],
+        });
+
+        const rows = deepQueryAll(el.shadowRoot!, "todo-overlay-tree-item") as (Element & {shadowRoot: ShadowRoot})[];
+        // DOM order: parent, its child (nested), then the sibling.
+        mockRect(rows[0].shadowRoot.querySelector(".row")!, {top: 0, bottom: 40, height: 40});
+        mockRect(rows[1].shadowRoot.querySelector(".row")!, {top: 40, bottom: 80, height: 40});
+        mockRect(rows[2].shadowRoot.querySelector(".row")!, {top: 80, bottom: 120, height: 40});
+
+        const draggableA = el as unknown as DraggableList;
+
+        draggableA.draggedId = "parent";
+        draggableA.onDragStart(new CustomEvent("tree-drag-start", {
+            detail: {rect: undefined, pointerX: 0, pointerY: 0, grabOffsetX: 0, grabOffsetY: 0},
+        }));
+
+        // Squarely inside the CHILD's rect (40-80) - before the fix, the
+        // child row was still a live hit-test target and would have been
+        // picked as the drop reference despite belonging to the item
+        // being dragged.
+        draggableA.onGlobalPointerMove(new PointerEvent("pointermove", {clientY: 45}));
+        await draggableA.onGlobalPointerUp();
+
+        expect(hass.connection.sent).toContainEqual(expect.objectContaining({
+            type: "todo_overlay/move_item",
+            child_id: "parent",
+            reference_id: "other",
+        }));
+        expect(hass.connection.sent.some(m => (
+            m.type === "todo_overlay/move_item" && (m as {reference_id?: string}).reference_id === "child"
+        ))).toBe(false);
+
+        // No crash, no error banner, nothing disappears.
+        expect(el.shadowRoot?.querySelector(".error-banner")).toBeNull();
+        expect(summaryTexts(el)).toEqual(["Groceries", "Milk", "Chores"]);
+    });
+
+    it("finds no drop target at all (and sends nothing) when a dragged parent has no siblings to fall back to", async () => {
+        const {el, hass} = await renderList({
+            entity_id: ENTITY_ID,
+            items: [
+                makeItem({
+                    id: "parent", title: "Groceries",
+                    children: [makeItem({id: "child", title: "Milk"})],
+                }),
+            ],
+        });
+
+        const rows = deepQueryAll(el.shadowRoot!, "todo-overlay-tree-item") as (Element & {shadowRoot: ShadowRoot})[];
+        mockRect(rows[0].shadowRoot.querySelector(".row")!, {top: 0, bottom: 10, height: 10});
+        mockRect(rows[1].shadowRoot.querySelector(".row")!, {top: 10, bottom: 50, height: 40});
+
+        const draggableA = el as unknown as DraggableList;
+
+        draggableA.draggedId = "parent";
+        draggableA.onDragStart(new CustomEvent("tree-drag-start", {
+            detail: {rect: undefined, pointerX: 0, pointerY: 0, grabOffsetX: 0, grabOffsetY: 0},
+        }));
+
+        draggableA.onGlobalPointerMove(new PointerEvent("pointermove", {clientY: 20}));
+        await draggableA.onGlobalPointerUp();
+
+        expect(hass.connection.sent.some(m => m.type === "todo_overlay/move_item")).toBe(false);
+        expect(el.shadowRoot?.querySelector(".error-banner")).toBeNull();
+        expect(summaryTexts(el)).toEqual(["Groceries", "Milk"]);
     });
 });
 
@@ -476,7 +751,8 @@ describe("todo-overlay-list error handling", () => {
         consoleError.mockRestore();
     });
 
-    it("shows the same friendly message (not the raw exception) when an action fails", async () => {
+    it("shows the same friendly message (not the raw exception) when an action fails, "
+        + "WITHOUT hiding the already-loaded list", async () => {
         const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
 
         const {el, hass} = await renderList({
@@ -496,11 +772,87 @@ describe("todo-overlay-list error handling", () => {
         await flushAsync();
         await el.updateComplete;
 
-        const errorText = el.shadowRoot?.querySelector("[style*='error-color']")?.textContent?.trim();
+        const errorText = el.shadowRoot?.querySelector(".error-banner span")?.textContent?.trim();
         expect(errorText).toBe("Something went wrong. Check the browser console for details.");
         expect(errorText).not.toContain("ValueError");
 
+        // A failed action used to make the ENTIRE render() branch on
+        // this.error and hide the list until a browser refresh - the
+        // whole point of the banner is that the items the user already
+        // sees never disappear just because one action didn't go through.
+        expect(summaryTexts(el)).toEqual(["Milk"]);
+
         consoleError.mockRestore();
+    });
+
+    it("dismisses the error banner without touching the list when its close button is clicked", async () => {
+        const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+
+        const {el, hass} = await renderList({
+            entity_id: ENTITY_ID,
+            items: [makeItem({id: "1", title: "Milk"})],
+        });
+
+        hass.connection.errors["todo_overlay/set_completed"] = new Error("boom");
+
+        const treeItem = deepQueryAll(el.shadowRoot!, "todo-overlay-tree-item")[0];
+        treeItem.dispatchEvent(new CustomEvent("tree-pointer-down", {
+            detail: {id: "1"}, bubbles: true, composed: true,
+        }));
+        treeItem.dispatchEvent(new CustomEvent("tree-pointer-up", {
+            detail: {id: "1", pressDurationMs: 100, moved: false}, bubbles: true, composed: true,
+        }));
+        await flushAsync();
+        await el.updateComplete;
+
+        expect(el.shadowRoot?.querySelector(".error-banner")).not.toBeNull();
+
+        (el.shadowRoot?.querySelector(".error-banner button") as HTMLElement).click();
+        await el.updateComplete;
+
+        expect(el.shadowRoot?.querySelector(".error-banner")).toBeNull();
+        expect(summaryTexts(el)).toEqual(["Milk"]);
+
+        consoleError.mockRestore();
+    });
+
+    it("auto-dismisses the error banner after a timeout, same as the undo snackbar", async () => {
+        const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+
+        const {el, hass} = await renderList({
+            entity_id: ENTITY_ID,
+            items: [makeItem({id: "1", title: "Milk"})],
+        });
+
+        hass.connection.errors["todo_overlay/set_completed"] = new Error("boom");
+
+        // shouldAdvanceTime keeps flushAsync's own setTimeout(0) resolving
+        // in real time (nothing else here reaches for fake timers), while
+        // still letting the assertion below fast-forward the 8s dismiss
+        // delay instead of actually waiting for it.
+        vi.useFakeTimers({shouldAdvanceTime: true});
+
+        try {
+            const treeItem = deepQueryAll(el.shadowRoot!, "todo-overlay-tree-item")[0];
+            treeItem.dispatchEvent(new CustomEvent("tree-pointer-down", {
+                detail: {id: "1"}, bubbles: true, composed: true,
+            }));
+            treeItem.dispatchEvent(new CustomEvent("tree-pointer-up", {
+                detail: {id: "1", pressDurationMs: 100, moved: false}, bubbles: true, composed: true,
+            }));
+            await flushAsync();
+            await el.updateComplete;
+
+            expect(el.shadowRoot?.querySelector(".error-banner")).not.toBeNull();
+
+            await vi.advanceTimersByTimeAsync(10_000);
+            await el.updateComplete;
+
+            expect(el.shadowRoot?.querySelector(".error-banner")).toBeNull();
+        } finally {
+            vi.useRealTimers();
+            consoleError.mockRestore();
+        }
     });
 });
 

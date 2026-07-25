@@ -58,7 +58,7 @@ class PositionMixin:
         source_entity_id: str,
         item_id: str,
         target_entity_id: str,
-        reference_id: str,
+        reference_id: str | None,
         placement: Placement,
     ) -> str:
         """Move an item (and its whole subtree) from one todo.* entity to
@@ -74,10 +74,24 @@ class PositionMixin:
         item from the source without a working replacement on the
         target.
 
+        reference_id may be None when the target entity has no items at
+        all to position relative to (dragging into a wholly empty list) -
+        the transferred subtree's root then simply becomes the target's
+        first root-level item, regardless of `placement`.
+
         Returns the transferred root item's new id on the target entity.
         """
 
         if source_entity_id == target_entity_id:
+            if reference_id is None:
+                # Can't actually happen from the frontend - the dragged
+                # item already lives in this entity, so it can't be
+                # empty - but a public method shouldn't silently misbehave
+                # if called this way regardless.
+                raise ItemNotFoundError(
+                    f"reference_id is required for a same-entity move on {source_entity_id}"
+                )
+
             await self.move_item(source_entity_id, item_id, reference_id, placement)
             return item_id
 
@@ -98,7 +112,7 @@ class PositionMixin:
         source_entity_id: str,
         item_id: str,
         target_entity_id: str,
-        reference_id: str,
+        reference_id: str | None,
         placement: Placement,
     ) -> str:
         source_items = await self._adapter.get_items(source_entity_id)
@@ -192,13 +206,20 @@ class PositionMixin:
         target_items = await self._adapter.get_items(target_entity_id)
         target_positions = await self._metadata_store.get_relationships(target_entity_id)
 
-        reference_position = target_positions.get(reference_id)
-        reference_parent_id = reference_position.parent_id if reference_position else None
-        new_parent_id = reference_id if placement == "inside" else reference_parent_id
+        if reference_id is None:
+            # Nothing to position relative to (the target had no items at
+            # all) - the transferred root just becomes a new root-level
+            # item, last among whatever else is already at that level
+            # (normally nothing, since this is the empty-target case).
+            new_parent_id = None
+        else:
+            reference_position = target_positions.get(reference_id)
+            reference_parent_id = reference_position.parent_id if reference_position else None
+            new_parent_id = reference_id if placement == "inside" else reference_parent_id
 
         siblings = self._siblings(target_items, target_positions, new_parent_id, exclude=new_root_id)
 
-        if placement == "inside":
+        if reference_id is None or placement == "inside":
             siblings.append(new_root_id)
         else:
             reference_index = siblings.index(reference_id)

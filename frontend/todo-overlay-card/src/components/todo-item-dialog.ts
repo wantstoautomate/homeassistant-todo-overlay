@@ -1,5 +1,27 @@
 import {LitElement, html, css} from "lit";
 import {customElement, property, state} from "lit/decorators.js";
+import {classMap} from "lit/directives/class-map.js";
+
+const CALENDAR_ICON = html`
+    <svg viewBox="0 0 24 24">
+        <path d="M19,19H5V8H19M16,1V3H8V1H6V3H5C3.89,3 3,3.89 3,5V19A2,2 0 0,0 5,21H19A2,2 0 0,0 21,19V5C21,3.89 20.1,3 19,3H18V1M17,12H12V17H17V12Z"></path>
+    </svg>
+`;
+
+const MONTH_NAMES = [
+    "January", "February", "March", "April", "May", "June",
+    "July", "August", "September", "October", "November", "December",
+];
+
+const WEEKDAY_LABELS = ["S", "M", "T", "W", "T", "F", "S"];
+
+function daysInMonth(year: number, month0: number): number {
+    return new Date(year, month0 + 1, 0).getDate();
+}
+
+function firstWeekdayOfMonth(year: number, month0: number): number {
+    return new Date(year, month0, 1).getDay();
+}
 
 export interface TodoItemFormValue {
     title: string;
@@ -26,6 +48,13 @@ export const EMPTY_FORM_VALUE: TodoItemFormValue = {
     dueTime: "",
     triggerOnDue: false,
 };
+
+// Digits only, capped to maxLen - shared by every day/month/year/hour/
+// minute segment input below, so a paste ("05/03/2026") or a stray
+// non-numeric character can't end up baked into the field.
+function digitsOnly(raw: string, maxLen: number): string {
+    return raw.replace(/\D/g, "").slice(0, maxLen);
+}
 
 // The dialog only knows about the fields above today. Extending it for a
 // new data field later means: add it to TodoItemFormValue and
@@ -102,8 +131,6 @@ export class TodoItemDialog extends LitElement {
             border-bottom: 1px solid var(--divider-color);
             padding: 8px 0;
             outline: none;
-            /* Without this, the native calendar/clock picker icons render
-               black-on-transparent and vanish against a dark theme. */
             color-scheme: light dark;
         }
 
@@ -111,6 +138,141 @@ export class TodoItemDialog extends LitElement {
         textarea:focus {
             border-bottom: 2px solid var(--primary-color);
             padding-bottom: 7px;
+        }
+
+        /* Day/month/year and hour/minute, always in that fixed order
+           regardless of browser or OS locale - see the .dueDay field's
+           own doc comment for why this isn't a single native
+           <input type="date">/<input type="time"> or ha-date-input/
+           ha-time-input. */
+        .dmy-row,
+        .hm-row {
+            display: flex;
+            align-items: baseline;
+            gap: 4px;
+        }
+
+        input.segment {
+            width: 2.2em;
+            flex: none;
+            text-align: center;
+            /* Hides the native up/down spinner some browsers add to a
+               numeric-inputmode text field - these segments are typed
+               into, not incremented. */
+            -moz-appearance: textfield;
+        }
+
+        input.segment.year {
+            width: 3.6em;
+        }
+
+        .segment-sep {
+            color: var(--secondary-text-color);
+            font-size: 16px;
+        }
+
+        .ampm-select {
+            margin-inline-start: 4px;
+            font-family: inherit;
+            font-size: 14px;
+            font-weight: 500;
+            color: var(--primary-text-color);
+            background: none;
+            border: none;
+            border-bottom: 1px solid var(--divider-color);
+            padding: 8px 2px;
+            outline: none;
+        }
+
+        .calendar-toggle {
+            flex: none;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            width: 28px;
+            height: 28px;
+            margin-inline-start: 4px;
+            border: none;
+            border-radius: 50%;
+            background: none;
+            padding: 0;
+            color: var(--secondary-text-color);
+            cursor: pointer;
+        }
+
+        .calendar-toggle:hover {
+            background: rgba(var(--rgb-primary-text-color, 0, 0, 0), 0.06);
+        }
+
+        .calendar-toggle svg {
+            width: 18px;
+            height: 18px;
+            fill: currentColor;
+        }
+
+        .date-picker-panel {
+            margin: 0 0 16px;
+            padding: 12px;
+            border: 1px solid var(--divider-color);
+            border-radius: 8px;
+            font-family: Roboto, "Noto Sans", sans-serif;
+        }
+
+        .date-picker-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 8px;
+            font-size: 14px;
+            font-weight: 500;
+            color: var(--primary-text-color);
+        }
+
+        .date-picker-nav {
+            border: none;
+            background: none;
+            padding: 4px 10px;
+            border-radius: 4px;
+            font-size: 16px;
+            color: var(--secondary-text-color);
+            cursor: pointer;
+        }
+
+        .date-picker-nav:hover {
+            background: rgba(var(--rgb-primary-text-color, 0, 0, 0), 0.06);
+        }
+
+        .date-picker-grid {
+            display: grid;
+            grid-template-columns: repeat(7, 1fr);
+            gap: 2px;
+        }
+
+        .date-picker-weekday {
+            text-align: center;
+            font-size: 11px;
+            color: var(--secondary-text-color);
+            padding: 4px 0;
+        }
+
+        .date-picker-day {
+            border: none;
+            background: none;
+            font-family: inherit;
+            font-size: 13px;
+            color: var(--primary-text-color);
+            padding: 6px 0;
+            border-radius: 50%;
+            cursor: pointer;
+        }
+
+        .date-picker-day:hover {
+            background: rgba(var(--rgb-primary-text-color, 0, 0, 0), 0.08);
+        }
+
+        .date-picker-day.selected {
+            background: var(--primary-color);
+            color: var(--text-primary-color, #fff);
         }
 
         textarea {
@@ -213,6 +375,128 @@ export class TodoItemDialog extends LitElement {
     @state()
     private confirmingDelete = false;
 
+    // Day/month/year and hour/minute are edited as separate segments (see
+    // render()'s .dmy-row/.hm-row) rather than a single native
+    // <input type="date">/<input type="time"> - a native date input's
+    // displayed order/format follows the browser's own locale (confirmed
+    // live: even an explicit lang="en-GB" on the element didn't change
+    // Chrome's rendered mm/dd/yyyy), and Home Assistant's own themed
+    // ha-date-input/ha-time-input aren't reliably loaded in a third-party
+    // card's context (confirmed live: customElements.get('ha-date-input')
+    // was false on a fresh dashboard load, leaving the fields invisible
+    // and uneditable). Plain digit segments in a fixed day-month-year
+    // order sidestep both problems entirely - nothing here depends on
+    // what the browser or Home Assistant happen to have loaded.
+    //
+    // Kept as local state (not derived from `value` on every render) so
+    // a partially-typed date/time isn't wiped out mid-entry - see
+    // willUpdate(), which seeds these from `value` exactly once.
+    @state()
+    private dueDay = "";
+
+    @state()
+    private dueMonth = "";
+
+    @state()
+    private dueYear = "";
+
+    // 12-hour clock + AM/PM, matching how due times are actually read
+    // aloud/entered day to day - dueHour12 holds "1".."12" as typed;
+    // converted to/from the 24-hour "HH:MM" that TodoItemFormValue.dueTime
+    // and the rest of the save pipeline (todo-overlay-list.ts's
+    // dueDatetime string) expect - see syncDueTime()/willUpdate().
+    @state()
+    private dueHour12 = "";
+
+    @state()
+    private dueMinute = "";
+
+    @state()
+    private dueAmPm: "AM" | "PM" = "AM";
+
+    private dateTimePartsInitialized = false;
+
+    // The day/month/year segments are always the source of truth for
+    // what's SELECTED - this panel is purely an alternate, visual way to
+    // fill them in (a calendar to click through rather than digits to
+    // type), so it never holds its own copy of the chosen date. It does
+    // need its own "which month is currently being browsed" state,
+    // though, since that's allowed to differ from the selected date
+    // while navigating (e.g. paging forward to pick a date next month).
+    @state()
+    private datePickerOpen = false;
+
+    @state()
+    private datePickerViewYear = 0;
+
+    @state()
+    private datePickerViewMonth = 0;
+
+    private openDatePicker() {
+        const now = new Date();
+        this.datePickerViewYear = this.dueYear.length === 4 ? Number(this.dueYear) : now.getFullYear();
+        this.datePickerViewMonth = this.dueMonth ? Number(this.dueMonth) - 1 : now.getMonth();
+        this.datePickerOpen = true;
+    }
+
+    private toggleDatePicker() {
+        if (this.datePickerOpen) {
+            this.datePickerOpen = false;
+        } else {
+            this.openDatePicker();
+        }
+    }
+
+    private shiftDatePickerMonth(delta: number) {
+        let month = this.datePickerViewMonth + delta;
+        let year = this.datePickerViewYear;
+
+        if (month < 0) {
+            month = 11;
+            year -= 1;
+        } else if (month > 11) {
+            month = 0;
+            year += 1;
+        }
+
+        this.datePickerViewMonth = month;
+        this.datePickerViewYear = year;
+    }
+
+    private pickDate(day: number) {
+        this.dueDay = String(day).padStart(2, "0");
+        this.dueMonth = String(this.datePickerViewMonth + 1).padStart(2, "0");
+        this.dueYear = String(this.datePickerViewYear);
+        this.syncDueDate();
+        this.datePickerOpen = false;
+    }
+
+    protected willUpdate(changed: Map<string, unknown>): void {
+        if (!changed.has("value") || this.dateTimePartsInitialized) {
+            return;
+        }
+
+        this.dateTimePartsInitialized = true;
+
+        const [year, month, day] = this.value.dueDate ? this.value.dueDate.split("-") : ["", "", ""];
+        this.dueYear = year ?? "";
+        this.dueMonth = month ?? "";
+        this.dueDay = day ?? "";
+
+        const [hour24Str, minute] = this.value.dueTime ? this.value.dueTime.split(":") : ["", ""];
+        this.dueMinute = minute ?? "";
+
+        if (hour24Str) {
+            const hour24 = Number(hour24Str);
+            const hour12 = hour24 % 12 || 12;
+            this.dueHour12 = String(hour12).padStart(2, "0");
+            this.dueAmPm = hour24 >= 12 ? "PM" : "AM";
+        } else {
+            this.dueHour12 = "";
+            this.dueAmPm = "AM";
+        }
+    }
+
     private close() {
         this.dispatchEvent(
             new CustomEvent("dialog-close", {bubbles: true, composed: true}),
@@ -256,18 +540,89 @@ export class TodoItemDialog extends LitElement {
         );
     }
 
+    // Bound to "change", not "click" - ha-checkbox wraps a native
+    // <input type="checkbox"> inside an internal <label>, and a single
+    // physical click on it fires TWO bubbling "click" events (the
+    // label's own, plus the browser's automatic forwarded click to the
+    // input it labels - standard native label/control behavior). A
+    // click-driven toggle (this.value.triggerOnDue = !this.value.
+    // triggerOnDue) silently cancelled itself out on every real click:
+    // on, then immediately back off, net no-op - confirmed live via a
+    // real (not synthetic) click, the actual bug behind "the toggle
+    // doesn't work" that a directly-dispatched synthetic click event
+    // never reproduced, since it bypasses the internal label entirely.
+    // "change" fires exactly once per genuine state transition
+    // regardless of how many internal clicks produced it, so both
+    // toggles below read the checkbox's own resulting .checked state
+    // rather than blindly flipping a local boolean.
     private toggleComplete() {
         this.dispatchEvent(
             new CustomEvent("dialog-toggle-complete", {bubbles: true, composed: true}),
         );
     }
 
-    private toggleTriggerOnDue() {
-        this.value = {...this.value, triggerOnDue: !this.value.triggerOnDue};
+    private onTriggerOnDueChanged(e: Event) {
+        const checked = (e.target as unknown as {checked: boolean}).checked;
+        this.value = {...this.value, triggerOnDue: checked};
     }
 
     private updateField(field: keyof Omit<TodoItemFormValue, "triggerOnDue">, fieldValue: string) {
         this.value = {...this.value, [field]: fieldValue};
+    }
+
+    // Combines the three segments into "YYYY-MM-DD" only once all three
+    // are actually present - a day and month with no year yet (etc.)
+    // isn't a real date, so dueDate stays empty (matching what a native
+    // date input's .value does while incomplete) rather than guessing.
+    private syncDueDate() {
+        if (this.dueDay && this.dueMonth && this.dueYear.length === 4) {
+            this.updateField(
+                "dueDate",
+                `${this.dueYear}-${this.dueMonth.padStart(2, "0")}-${this.dueDay.padStart(2, "0")}`,
+            );
+        } else {
+            this.updateField("dueDate", "");
+        }
+    }
+
+    private syncDueTime() {
+        if (this.dueHour12 && this.dueMinute) {
+            const hour12 = Number(this.dueHour12) % 12;
+            const hour24 = this.dueAmPm === "PM" ? hour12 + 12 : hour12;
+            this.updateField("dueTime", `${String(hour24).padStart(2, "0")}:${this.dueMinute.padStart(2, "0")}`);
+        } else {
+            this.updateField("dueTime", "");
+        }
+    }
+
+    private updateDueDay(raw: string) {
+        this.dueDay = digitsOnly(raw, 2);
+        this.syncDueDate();
+    }
+
+    private updateDueMonth(raw: string) {
+        this.dueMonth = digitsOnly(raw, 2);
+        this.syncDueDate();
+    }
+
+    private updateDueYear(raw: string) {
+        this.dueYear = digitsOnly(raw, 4);
+        this.syncDueDate();
+    }
+
+    private updateDueHour12(raw: string) {
+        this.dueHour12 = digitsOnly(raw, 2);
+        this.syncDueTime();
+    }
+
+    private updateDueMinute(raw: string) {
+        this.dueMinute = digitsOnly(raw, 2);
+        this.syncDueTime();
+    }
+
+    private setDueAmPm(period: "AM" | "PM") {
+        this.dueAmPm = period;
+        this.syncDueTime();
     }
 
     // Enabling "trigger on due" without a due time is meaningless - the
@@ -276,6 +631,63 @@ export class TodoItemDialog extends LitElement {
     // round-trip error.
     private get triggerOnDueBlocked(): boolean {
         return this.value.triggerOnDue && !(this.value.dueDate && this.value.dueTime);
+    }
+
+    // Rendered inline, full-width, right below .due-row - not as an
+    // absolutely-positioned floating popup. ha-dialog's own content area
+    // is externally defined and out of this component's control; an
+    // absolutely-positioned child risks being silently clipped by
+    // whatever overflow behavior that container happens to have. Pushing
+    // the rest of the dialog down instead has no such risk, at the minor
+    // cost of the dialog growing taller while the panel is open - the
+    // same tradeoff the quick-add "Details…" panel elsewhere in this
+    // card already makes.
+    private renderDatePickerPanel() {
+        const year = this.datePickerViewYear;
+        const month = this.datePickerViewMonth;
+        const leadingBlanks = firstWeekdayOfMonth(year, month);
+        const totalDays = daysInMonth(year, month);
+        const selectedDay = Number(this.dueDay) || undefined;
+        const selectedMonth = this.dueMonth ? Number(this.dueMonth) - 1 : undefined;
+        const selectedYear = this.dueYear.length === 4 ? Number(this.dueYear) : undefined;
+
+        return html`
+            <div class="date-picker-panel">
+                <div class="date-picker-header">
+                    <button
+                        type="button"
+                        class="date-picker-nav"
+                        aria-label="Previous month"
+                        @click=${() => this.shiftDatePickerMonth(-1)}
+                    >‹</button>
+                    <span>${MONTH_NAMES[month]} ${year}</span>
+                    <button
+                        type="button"
+                        class="date-picker-nav"
+                        aria-label="Next month"
+                        @click=${() => this.shiftDatePickerMonth(1)}
+                    >›</button>
+                </div>
+                <div class="date-picker-grid">
+                    ${WEEKDAY_LABELS.map(label => html`<span class="date-picker-weekday">${label}</span>`)}
+                    ${Array.from({length: leadingBlanks}, () => html`<span></span>`)}
+                    ${
+                        Array.from({length: totalDays}, (_, i) => {
+                            const day = i + 1;
+                            const isSelected = day === selectedDay && month === selectedMonth && year === selectedYear;
+
+                            return html`
+                                <button
+                                    type="button"
+                                    class=${classMap({"date-picker-day": true, selected: isSelected})}
+                                    @click=${() => this.pickDate(day)}
+                                >${day}</button>
+                            `;
+                        })
+                    }
+                </div>
+            </div>
+        `;
     }
 
     render() {
@@ -314,7 +726,7 @@ export class TodoItemDialog extends LitElement {
                             <div class="complete-toggle">
                                 <ha-checkbox
                                     .checked=${this.completed}
-                                    @click=${this.toggleComplete}
+                                    @change=${this.toggleComplete}
                                 ></ha-checkbox>
                                 <span>${this.completed ? "Completed" : "Mark complete"}</span>
                             </div>
@@ -358,39 +770,101 @@ export class TodoItemDialog extends LitElement {
                         ? html`
                             <div class="due-row">
                                 <div class="field">
-                                    <label for="todo-item-due-date">Due date</label>
-                                    <input
-                                        id="todo-item-due-date"
-                                        type="date"
-                                        .value=${this.value.dueDate}
-                                        @input=${(e: InputEvent) =>
-                                            this.updateField(
-                                                "dueDate",
-                                                (e.target as HTMLInputElement).value,
-                                            )}
-                                    />
+                                    <label id="due-date-label">Due date</label>
+                                    <div class="dmy-row" aria-labelledby="due-date-label">
+                                        <input
+                                            class="segment day"
+                                            type="text"
+                                            inputmode="numeric"
+                                            maxlength="2"
+                                            placeholder="DD"
+                                            aria-label="Day"
+                                            .value=${this.dueDay}
+                                            @input=${(e: InputEvent) =>
+                                                this.updateDueDay((e.target as HTMLInputElement).value)}
+                                        />
+                                        <span class="segment-sep">/</span>
+                                        <input
+                                            class="segment month"
+                                            type="text"
+                                            inputmode="numeric"
+                                            maxlength="2"
+                                            placeholder="MM"
+                                            aria-label="Month"
+                                            .value=${this.dueMonth}
+                                            @input=${(e: InputEvent) =>
+                                                this.updateDueMonth((e.target as HTMLInputElement).value)}
+                                        />
+                                        <span class="segment-sep">/</span>
+                                        <input
+                                            class="segment year"
+                                            type="text"
+                                            inputmode="numeric"
+                                            maxlength="4"
+                                            placeholder="YYYY"
+                                            aria-label="Year"
+                                            .value=${this.dueYear}
+                                            @input=${(e: InputEvent) =>
+                                                this.updateDueYear((e.target as HTMLInputElement).value)}
+                                        />
+                                        <button
+                                            type="button"
+                                            class="calendar-toggle"
+                                            aria-label=${this.datePickerOpen ? "Close date picker" : "Open date picker"}
+                                            @click=${this.toggleDatePicker}
+                                        >
+                                            ${CALENDAR_ICON}
+                                        </button>
+                                    </div>
                                 </div>
 
                                 ${
                                     this.fieldSupport.dueDateTime
                                         ? html`
                                             <div class="field">
-                                                <label for="todo-item-due-time">Due time</label>
-                                                <input
-                                                    id="todo-item-due-time"
-                                                    type="time"
-                                                    .value=${this.value.dueTime}
-                                                    @input=${(e: InputEvent) =>
-                                                        this.updateField(
-                                                            "dueTime",
-                                                            (e.target as HTMLInputElement).value,
-                                                        )}
-                                                />
+                                                <label id="due-time-label">Due time</label>
+                                                <div class="hm-row" aria-labelledby="due-time-label">
+                                                    <input
+                                                        class="segment hour"
+                                                        type="text"
+                                                        inputmode="numeric"
+                                                        maxlength="2"
+                                                        placeholder="HH"
+                                                        aria-label="Hour"
+                                                        .value=${this.dueHour12}
+                                                        @input=${(e: InputEvent) =>
+                                                            this.updateDueHour12((e.target as HTMLInputElement).value)}
+                                                    />
+                                                    <span class="segment-sep">:</span>
+                                                    <input
+                                                        class="segment minute"
+                                                        type="text"
+                                                        inputmode="numeric"
+                                                        maxlength="2"
+                                                        placeholder="MM"
+                                                        aria-label="Minute"
+                                                        .value=${this.dueMinute}
+                                                        @input=${(e: InputEvent) =>
+                                                            this.updateDueMinute((e.target as HTMLInputElement).value)}
+                                                    />
+                                                    <select
+                                                        class="ampm-select"
+                                                        aria-label="AM or PM"
+                                                        .value=${this.dueAmPm}
+                                                        @change=${(e: Event) =>
+                                                            this.setDueAmPm((e.target as HTMLSelectElement).value as "AM" | "PM")}
+                                                    >
+                                                        <option value="AM">AM</option>
+                                                        <option value="PM">PM</option>
+                                                    </select>
+                                                </div>
                                             </div>
                                         `
                                         : ""
                                 }
                             </div>
+
+                            ${this.datePickerOpen ? this.renderDatePickerPanel() : ""}
 
                             ${
                                 this.fieldSupport.dueDateTime
@@ -398,7 +872,7 @@ export class TodoItemDialog extends LitElement {
                                         <div class="complete-toggle">
                                             <ha-checkbox
                                                 .checked=${this.value.triggerOnDue}
-                                                @click=${this.toggleTriggerOnDue}
+                                                @change=${this.onTriggerOnDueChanged}
                                             ></ha-checkbox>
                                             <span>Trigger automation when due</span>
                                         </div>

@@ -145,7 +145,10 @@ async def websocket_move_item(
         vol.Required("source_entity_id"): cv.entity_id,
         vol.Required("item_id"): str,
         vol.Required("target_entity_id"): cv.entity_id,
-        vol.Required("reference_id"): str,
+        # Omitted (rather than required) when the target entity has no
+        # items at all to position relative to - dragging into a wholly
+        # empty list. See TodoManager.transfer_item()'s own doc comment.
+        vol.Optional("reference_id"): str,
         vol.Required("placement"): vol.In(["before", "after", "inside"]),
     }
 )
@@ -164,7 +167,7 @@ async def websocket_transfer_item(
         source_entity_id=msg["source_entity_id"],
         item_id=msg["item_id"],
         target_entity_id=msg["target_entity_id"],
-        reference_id=msg["reference_id"],
+        reference_id=msg.get("reference_id"),
         placement=msg["placement"],
     )
 

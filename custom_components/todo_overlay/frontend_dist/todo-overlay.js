@@ -896,6 +896,32 @@ function sortTree(items, sortBy, sortOrder) {
 }
 
 // src/components/todo-item-dialog.ts
+var CALENDAR_ICON = b2`
+    <svg viewBox="0 0 24 24">
+        <path d="M19,19H5V8H19M16,1V3H8V1H6V3H5C3.89,3 3,3.89 3,5V19A2,2 0 0,0 5,21H19A2,2 0 0,0 21,19V5C21,3.89 20.1,3 19,3H18V1M17,12H12V17H17V12Z"></path>
+    </svg>
+`;
+var MONTH_NAMES = [
+  "January",
+  "February",
+  "March",
+  "April",
+  "May",
+  "June",
+  "July",
+  "August",
+  "September",
+  "October",
+  "November",
+  "December"
+];
+var WEEKDAY_LABELS = ["S", "M", "T", "W", "T", "F", "S"];
+function daysInMonth(year, month0) {
+  return new Date(year, month0 + 1, 0).getDate();
+}
+function firstWeekdayOfMonth(year, month0) {
+  return new Date(year, month0, 1).getDay();
+}
 var EMPTY_FORM_VALUE = {
   title: "",
   quantity: "",
@@ -905,6 +931,9 @@ var EMPTY_FORM_VALUE = {
   dueTime: "",
   triggerOnDue: false
 };
+function digitsOnly(raw, maxLen) {
+  return raw.replace(/\D/g, "").slice(0, maxLen);
+}
 var TodoItemDialog = class extends i4 {
   constructor() {
     super(...arguments);
@@ -920,6 +949,70 @@ var TodoItemDialog = class extends i4 {
     this.completed = false;
     this.confirmDelete = true;
     this.confirmingDelete = false;
+    this.dueDay = "";
+    this.dueMonth = "";
+    this.dueYear = "";
+    this.dueHour12 = "";
+    this.dueMinute = "";
+    this.dueAmPm = "AM";
+    this.dateTimePartsInitialized = false;
+    this.datePickerOpen = false;
+    this.datePickerViewYear = 0;
+    this.datePickerViewMonth = 0;
+  }
+  openDatePicker() {
+    const now = /* @__PURE__ */ new Date();
+    this.datePickerViewYear = this.dueYear.length === 4 ? Number(this.dueYear) : now.getFullYear();
+    this.datePickerViewMonth = this.dueMonth ? Number(this.dueMonth) - 1 : now.getMonth();
+    this.datePickerOpen = true;
+  }
+  toggleDatePicker() {
+    if (this.datePickerOpen) {
+      this.datePickerOpen = false;
+    } else {
+      this.openDatePicker();
+    }
+  }
+  shiftDatePickerMonth(delta) {
+    let month = this.datePickerViewMonth + delta;
+    let year = this.datePickerViewYear;
+    if (month < 0) {
+      month = 11;
+      year -= 1;
+    } else if (month > 11) {
+      month = 0;
+      year += 1;
+    }
+    this.datePickerViewMonth = month;
+    this.datePickerViewYear = year;
+  }
+  pickDate(day) {
+    this.dueDay = String(day).padStart(2, "0");
+    this.dueMonth = String(this.datePickerViewMonth + 1).padStart(2, "0");
+    this.dueYear = String(this.datePickerViewYear);
+    this.syncDueDate();
+    this.datePickerOpen = false;
+  }
+  willUpdate(changed) {
+    if (!changed.has("value") || this.dateTimePartsInitialized) {
+      return;
+    }
+    this.dateTimePartsInitialized = true;
+    const [year, month, day] = this.value.dueDate ? this.value.dueDate.split("-") : ["", "", ""];
+    this.dueYear = year ?? "";
+    this.dueMonth = month ?? "";
+    this.dueDay = day ?? "";
+    const [hour24Str, minute] = this.value.dueTime ? this.value.dueTime.split(":") : ["", ""];
+    this.dueMinute = minute ?? "";
+    if (hour24Str) {
+      const hour24 = Number(hour24Str);
+      const hour12 = hour24 % 12 || 12;
+      this.dueHour12 = String(hour12).padStart(2, "0");
+      this.dueAmPm = hour24 >= 12 ? "PM" : "AM";
+    } else {
+      this.dueHour12 = "";
+      this.dueAmPm = "AM";
+    }
   }
   close() {
     this.dispatchEvent(
@@ -956,16 +1049,79 @@ var TodoItemDialog = class extends i4 {
       new CustomEvent("dialog-delete", { bubbles: true, composed: true })
     );
   }
+  // Bound to "change", not "click" - ha-checkbox wraps a native
+  // <input type="checkbox"> inside an internal <label>, and a single
+  // physical click on it fires TWO bubbling "click" events (the
+  // label's own, plus the browser's automatic forwarded click to the
+  // input it labels - standard native label/control behavior). A
+  // click-driven toggle (this.value.triggerOnDue = !this.value.
+  // triggerOnDue) silently cancelled itself out on every real click:
+  // on, then immediately back off, net no-op - confirmed live via a
+  // real (not synthetic) click, the actual bug behind "the toggle
+  // doesn't work" that a directly-dispatched synthetic click event
+  // never reproduced, since it bypasses the internal label entirely.
+  // "change" fires exactly once per genuine state transition
+  // regardless of how many internal clicks produced it, so both
+  // toggles below read the checkbox's own resulting .checked state
+  // rather than blindly flipping a local boolean.
   toggleComplete() {
     this.dispatchEvent(
       new CustomEvent("dialog-toggle-complete", { bubbles: true, composed: true })
     );
   }
-  toggleTriggerOnDue() {
-    this.value = { ...this.value, triggerOnDue: !this.value.triggerOnDue };
+  onTriggerOnDueChanged(e7) {
+    const checked = e7.target.checked;
+    this.value = { ...this.value, triggerOnDue: checked };
   }
   updateField(field, fieldValue) {
     this.value = { ...this.value, [field]: fieldValue };
+  }
+  // Combines the three segments into "YYYY-MM-DD" only once all three
+  // are actually present - a day and month with no year yet (etc.)
+  // isn't a real date, so dueDate stays empty (matching what a native
+  // date input's .value does while incomplete) rather than guessing.
+  syncDueDate() {
+    if (this.dueDay && this.dueMonth && this.dueYear.length === 4) {
+      this.updateField(
+        "dueDate",
+        `${this.dueYear}-${this.dueMonth.padStart(2, "0")}-${this.dueDay.padStart(2, "0")}`
+      );
+    } else {
+      this.updateField("dueDate", "");
+    }
+  }
+  syncDueTime() {
+    if (this.dueHour12 && this.dueMinute) {
+      const hour12 = Number(this.dueHour12) % 12;
+      const hour24 = this.dueAmPm === "PM" ? hour12 + 12 : hour12;
+      this.updateField("dueTime", `${String(hour24).padStart(2, "0")}:${this.dueMinute.padStart(2, "0")}`);
+    } else {
+      this.updateField("dueTime", "");
+    }
+  }
+  updateDueDay(raw) {
+    this.dueDay = digitsOnly(raw, 2);
+    this.syncDueDate();
+  }
+  updateDueMonth(raw) {
+    this.dueMonth = digitsOnly(raw, 2);
+    this.syncDueDate();
+  }
+  updateDueYear(raw) {
+    this.dueYear = digitsOnly(raw, 4);
+    this.syncDueDate();
+  }
+  updateDueHour12(raw) {
+    this.dueHour12 = digitsOnly(raw, 2);
+    this.syncDueTime();
+  }
+  updateDueMinute(raw) {
+    this.dueMinute = digitsOnly(raw, 2);
+    this.syncDueTime();
+  }
+  setDueAmPm(period) {
+    this.dueAmPm = period;
+    this.syncDueTime();
   }
   // Enabling "trigger on due" without a due time is meaningless - the
   // backend enforces the same rule (see DueTimeRequiredError), but
@@ -973,6 +1129,58 @@ var TodoItemDialog = class extends i4 {
   // round-trip error.
   get triggerOnDueBlocked() {
     return this.value.triggerOnDue && !(this.value.dueDate && this.value.dueTime);
+  }
+  // Rendered inline, full-width, right below .due-row - not as an
+  // absolutely-positioned floating popup. ha-dialog's own content area
+  // is externally defined and out of this component's control; an
+  // absolutely-positioned child risks being silently clipped by
+  // whatever overflow behavior that container happens to have. Pushing
+  // the rest of the dialog down instead has no such risk, at the minor
+  // cost of the dialog growing taller while the panel is open - the
+  // same tradeoff the quick-add "Details…" panel elsewhere in this
+  // card already makes.
+  renderDatePickerPanel() {
+    const year = this.datePickerViewYear;
+    const month = this.datePickerViewMonth;
+    const leadingBlanks = firstWeekdayOfMonth(year, month);
+    const totalDays = daysInMonth(year, month);
+    const selectedDay = Number(this.dueDay) || void 0;
+    const selectedMonth = this.dueMonth ? Number(this.dueMonth) - 1 : void 0;
+    const selectedYear = this.dueYear.length === 4 ? Number(this.dueYear) : void 0;
+    return b2`
+            <div class="date-picker-panel">
+                <div class="date-picker-header">
+                    <button
+                        type="button"
+                        class="date-picker-nav"
+                        aria-label="Previous month"
+                        @click=${() => this.shiftDatePickerMonth(-1)}
+                    >‹</button>
+                    <span>${MONTH_NAMES[month]} ${year}</span>
+                    <button
+                        type="button"
+                        class="date-picker-nav"
+                        aria-label="Next month"
+                        @click=${() => this.shiftDatePickerMonth(1)}
+                    >›</button>
+                </div>
+                <div class="date-picker-grid">
+                    ${WEEKDAY_LABELS.map((label) => b2`<span class="date-picker-weekday">${label}</span>`)}
+                    ${Array.from({ length: leadingBlanks }, () => b2`<span></span>`)}
+                    ${Array.from({ length: totalDays }, (_2, i7) => {
+      const day = i7 + 1;
+      const isSelected = day === selectedDay && month === selectedMonth && year === selectedYear;
+      return b2`
+                                <button
+                                    type="button"
+                                    class=${e6({ "date-picker-day": true, selected: isSelected })}
+                                    @click=${() => this.pickDate(day)}
+                                >${day}</button>
+                            `;
+    })}
+                </div>
+            </div>
+        `;
   }
   render() {
     const showDue = this.fieldSupport.dueDate || this.fieldSupport.dueDateTime;
@@ -1005,7 +1213,7 @@ var TodoItemDialog = class extends i4 {
                             <div class="complete-toggle">
                                 <ha-checkbox
                                     .checked=${this.completed}
-                                    @click=${this.toggleComplete}
+                                    @change=${this.toggleComplete}
                                 ></ha-checkbox>
                                 <span>${this.completed ? "Completed" : "Mark complete"}</span>
                             </div>
@@ -1039,39 +1247,97 @@ var TodoItemDialog = class extends i4 {
                 ${showDue ? b2`
                             <div class="due-row">
                                 <div class="field">
-                                    <label for="todo-item-due-date">Due date</label>
-                                    <input
-                                        id="todo-item-due-date"
-                                        type="date"
-                                        .value=${this.value.dueDate}
-                                        @input=${(e7) => this.updateField(
-      "dueDate",
-      e7.target.value
-    )}
-                                    />
+                                    <label id="due-date-label">Due date</label>
+                                    <div class="dmy-row" aria-labelledby="due-date-label">
+                                        <input
+                                            class="segment day"
+                                            type="text"
+                                            inputmode="numeric"
+                                            maxlength="2"
+                                            placeholder="DD"
+                                            aria-label="Day"
+                                            .value=${this.dueDay}
+                                            @input=${(e7) => this.updateDueDay(e7.target.value)}
+                                        />
+                                        <span class="segment-sep">/</span>
+                                        <input
+                                            class="segment month"
+                                            type="text"
+                                            inputmode="numeric"
+                                            maxlength="2"
+                                            placeholder="MM"
+                                            aria-label="Month"
+                                            .value=${this.dueMonth}
+                                            @input=${(e7) => this.updateDueMonth(e7.target.value)}
+                                        />
+                                        <span class="segment-sep">/</span>
+                                        <input
+                                            class="segment year"
+                                            type="text"
+                                            inputmode="numeric"
+                                            maxlength="4"
+                                            placeholder="YYYY"
+                                            aria-label="Year"
+                                            .value=${this.dueYear}
+                                            @input=${(e7) => this.updateDueYear(e7.target.value)}
+                                        />
+                                        <button
+                                            type="button"
+                                            class="calendar-toggle"
+                                            aria-label=${this.datePickerOpen ? "Close date picker" : "Open date picker"}
+                                            @click=${this.toggleDatePicker}
+                                        >
+                                            ${CALENDAR_ICON}
+                                        </button>
+                                    </div>
                                 </div>
 
                                 ${this.fieldSupport.dueDateTime ? b2`
                                             <div class="field">
-                                                <label for="todo-item-due-time">Due time</label>
-                                                <input
-                                                    id="todo-item-due-time"
-                                                    type="time"
-                                                    .value=${this.value.dueTime}
-                                                    @input=${(e7) => this.updateField(
-      "dueTime",
-      e7.target.value
-    )}
-                                                />
+                                                <label id="due-time-label">Due time</label>
+                                                <div class="hm-row" aria-labelledby="due-time-label">
+                                                    <input
+                                                        class="segment hour"
+                                                        type="text"
+                                                        inputmode="numeric"
+                                                        maxlength="2"
+                                                        placeholder="HH"
+                                                        aria-label="Hour"
+                                                        .value=${this.dueHour12}
+                                                        @input=${(e7) => this.updateDueHour12(e7.target.value)}
+                                                    />
+                                                    <span class="segment-sep">:</span>
+                                                    <input
+                                                        class="segment minute"
+                                                        type="text"
+                                                        inputmode="numeric"
+                                                        maxlength="2"
+                                                        placeholder="MM"
+                                                        aria-label="Minute"
+                                                        .value=${this.dueMinute}
+                                                        @input=${(e7) => this.updateDueMinute(e7.target.value)}
+                                                    />
+                                                    <select
+                                                        class="ampm-select"
+                                                        aria-label="AM or PM"
+                                                        .value=${this.dueAmPm}
+                                                        @change=${(e7) => this.setDueAmPm(e7.target.value)}
+                                                    >
+                                                        <option value="AM">AM</option>
+                                                        <option value="PM">PM</option>
+                                                    </select>
+                                                </div>
                                             </div>
                                         ` : ""}
                             </div>
+
+                            ${this.datePickerOpen ? this.renderDatePickerPanel() : ""}
 
                             ${this.fieldSupport.dueDateTime ? b2`
                                         <div class="complete-toggle">
                                             <ha-checkbox
                                                 .checked=${this.value.triggerOnDue}
-                                                @click=${this.toggleTriggerOnDue}
+                                                @change=${this.onTriggerOnDueChanged}
                                             ></ha-checkbox>
                                             <span>Trigger automation when due</span>
                                         </div>
@@ -1175,8 +1441,6 @@ TodoItemDialog.styles = i`
             border-bottom: 1px solid var(--divider-color);
             padding: 8px 0;
             outline: none;
-            /* Without this, the native calendar/clock picker icons render
-               black-on-transparent and vanish against a dark theme. */
             color-scheme: light dark;
         }
 
@@ -1184,6 +1448,141 @@ TodoItemDialog.styles = i`
         textarea:focus {
             border-bottom: 2px solid var(--primary-color);
             padding-bottom: 7px;
+        }
+
+        /* Day/month/year and hour/minute, always in that fixed order
+           regardless of browser or OS locale - see the .dueDay field's
+           own doc comment for why this isn't a single native
+           <input type="date">/<input type="time"> or ha-date-input/
+           ha-time-input. */
+        .dmy-row,
+        .hm-row {
+            display: flex;
+            align-items: baseline;
+            gap: 4px;
+        }
+
+        input.segment {
+            width: 2.2em;
+            flex: none;
+            text-align: center;
+            /* Hides the native up/down spinner some browsers add to a
+               numeric-inputmode text field - these segments are typed
+               into, not incremented. */
+            -moz-appearance: textfield;
+        }
+
+        input.segment.year {
+            width: 3.6em;
+        }
+
+        .segment-sep {
+            color: var(--secondary-text-color);
+            font-size: 16px;
+        }
+
+        .ampm-select {
+            margin-inline-start: 4px;
+            font-family: inherit;
+            font-size: 14px;
+            font-weight: 500;
+            color: var(--primary-text-color);
+            background: none;
+            border: none;
+            border-bottom: 1px solid var(--divider-color);
+            padding: 8px 2px;
+            outline: none;
+        }
+
+        .calendar-toggle {
+            flex: none;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            width: 28px;
+            height: 28px;
+            margin-inline-start: 4px;
+            border: none;
+            border-radius: 50%;
+            background: none;
+            padding: 0;
+            color: var(--secondary-text-color);
+            cursor: pointer;
+        }
+
+        .calendar-toggle:hover {
+            background: rgba(var(--rgb-primary-text-color, 0, 0, 0), 0.06);
+        }
+
+        .calendar-toggle svg {
+            width: 18px;
+            height: 18px;
+            fill: currentColor;
+        }
+
+        .date-picker-panel {
+            margin: 0 0 16px;
+            padding: 12px;
+            border: 1px solid var(--divider-color);
+            border-radius: 8px;
+            font-family: Roboto, "Noto Sans", sans-serif;
+        }
+
+        .date-picker-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 8px;
+            font-size: 14px;
+            font-weight: 500;
+            color: var(--primary-text-color);
+        }
+
+        .date-picker-nav {
+            border: none;
+            background: none;
+            padding: 4px 10px;
+            border-radius: 4px;
+            font-size: 16px;
+            color: var(--secondary-text-color);
+            cursor: pointer;
+        }
+
+        .date-picker-nav:hover {
+            background: rgba(var(--rgb-primary-text-color, 0, 0, 0), 0.06);
+        }
+
+        .date-picker-grid {
+            display: grid;
+            grid-template-columns: repeat(7, 1fr);
+            gap: 2px;
+        }
+
+        .date-picker-weekday {
+            text-align: center;
+            font-size: 11px;
+            color: var(--secondary-text-color);
+            padding: 4px 0;
+        }
+
+        .date-picker-day {
+            border: none;
+            background: none;
+            font-family: inherit;
+            font-size: 13px;
+            color: var(--primary-text-color);
+            padding: 6px 0;
+            border-radius: 50%;
+            cursor: pointer;
+        }
+
+        .date-picker-day:hover {
+            background: rgba(var(--rgb-primary-text-color, 0, 0, 0), 0.08);
+        }
+
+        .date-picker-day.selected {
+            background: var(--primary-color);
+            color: var(--text-primary-color, #fff);
         }
 
         textarea {
@@ -1274,6 +1673,33 @@ __decorateClass([
 __decorateClass([
   r5()
 ], TodoItemDialog.prototype, "confirmingDelete", 2);
+__decorateClass([
+  r5()
+], TodoItemDialog.prototype, "dueDay", 2);
+__decorateClass([
+  r5()
+], TodoItemDialog.prototype, "dueMonth", 2);
+__decorateClass([
+  r5()
+], TodoItemDialog.prototype, "dueYear", 2);
+__decorateClass([
+  r5()
+], TodoItemDialog.prototype, "dueHour12", 2);
+__decorateClass([
+  r5()
+], TodoItemDialog.prototype, "dueMinute", 2);
+__decorateClass([
+  r5()
+], TodoItemDialog.prototype, "dueAmPm", 2);
+__decorateClass([
+  r5()
+], TodoItemDialog.prototype, "datePickerOpen", 2);
+__decorateClass([
+  r5()
+], TodoItemDialog.prototype, "datePickerViewYear", 2);
+__decorateClass([
+  r5()
+], TodoItemDialog.prototype, "datePickerViewMonth", 2);
 TodoItemDialog = __decorateClass([
   t3("todo-overlay-item-dialog")
 ], TodoItemDialog);
@@ -1589,6 +2015,7 @@ var TodoTreeItem = class extends i4 {
     this.confirmDelete = true;
     this.dragDisabled = false;
     this.collapsedIds = /* @__PURE__ */ new Set();
+    this.dimmedByAncestorDrag = false;
     this.dragEngaged = false;
     this.confirmingDelete = false;
     this.pointerDownAt = 0;
@@ -1768,21 +2195,16 @@ var TodoTreeItem = class extends i4 {
       this.emitPointerUp(pressDurationMs, this.hasMoved);
       return;
     }
-    window.clearTimeout(this.clickTimer);
+    if (this.clickTimer !== void 0) {
+      window.clearTimeout(this.clickTimer);
+      this.clickTimer = void 0;
+      this.emitPointerUp(LONG_PRESS_MS, false);
+      return;
+    }
     this.clickTimer = window.setTimeout(() => {
+      this.clickTimer = void 0;
       this.emitPointerUp(pressDurationMs, false);
     }, CLICK_DEBOUNCE_MS);
-  }
-  onDoubleClick() {
-    window.clearTimeout(this.clickTimer);
-    this.dispatchEvent(
-      new CustomEvent("tree-pointer-down", {
-        detail: { id: this.item.id },
-        bubbles: true,
-        composed: true
-      })
-    );
-    this.emitPointerUp(LONG_PRESS_MS);
   }
   render() {
     const isDropTarget = this.isDropTarget;
@@ -1791,6 +2213,7 @@ var TodoTreeItem = class extends i4 {
       row: true,
       pressed: this.isPressed && !isBeingDragged,
       lifted: isBeingDragged,
+      dimmed: this.dimmedByAncestorDrag,
       "drop-inside": isDropTarget && this.hoverPlacement === "inside",
       "gap-before": isDropTarget && this.hoverPlacement === "before",
       "gap-after": isDropTarget && this.hoverPlacement === "after",
@@ -1806,7 +2229,6 @@ var TodoTreeItem = class extends i4 {
                     class=${e6(rowClasses)}
 
                     @pointerdown=${this.pointerDown}
-                    @dblclick=${this.onDoubleClick}
                 >
                     ${isBeingDragged ? "" : b2`
                                 ${this.hasChildren ? b2`
@@ -1817,7 +2239,6 @@ var TodoTreeItem = class extends i4 {
     })}
                                                 aria-label=${this.isCollapsed ? "Expand" : "Collapse"}
                                                 @click=${this.toggleCollapse}
-                                                @dblclick=${(e7) => e7.stopPropagation()}
                                                 @pointerdown=${(e7) => e7.stopPropagation()}
                                             >
                                                 ${CHEVRON_ICON}
@@ -1869,7 +2290,6 @@ var TodoTreeItem = class extends i4 {
     })}
                                                 aria-label=${this.confirmingDelete ? "Confirm delete" : "Delete"}
                                                 @click=${this.onDeleteClick}
-                                                @dblclick=${(e7) => e7.stopPropagation()}
                                                 @pointerdown=${(e7) => e7.stopPropagation()}
                                             >
                                                 ${CROSS_ICON}
@@ -1902,6 +2322,7 @@ var TodoTreeItem = class extends i4 {
                                             .confirmDelete=${this.confirmDelete}
                                             .dragDisabled=${this.dragDisabled}
                                             .collapsedIds=${this.collapsedIds}
+                                            .dimmedByAncestorDrag=${isBeingDragged || this.dimmedByAncestorDrag}
                                         ></todo-overlay-tree-item>
                                     `
     )}
@@ -1946,13 +2367,25 @@ TodoTreeItem.styles = i`
             background: rgba(var(--rgb-primary-text-color, 0, 0, 0), 0.12);
         }
 
+        /* The dragged row itself is fully removed from the flow, not
+           shrunk to a placeholder box - a lingering box here (whatever
+           its size or fill) reads as debris left behind by the item,
+           disconnected from the ghost that's now following the pointer
+           (see renderDragGhost) elsewhere on screen. Hit-testing already
+           treats this row as gone (collectAllRows/snapshotRows exclude
+           it), so the visual now matches: nothing stays behind, the list
+           closes up around the gap immediately, and the ghost is the
+           only thing representing the item until it drops. */
         .row.lifted {
-            min-height: 10px;
-            padding: 4px 20px;
-            border-radius: 4px;
-            border: 1px dashed var(--divider-color);
-            background: rgba(var(--rgb-primary-text-color, 0, 0, 0), 0.03);
-            cursor: grabbing;
+            display: none;
+        }
+
+        /* Marks every row inside a dragged parent's subtree as moving
+           along with it - no height/layout change (unlike .lifted, which
+           collapses), so nothing reflows and nothing else on the row
+           shifts position mid-drag. */
+        .row.dimmed {
+            opacity: 0.45;
         }
 
         .row.drop-inside {
@@ -2256,6 +2689,9 @@ __decorateClass([
   n4({ attribute: false })
 ], TodoTreeItem.prototype, "collapsedIds", 2);
 __decorateClass([
+  n4({ attribute: false })
+], TodoTreeItem.prototype, "dimmedByAncestorDrag", 2);
+__decorateClass([
   r5()
 ], TodoTreeItem.prototype, "holdRippleOrigin", 2);
 __decorateClass([
@@ -2273,6 +2709,7 @@ var TodoTree = class extends i4 {
   constructor() {
     super(...arguments);
     this.items = [];
+    this.emptyDropHighlight = false;
     this.hideCompleteForParents = false;
     this.showCheckboxes = false;
     this.confirmDelete = true;
@@ -2282,20 +2719,29 @@ var TodoTree = class extends i4 {
   render() {
     return b2`
             <ul>
-                ${this.items.map(
+                ${this.items.length === 0 ? b2`
+                            <li>
+                                <div
+                                    class=${e6({ "empty-drop-zone": true, "drop-target": this.emptyDropHighlight })}
+                                    data-empty-drop-zone
+                                >
+                                    ${this.emptyDropHighlight ? "Drop here" : "No items"}
+                                </div>
+                            </li>
+                        ` : this.items.map(
       (item) => b2`
-                        <todo-overlay-tree-item
-                            .item=${item}
-                            .draggedId=${this.draggedId}
-                            .hoverId=${this.hoverId}
-                            .hoverPlacement=${this.hoverPlacement}
-                            .hideCompleteForParents=${this.hideCompleteForParents}
-                            .showCheckboxes=${this.showCheckboxes}
-                            .confirmDelete=${this.confirmDelete}
-                            .dragDisabled=${this.dragDisabled}
-                            .collapsedIds=${this.collapsedIds}
-                        ></todo-overlay-tree-item>
-                    `
+                                <todo-overlay-tree-item
+                                    .item=${item}
+                                    .draggedId=${this.draggedId}
+                                    .hoverId=${this.hoverId}
+                                    .hoverPlacement=${this.hoverPlacement}
+                                    .hideCompleteForParents=${this.hideCompleteForParents}
+                                    .showCheckboxes=${this.showCheckboxes}
+                                    .confirmDelete=${this.confirmDelete}
+                                    .dragDisabled=${this.dragDisabled}
+                                    .collapsedIds=${this.collapsedIds}
+                                ></todo-overlay-tree-item>
+                            `
     )}
             </ul>
         `;
@@ -2306,6 +2752,33 @@ TodoTree.styles = i`
             list-style: none;
             margin: 0;
             padding: 0;
+        }
+
+        /* Rendered instead of the item list when there's nothing in it -
+           an empty <ul> has zero height, so without this there'd be
+           nothing to see AND nothing for a drag-and-drop to hit-test
+           against (see todo-overlay-list.ts's collectAllRows, which
+           looks for this element specifically by its data attribute) -
+           dragging an item into a list with nothing in it yet would
+           have no possible drop target at all otherwise. */
+        .empty-drop-zone {
+            margin: 4px 8px;
+            padding: 16px 12px;
+            border: 1px dashed var(--divider-color);
+            border-radius: 4px;
+            outline: 2px solid transparent;
+            outline-offset: -2px;
+            text-align: center;
+            font-family: Roboto, "Noto Sans", sans-serif;
+            font-size: 13px;
+            color: var(--secondary-text-color);
+            transition: outline-color 0.15s ease, background-color 0.15s ease;
+        }
+
+        .empty-drop-zone.drop-target {
+            outline-color: var(--accent-color, var(--primary-color));
+            background: rgba(var(--rgb-accent-color, 255, 152, 0), 0.08);
+            color: var(--primary-text-color);
         }
     `;
 __decorateClass([
@@ -2320,6 +2793,9 @@ __decorateClass([
 __decorateClass([
   n4({ attribute: false })
 ], TodoTree.prototype, "hoverPlacement", 2);
+__decorateClass([
+  n4({ attribute: false })
+], TodoTree.prototype, "emptyDropHighlight", 2);
 __decorateClass([
   n4({ attribute: false })
 ], TodoTree.prototype, "hideCompleteForParents", 2);
@@ -2363,6 +2839,11 @@ var CLEAR_COMPLETED_ICON = b2`
         <path d="M9,3V4H4V6H5V19A2,2 0 0,0 7,21H17A2,2 0 0,0 19,19V6H20V4H15V3H9M7,6H17V19H7V6M9,8V17H11V8H9M13,8V17H15V8H13Z"></path>
     </svg>
 `;
+var CLOSE_ICON = b2`
+    <svg viewBox="0 0 24 24">
+        <path d="M19,6.41L17.59,5L12,10.59L6.41,5L5,6.41L10.59,12L5,17.59L6.41,19L12,13.41L17.59,19L19,17.59L13.41,12L19,6.41Z"></path>
+    </svg>
+`;
 function collectAllRows(root, currentEntity) {
   const rows = [];
   for (const el of Array.from(root.querySelectorAll("*"))) {
@@ -2375,6 +2856,17 @@ function collectAllRows(root, currentEntity) {
           entityId: currentEntity,
           children: itemEl.item.children,
           rect: rowEl.getBoundingClientRect()
+        });
+      }
+    }
+    if (el.localName === "todo-overlay-tree" && currentEntity) {
+      const emptyZone = el.shadowRoot?.querySelector("[data-empty-drop-zone]");
+      if (emptyZone) {
+        rows.push({
+          id: void 0,
+          entityId: currentEntity,
+          children: [],
+          rect: emptyZone.getBoundingClientRect()
         });
       }
     }
@@ -2413,6 +2905,9 @@ function findDropTarget(y3, rows) {
       nearestDistance = distance;
     }
   }
+  if (nearest.id === void 0) {
+    return { id: void 0, entityId: nearest.entityId, placement: "inside" };
+  }
   const relativeY = (y3 - nearest.rect.top) / nearest.rect.height;
   return { ...resolvePlacement(nearest.id, nearest.children, relativeY), entityId: nearest.entityId };
 }
@@ -2428,6 +2923,13 @@ function findItem(items, id) {
   }
   return void 0;
 }
+function collectDescendantIds(item, into = /* @__PURE__ */ new Set()) {
+  for (const child of item.children) {
+    into.add(child.id);
+    collectDescendantIds(child, into);
+  }
+  return into;
+}
 function splitDueDateTime(iso) {
   if (!iso) {
     return { date: "", time: "" };
@@ -2436,6 +2938,7 @@ function splitDueDateTime(iso) {
   return { date: date ?? "", time: (time ?? "").slice(0, 5) };
 }
 var UNDO_TIMEOUT_MS = 8e3;
+var ERROR_TIMEOUT_MS = 8e3;
 var FILTER_MODES = ["all", "active", "completed", "overdue"];
 var FILTER_LABELS = {
   all: "All",
@@ -2459,6 +2962,16 @@ var TodoOverlayList = class extends i4 {
     this.collapsedIds = /* @__PURE__ */ new Set();
     this.filterMode = "all";
     this.quickAddExpanded = false;
+    this.foreignDragActive = false;
+    this.onForeignDragHover = (e7) => {
+      const wasEmptyTarget = this.isEmptyDropTarget;
+      this.foreignDragActive = e7.detail.draggedId !== void 0;
+      this.foreignDragHoverEntityId = e7.detail.hoverEntityId;
+      this.foreignDragHoverId = e7.detail.hoverId;
+      if (wasEmptyTarget !== this.isEmptyDropTarget) {
+        this.requestUpdate();
+      }
+    };
     this.dragGhostOffset = { x: 0, y: 0 };
     this.rowSnapshot = [];
     this.quickAddValue = "";
@@ -2471,6 +2984,7 @@ var TodoOverlayList = class extends i4 {
       this.hoverId = valid ? hit.id : void 0;
       this.hoverPlacement = valid ? hit.placement : void 0;
       this.hoverEntityId = valid ? hit.entityId : void 0;
+      this.broadcastDragHover();
     };
     this.onGlobalPointerUp = async () => {
       window.removeEventListener("pointermove", this.onGlobalPointerMove, { capture: true });
@@ -2486,9 +3000,10 @@ var TodoOverlayList = class extends i4 {
       this.hoverPlacement = void 0;
       this.hoverEntityId = void 0;
       this.rowSnapshot = [];
-      if (draggedId && hoverId && draggedId !== hoverId) {
+      this.broadcastDragHover();
+      if (draggedId && hoverEntityId) {
         try {
-          if (hoverEntityId && hoverEntityId !== this.entity) {
+          if (hoverEntityId !== this.entity) {
             await transferItem(
               this.hass,
               this.entity,
@@ -2497,7 +3012,7 @@ var TodoOverlayList = class extends i4 {
               hoverId,
               hoverPlacement ?? "inside"
             );
-          } else {
+          } else if (hoverId && hoverId !== draggedId) {
             await moveItem(
               this.hass,
               this.entity,
@@ -2505,6 +3020,8 @@ var TodoOverlayList = class extends i4 {
               hoverId,
               hoverPlacement ?? "inside"
             );
+          } else {
+            return;
           }
           await this.load();
         } catch (err) {
@@ -2533,9 +3050,23 @@ var TodoOverlayList = class extends i4 {
   // exists" ValueError, etc.) is meaningless to whoever's actually
   // using this card - it's logged in full for whoever's debugging,
   // and everyone else just sees one plain, consistent message.
+  //
+  // This never hides an already-loaded list (see render()): a failed
+  // drag, tap, or edit is just one action not going through, not a
+  // reason to make every item the user can already see vanish until
+  // they refresh the page. The banner auto-dismisses the same way the
+  // undo snackbar does, rather than sitting there forever.
   reportError(action, err) {
     console.error(`todo-overlay-card: ${action} failed`, err);
+    window.clearTimeout(this.errorTimer);
     this.error = "Something went wrong. Check the browser console for details.";
+    this.errorTimer = window.setTimeout(() => {
+      this.error = void 0;
+    }, ERROR_TIMEOUT_MS);
+  }
+  dismissError() {
+    window.clearTimeout(this.errorTimer);
+    this.error = void 0;
   }
   async load() {
     try {
@@ -2544,6 +3075,7 @@ var TodoOverlayList = class extends i4 {
         this.entity,
         this.moveCompletedItems
       );
+      window.clearTimeout(this.errorTimer);
       this.error = void 0;
     } catch (err) {
       this.reportError("loading the list", err);
@@ -2560,6 +3092,17 @@ var TodoOverlayList = class extends i4 {
   get dragDisabled() {
     return this.sortBy !== "manual";
   }
+  // True while a drag - from this instance or (far more commonly,
+  // since an entity being dragged FROM can't also be empty) another
+  // one entirely - is hovering this list's own empty-state placeholder
+  // (see todo-tree.ts) as its drop target. Driven by the
+  // foreignDragActive broadcast (see its own doc comment) rather than
+  // this instance's own draggedId/hoverEntityId/hoverId, which are
+  // only ever populated on whichever instance the drag actually
+  // started from.
+  get isEmptyDropTarget() {
+    return this.foreignDragActive && this.foreignDragHoverEntityId === this.entity && this.foreignDragHoverId === void 0;
+  }
   // --- drag / tap / hold ---------------------------------------------
   //
   // A drag only ever reaches the "live" ghost-follow stage below once
@@ -2575,7 +3118,15 @@ var TodoOverlayList = class extends i4 {
     this.draggedId = e7.detail.id;
   }
   snapshotRows() {
-    this.rowSnapshot = collectAllRows(document).filter((row) => row.id !== this.draggedId);
+    const excluded = /* @__PURE__ */ new Set();
+    if (this.draggedId) {
+      excluded.add(this.draggedId);
+      const dragged = this.list && findItem(this.list.items, this.draggedId);
+      if (dragged) {
+        collectDescendantIds(dragged, excluded);
+      }
+    }
+    this.rowSnapshot = collectAllRows(document).filter((row) => row.id === void 0 || !excluded.has(row.id));
   }
   onDragStart(e7) {
     const { rect, pointerX, pointerY, grabOffsetX, grabOffsetY } = e7.detail;
@@ -2587,6 +3138,19 @@ var TodoOverlayList = class extends i4 {
     window.addEventListener("pointermove", this.onGlobalPointerMove, { capture: true });
     window.addEventListener("pointerup", this.onGlobalPointerUp, { capture: true });
     window.addEventListener("pointercancel", this.onGlobalPointerUp, { capture: true });
+  }
+  // Lets every OTHER todo-overlay-list on the page (any other section
+  // of a multi-entity card, or a separate card entirely) know this
+  // instance's current drag/hover state - see foreignDragActive's own
+  // doc comment for why that's needed at all.
+  broadcastDragHover() {
+    window.dispatchEvent(new CustomEvent("todo-overlay-drag-hover", {
+      detail: {
+        draggedId: this.draggedId,
+        hoverEntityId: this.hoverEntityId,
+        hoverId: this.hoverId
+      }
+    }));
   }
   async onPointerUp(e7) {
     if (!e7.detail.moved && this.draggedId && this.list) {
@@ -2607,11 +3171,18 @@ var TodoOverlayList = class extends i4 {
     }
     this.draggedId = void 0;
   }
+  connectedCallback() {
+    super.connectedCallback();
+    window.addEventListener("todo-overlay-drag-hover", this.onForeignDragHover);
+  }
   disconnectedCallback() {
     super.disconnectedCallback();
     window.removeEventListener("pointermove", this.onGlobalPointerMove, { capture: true });
     window.removeEventListener("pointerup", this.onGlobalPointerUp, { capture: true });
     window.removeEventListener("pointercancel", this.onGlobalPointerUp, { capture: true });
+    window.removeEventListener("todo-overlay-drag-hover", this.onForeignDragHover);
+    window.clearTimeout(this.undoTimer);
+    window.clearTimeout(this.errorTimer);
   }
   // --- collapse / filter -------------------------------------------------
   toggleCollapseId(id) {
@@ -2885,6 +3456,7 @@ var TodoOverlayList = class extends i4 {
                     .draggedId=${this.draggedId}
                     .hoverId=${this.hoverId}
                     .hoverPlacement=${this.hoverPlacement}
+                    .emptyDropHighlight=${this.isEmptyDropTarget}
                     .hideCompleteForParents=${this.hideCompleteForParents}
                     .showCheckboxes=${this.showCheckboxes}
                     .confirmDelete=${this.confirmDelete}
@@ -2908,6 +3480,7 @@ var TodoOverlayList = class extends i4 {
                     .draggedId=${this.draggedId}
                     .hoverId=${this.hoverId}
                     .hoverPlacement=${this.hoverPlacement}
+                    .emptyDropHighlight=${this.isEmptyDropTarget}
                     .hideCompleteForParents=${this.hideCompleteForParents}
                     .showCheckboxes=${this.showCheckboxes}
                     .confirmDelete=${this.confirmDelete}
@@ -2995,71 +3568,75 @@ var TodoOverlayList = class extends i4 {
   }
   render() {
     const hasToolbar = this.showQuickAdd || this.showFilterMenu || this.showSaveLoadButtons || this.showClearButton;
+    const hasHeaderRow = !!this.headerTitle || hasToolbar;
     return b2`
-            ${hasToolbar ? b2`
-                        <div class="toolbar">
-                            <button
-                                class=${e6({
+            ${hasHeaderRow ? b2`
+                        <div class="list-header-row">
+                            ${this.headerTitle ? b2`<span class="list-title">${this.headerTitle}</span>` : ""}
+                            ${hasToolbar ? b2`
+                                        <div class="toolbar">
+                                            <button
+                                                class=${e6({
       "toolbar-icon": true,
       "quick-add-toggle": true,
       expanded: this.quickAddExpanded
     })}
-                                aria-label="Add item"
-                                @click=${this.onToggleQuickAdd}
-                            >
-                                ${PLUS_ICON}
-                            </button>
+                                                aria-label="Add item"
+                                                @click=${this.onToggleQuickAdd}
+                                            >
+                                                ${PLUS_ICON}
+                                            </button>
 
-                            <div class="toolbar-spacer"></div>
-
-                            ${this.showFilterMenu ? b2`
-                                        <div
-                                            class=${e6({
+                                            ${this.showFilterMenu ? b2`
+                                                        <div
+                                                            class=${e6({
       "toolbar-icon": true,
       "filter-select-wrapper": true,
       active: this.filterMode !== "all"
     })}
-                                        >
-                                            ${FILTER_ICON}
-                                            ${this.filterMode !== "all" ? b2`<span class="badge-dot"></span>` : ""}
-                                            <select
-                                                class="filter-select"
-                                                aria-label="Filter"
-                                                .value=${this.filterMode}
-                                                @change=${this.onFilterSelectChange}
-                                            >
-                                                ${FILTER_MODES.map((mode) => b2`
-                                                    <option value=${mode}>${FILTER_LABELS[mode]}</option>
-                                                `)}
-                                            </select>
+                                                        >
+                                                            ${FILTER_ICON}
+                                                            ${this.filterMode !== "all" ? b2`<span class="badge-dot"></span>` : ""}
+                                                            <select
+                                                                class="filter-select"
+                                                                aria-label="Filter"
+                                                                .value=${this.filterMode}
+                                                                @change=${this.onFilterSelectChange}
+                                                            >
+                                                                ${FILTER_MODES.map((mode) => b2`
+                                                                    <option value=${mode}>${FILTER_LABELS[mode]}</option>
+                                                                `)}
+                                                            </select>
+                                                        </div>
+                                                    ` : ""}
+
+                                            ${this.showSaveLoadButtons ? b2`
+                                                        <button
+                                                            class="toolbar-icon"
+                                                            aria-label="Save list"
+                                                            @click=${this.openSaveDialog}
+                                                        >
+                                                            ${SAVE_ICON}
+                                                        </button>
+                                                        <button
+                                                            class="toolbar-icon"
+                                                            aria-label="Load list"
+                                                            @click=${this.openLoadDialog}
+                                                        >
+                                                            ${LOAD_ICON}
+                                                        </button>
+                                                    ` : ""}
+
+                                            ${this.showClearButton ? b2`
+                                                        <button
+                                                            class="toolbar-icon"
+                                                            aria-label="Clear completed"
+                                                            @click=${this.onClearCompleted}
+                                                        >
+                                                            ${CLEAR_COMPLETED_ICON}
+                                                        </button>
+                                                    ` : ""}
                                         </div>
-                                    ` : ""}
-
-                            ${this.showSaveLoadButtons ? b2`
-                                        <button
-                                            class="toolbar-icon"
-                                            aria-label="Save list"
-                                            @click=${this.openSaveDialog}
-                                        >
-                                            ${SAVE_ICON}
-                                        </button>
-                                        <button
-                                            class="toolbar-icon"
-                                            aria-label="Load list"
-                                            @click=${this.openLoadDialog}
-                                        >
-                                            ${LOAD_ICON}
-                                        </button>
-                                    ` : ""}
-
-                            ${this.showClearButton ? b2`
-                                        <button
-                                            class="toolbar-icon"
-                                            aria-label="Clear completed"
-                                            @click=${this.onClearCompleted}
-                                        >
-                                            ${CLEAR_COMPLETED_ICON}
-                                        </button>
                                     ` : ""}
                         </div>
                     ` : ""}
@@ -3084,11 +3661,21 @@ var TodoOverlayList = class extends i4 {
                         </div>
                     ` : ""}
 
-            ${this.error ? b2`
-                        <div style="padding:16px; color: var(--error-color)">
-                            ${this.error}
-                        </div>
-                    ` : this.list ? this.renderTree(this.list) : b2`
+            ${this.list ? b2`
+                        ${this.error ? b2`
+                                    <div class="error-banner">
+                                        <span>${this.error}</span>
+                                        <button aria-label="Dismiss" @click=${this.dismissError}>
+                                            ${CLOSE_ICON}
+                                        </button>
+                                    </div>
+                                ` : ""}
+                        ${this.renderTree(this.list)}
+                    ` : this.error ? b2`
+                            <div style="padding:16px; color: var(--error-color)">
+                                ${this.error}
+                            </div>
+                        ` : b2`
                             <div style="padding:16px">
                                 Loading...
                             </div>
@@ -3137,15 +3724,30 @@ var TodoOverlayList = class extends i4 {
   }
 };
 TodoOverlayList.styles = i`
+        .list-header-row {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 8px;
+            padding: 8px 8px 8px 12px;
+        }
+
+        .list-title {
+            font-family: Roboto, "Noto Sans", sans-serif;
+            font-size: 16px;
+            font-weight: 500;
+            color: var(--primary-text-color);
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+            min-width: 0;
+        }
+
         .toolbar {
             display: flex;
             align-items: center;
             gap: 4px;
-            padding: 8px 12px;
-        }
-
-        .toolbar-spacer {
-            flex: 1;
+            flex-shrink: 0;
         }
 
         .toolbar-icon {
@@ -3298,6 +3900,53 @@ TodoOverlayList.styles = i`
             cursor: pointer;
         }
 
+        /* Sits above the list rather than replacing it (see render()) -
+           an action failing is never a reason to hide items the user can
+           already see, only to flag that the one action didn't go
+           through. Auto-dismisses like the undo snackbar, and can be
+           closed early by hand. */
+        .error-banner {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            margin: 0 12px 8px;
+            padding: 10px 12px;
+            border-radius: 4px;
+            background: rgba(var(--rgb-error-color, 219, 68, 55), 0.1);
+            color: var(--error-color);
+            font-family: Roboto, "Noto Sans", sans-serif;
+            font-size: 13px;
+        }
+
+        .error-banner span {
+            flex: 1;
+        }
+
+        .error-banner button {
+            flex-shrink: 0;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            width: 20px;
+            height: 20px;
+            border: none;
+            background: none;
+            padding: 0;
+            color: inherit;
+            cursor: pointer;
+            opacity: 0.7;
+        }
+
+        .error-banner button:hover {
+            opacity: 1;
+        }
+
+        .error-banner button svg {
+            width: 16px;
+            height: 16px;
+            fill: currentColor;
+        }
+
         .section-header {
             padding: 14px 16px 6px;
             font-family: Roboto, "Noto Sans", sans-serif;
@@ -3353,6 +4002,9 @@ __decorateClass([
   n4()
 ], TodoOverlayList.prototype, "entity", 2);
 __decorateClass([
+  n4()
+], TodoOverlayList.prototype, "headerTitle", 2);
+__decorateClass([
   n4({ type: Boolean })
 ], TodoOverlayList.prototype, "hideCompleteForParents", 2);
 __decorateClass([
@@ -3406,6 +4058,9 @@ __decorateClass([
 __decorateClass([
   r5()
 ], TodoOverlayList.prototype, "hoverPlacement", 2);
+__decorateClass([
+  r5()
+], TodoOverlayList.prototype, "foreignDragActive", 2);
 __decorateClass([
   r5()
 ], TodoOverlayList.prototype, "ghostPosition", 2);
@@ -3726,15 +4381,16 @@ var TodoOverlayCard = class extends i4 {
   render() {
     const entityIds = this.config.entities?.length ? this.config.entities : this.config.entity ? [this.config.entity] : [];
     const isMulti = entityIds.length > 1;
-    const header = isMulti ? this.config.title : this.config.title ?? "Todo Overlay";
+    const cardHeader = isMulti ? this.config.title : void 0;
+    const entityTitle = (entityId) => isMulti ? friendlyName(this.hass, entityId) : this.config.title ?? "Todo Overlay";
     return b2`
-            <ha-card header=${header || A}>
+            <ha-card header=${cardHeader || A}>
                 ${entityIds.map((entityId) => b2`
                     <div class="entity-section">
-                        ${isMulti ? b2`<div class="entity-header">${friendlyName(this.hass, entityId)}</div>` : ""}
                         <todo-overlay-list
                             .hass=${this.hass}
                             .entity=${entityId}
+                            .headerTitle=${entityTitle(entityId)}
                             .hideCompleteForParents=${this.config.hide_complete_for_parents ?? true}
                             .showCheckboxes=${this.config.show_checkboxes ?? false}
                             .sortBy=${this.config.sort_by ?? "manual"}
@@ -3755,14 +4411,6 @@ var TodoOverlayCard = class extends i4 {
 TodoOverlayCard.styles = i`
         .entity-section + .entity-section {
             border-top: 1px solid var(--divider-color);
-        }
-
-        .entity-header {
-            padding: 16px 20px 4px;
-            font-family: Roboto, "Noto Sans", sans-serif;
-            font-size: 16px;
-            font-weight: 500;
-            color: var(--primary-text-color);
         }
     `;
 __decorateClass([

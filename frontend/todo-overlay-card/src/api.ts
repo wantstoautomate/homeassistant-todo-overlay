@@ -38,7 +38,11 @@ export async function transferItem(
     sourceEntityId: string,
     itemId: string,
     targetEntityId: string,
-    referenceId: string,
+    // Undefined when the target entity has no items at all to position
+    // relative to (dragging into a wholly empty list) - omitted from the
+    // message entirely in that case, matching the websocket schema's
+    // vol.Optional("reference_id").
+    referenceId: string | undefined,
     placement: Placement,
 ): Promise<string> {
 

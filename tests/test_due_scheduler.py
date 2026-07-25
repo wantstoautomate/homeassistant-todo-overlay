@@ -360,6 +360,99 @@ async def test_set_trigger_on_due_immediately_schedules_via_hook():
     assert scheduler._scheduled[(ENTITY_ID, "1")][0] == FUTURE_DUE
 
 
+@pytest.mark.asyncio
+async def test_concurrent_reconcile_passes_do_not_clobber_each_other():
+    """Live-reproduced bug: saving a due date+time and enabling "trigger
+    automation when due" together (the exact edit-dialog save flow) could
+    silently never fire. todo.update_item's per-item subscription queues
+    a reconcile pass in the background; set_trigger_on_due() runs its own
+    reconcile pass moments later via the direct hook. Without serializing
+    the two, whichever pass read the item list BEFORE the toggle was
+    enabled would compute a `desired` set missing it - and if that stale
+    pass finished AFTER the toggle's own pass had already scheduled the
+    item, its "not desired" verdict cancelled the fresh schedule right
+    back out.
+
+    reconcile_entity() now holds a per-entity lock for its whole body, so
+    a slow/stale pass and a fresh one can no longer interleave - whichever
+    one runs second always sees current truth. This drives that directly:
+    the stale pass is parked mid-reconcile (via a gate) while the toggle's
+    own pass is forced to queue behind it for the same lock, then resumes
+    once the stale pass releases it.
+    """
+
+    hass = FakeHass(entity_ids=[ENTITY_ID])
+    manager = make_manager(
+        hass,
+        items=[TodoItem(id="1", title="Renew passport", completed=False, due_datetime=FUTURE_DUE)],
+        positions={"1": ItemPosition(parent_id=None, order=0)},
+    )
+    # trigger_on_due starts OFF - a reconcile pass reading this now would
+    # compute a `desired` set that leaves item "1" out.
+
+    scheduler, track = make_scheduler(hass, manager, NOW)
+    await scheduler.async_start()
+
+    # Stands in for the background pass triggered by todo.update_item's
+    # subscription: it reads the (still stale) item list immediately, then
+    # blocks - exactly like a slow/pre-empted task would - right before
+    # its final "what's actually scheduled right now" check. It still
+    # holds reconcile_entity's per-entity lock while parked here.
+    gate = asyncio.Event()
+    real_get_due_fired = manager.get_due_fired
+    call_count = 0
+
+    async def gated_get_due_fired(entity_id):
+        nonlocal call_count
+        call_count += 1
+
+        if call_count == 1:
+            await gate.wait()
+
+        return await real_get_due_fired(entity_id)
+
+    manager.get_due_fired = gated_get_due_fired
+
+    stale_pass = asyncio.create_task(scheduler.reconcile_entity(ENTITY_ID))
+
+    try:
+        await asyncio.wait_for(asyncio.shield(stale_pass), timeout=0.2)
+        raise AssertionError("stale_pass finished without ever hitting the gate")
+    except TimeoutError:
+        pass
+
+    assert call_count == 1, "stale_pass should be parked on the gate by now"
+
+    # The toggle's metadata write happens under TodoManager's own lock
+    # (unaffected by the gate above) and completes immediately; only the
+    # reconcile pass it triggers afterward has to queue behind stale_pass
+    # for DueScheduler's lock - so this has to run as a background task
+    # too, not be awaited directly, or the test itself would deadlock.
+    toggle_task = asyncio.create_task(manager.set_trigger_on_due(ENTITY_ID, "1", True))
+
+    try:
+        await asyncio.wait_for(asyncio.shield(toggle_task), timeout=0.2)
+        raise AssertionError("toggle_task finished without queueing behind stale_pass's lock")
+    except TimeoutError:
+        pass
+
+    # Nothing scheduled yet - stale_pass hasn't reached that decision, and
+    # toggle_task's own reconcile pass hasn't gotten the lock yet.
+    assert scheduler._scheduled == {}
+
+    # Let stale_pass finish (its stale `desired` has nothing to cancel or
+    # schedule for item "1"), freeing the lock for toggle_task's fresh pass.
+    gate.set()
+    await stale_pass
+    await toggle_task
+
+    assert (ENTITY_ID, "1") in scheduler._scheduled, (
+        "the toggle's own (now-serialized) pass must still schedule the item"
+    )
+    assert len(track.scheduled) == 1
+    assert track.scheduled[0]["cancelled"] is False
+
+
 # --- cancel_entity / async_stop -----------------------------------------
 
 @pytest.mark.asyncio

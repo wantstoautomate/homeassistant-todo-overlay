@@ -66,13 +66,18 @@ describe("todo-overlay-card rendering", () => {
         document.body.appendChild(el);
         await el.updateComplete;
 
+        // The title isn't ha-card's own header slot in single-entity mode -
+        // it's handed to todo-overlay-list so the title and the +/icons
+        // toolbar can share one row (see todo-overlay-list.ts's
+        // list-header-row). ha-card itself gets no header at all here.
         const card = el.shadowRoot?.querySelector("ha-card");
-        expect(card?.getAttribute("header")).toBe("Todo Overlay");
-        expect(el.shadowRoot?.querySelectorAll("todo-overlay-list")).toHaveLength(1);
-        expect(el.shadowRoot?.querySelector(".entity-header")).toBeNull();
+        expect(card?.getAttribute("header")).toBeNull();
+        const lists = el.shadowRoot?.querySelectorAll("todo-overlay-list");
+        expect(lists).toHaveLength(1);
+        expect((lists?.[0] as HTMLElement & {headerTitle?: string}).headerTitle).toBe("Todo Overlay");
     });
 
-    it("renders one section with a friendly-name heading per entity in multi-entity mode", async () => {
+    it("passes each entity's friendly name as headerTitle in multi-entity mode", async () => {
         const el = document.createElement("todo-overlay-card") as TodoOverlayCard;
         el.hass = makeFakeHass({
             "todo.shopping": {state: "0", last_updated: "", attributes: {friendly_name: "Shopping"}},
@@ -83,9 +88,10 @@ describe("todo-overlay-card rendering", () => {
         document.body.appendChild(el);
         await el.updateComplete;
 
-        expect(el.shadowRoot?.querySelectorAll("todo-overlay-list")).toHaveLength(2);
-        const headers = [...(el.shadowRoot?.querySelectorAll(".entity-header") ?? [])];
-        expect(headers.map(h => h.textContent)).toEqual(["Shopping", "Travel"]);
+        const lists = [...(el.shadowRoot?.querySelectorAll("todo-overlay-list") ?? [])] as (HTMLElement & {
+            headerTitle?: string;
+        })[];
+        expect(lists.map(l => l.headerTitle)).toEqual(["Shopping", "Travel"]);
     });
 
     it("defaults hideCompleteForParents to true when unset", async () => {

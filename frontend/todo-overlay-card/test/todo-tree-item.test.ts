@@ -2,7 +2,7 @@ import {afterEach, describe, expect, it, vi} from "vitest";
 
 import "../src/components/todo-tree-item";
 import type {TodoTreeItem} from "../src/components/todo-tree-item";
-import type {TodoItem} from "../src/models";
+import {LONG_PRESS_MS, type TodoItem} from "../src/models";
 
 function makeItem(overrides: Partial<TodoItem> = {}): TodoItem {
     return {
@@ -35,6 +35,23 @@ async function renderItem(item: TodoItem, props: Partial<TodoTreeItem> = {}): Pr
 afterEach(() => {
     document.body.innerHTML = "";
 });
+
+// A real press/release cycle, not a synthesized "click" - drives the
+// row's own pointerdown (bound directly on .row) and, since that
+// attaches a window-level pointerup listener for the rest of the
+// gesture (see pointerDown()), the matching release has to be
+// dispatched on window too, exactly as a real browser would deliver it.
+function press(el: TodoTreeItem): void {
+    (el.shadowRoot?.querySelector(".row") as HTMLElement).dispatchEvent(
+        new PointerEvent("pointerdown", {clientX: 0, clientY: 0, pointerType: "mouse", bubbles: true}),
+    );
+}
+
+function release(): void {
+    window.dispatchEvent(
+        new PointerEvent("pointerup", {clientX: 0, clientY: 0, pointerType: "mouse", bubbles: true}),
+    );
+}
 
 describe("todo-overlay-tree-item", () => {
     it("renders the item's title", async () => {
@@ -147,6 +164,66 @@ describe("todo-overlay-tree-item", () => {
         expect(el.shadowRoot?.querySelector("todo-overlay-tree-item")).not.toBeNull();
     });
 
+    it("dims (never unmounts) a parent's whole subtree, at every depth, once its own drag actually "
+        + "engages - the moving group reads as one unit without any layout shift", async () => {
+        const el = await renderItem(
+            makeItem({
+                id: "parent",
+                children: [makeItem({
+                    id: "child", title: "Child",
+                    children: [makeItem({id: "grandchild", title: "Grandchild"})],
+                })],
+            }),
+        );
+
+        const childEl = el.shadowRoot?.querySelector("todo-overlay-tree-item") as Element & {shadowRoot: ShadowRoot};
+        const grandchildEl = childEl.shadowRoot?.querySelector("todo-overlay-tree-item") as Element & {shadowRoot: ShadowRoot};
+
+        expect(childEl.shadowRoot.querySelector(".row")?.classList.contains("dimmed")).toBe(false);
+        expect(grandchildEl.shadowRoot.querySelector(".row")?.classList.contains("dimmed")).toBe(false);
+
+        const draggable = el as unknown as {
+            draggedId?: string;
+            onWindowPointerMove: (e: PointerEvent) => void;
+        };
+
+        el.draggedId = "parent";
+        (el.shadowRoot?.querySelector(".row") as HTMLElement).dispatchEvent(
+            new PointerEvent("pointerdown", {clientX: 0, clientY: 0, pointerType: "mouse"}),
+        );
+
+        // A mouse drag engages on the very first move past the jitter
+        // threshold (see onWindowPointerMove's own doc comment) - no hold
+        // delay to wait out first, unlike touch.
+        draggable.onWindowPointerMove(new PointerEvent("pointermove", {clientX: 0, clientY: 20}));
+        await el.updateComplete;
+        await childEl.updateComplete;
+        await grandchildEl.updateComplete;
+
+        // Still fully mounted - dimmed in place, not collapsed/removed.
+        expect(el.shadowRoot?.querySelector("ul")).not.toBeNull();
+        expect(childEl.shadowRoot.querySelector(".row")?.classList.contains("dimmed")).toBe(true);
+        expect(grandchildEl.shadowRoot.querySelector(".row")?.classList.contains("dimmed")).toBe(true);
+
+        // The dragged row's OWN row must actually render as nothing (not
+        // just carry a "lifted" class) - a real browser check caught a
+        // regression here where "lifted" still rendered a visible grey
+        // box that stayed behind at the original position for the whole
+        // drag, disconnected from the floating ghost. getComputedStyle,
+        // not classList, is what would have caught that.
+        const draggedRow = el.shadowRoot?.querySelector(".row") as HTMLElement;
+        expect(draggedRow.classList.contains("lifted")).toBe(true);
+        expect(getComputedStyle(draggedRow).display).toBe("none");
+
+        // Not persisted - dropping (draggedId no longer this row's id)
+        // reverts every descendant back to normal.
+        el.draggedId = undefined;
+        await el.updateComplete;
+        await childEl.updateComplete;
+
+        expect(childEl.shadowRoot.querySelector(".row")?.classList.contains("dimmed")).toBe(false);
+    });
+
     it("dispatches tree-toggle-collapse with the item's id when the chevron is clicked", async () => {
         const el = await renderItem(makeItem({id: "parent", children: [makeItem({id: "child"})]}));
 
@@ -179,6 +256,94 @@ describe("todo-overlay-tree-item", () => {
 
         const chips = [...(el.shadowRoot?.querySelectorAll(".tag-chip") ?? [])];
         expect(chips.map(chip => chip.textContent)).toEqual(["urgent", "deli"]);
+    });
+
+    describe("double-click / quick-tap gestures", () => {
+        // Live-reproduced bug: two ordinary, otherwise-unremarkable clicks
+        // sometimes never make the browser fire a native "dblclick" event
+        // at all (confirmed via a real headless-Chrome CDP session, not
+        // just theory) - relying on it left double-clicking to open the
+        // edit dialog silently doing nothing. Detecting the second tap
+        // via the row's own pending debounce timer (pointerUp) instead
+        // doesn't depend on that browser event ever showing up.
+        it("treats two quick taps as a double-click, opening the edit-dialog path exactly once", async () => {
+            vi.useFakeTimers();
+
+            try {
+                const el = await renderItem(makeItem({id: "1"}));
+                const events: {id: string; pressDurationMs: number; moved: boolean}[] = [];
+
+                el.addEventListener("tree-pointer-up", e => {
+                    events.push((e as CustomEvent).detail);
+                });
+
+                press(el);
+                release();
+                press(el);
+                release();
+
+                // Nothing left pending - a stray later firing would show
+                // up as a second, unwanted event.
+                vi.advanceTimersByTime(1000);
+
+                expect(events).toEqual([{id: "1", pressDurationMs: LONG_PRESS_MS, moved: false}]);
+            } finally {
+                vi.useRealTimers();
+            }
+        });
+
+        it("fires a single tap after the debounce window elapses when no second tap arrives", async () => {
+            vi.useFakeTimers();
+
+            try {
+                const el = await renderItem(makeItem({id: "1"}));
+                const events: {id: string; pressDurationMs: number; moved: boolean}[] = [];
+
+                el.addEventListener("tree-pointer-up", e => {
+                    events.push((e as CustomEvent).detail);
+                });
+
+                press(el);
+                release();
+
+                expect(events).toEqual([]);
+
+                vi.advanceTimersByTime(300);
+
+                expect(events).toHaveLength(1);
+                expect(events[0].moved).toBe(false);
+                expect(events[0].pressDurationMs).toBeLessThan(LONG_PRESS_MS);
+            } finally {
+                vi.useRealTimers();
+            }
+        });
+
+        it("treats two taps spaced further apart than the debounce window as two separate single taps", async () => {
+            vi.useFakeTimers();
+
+            try {
+                const el = await renderItem(makeItem({id: "1"}));
+                const events: {id: string; pressDurationMs: number; moved: boolean}[] = [];
+
+                el.addEventListener("tree-pointer-up", e => {
+                    events.push((e as CustomEvent).detail);
+                });
+
+                press(el);
+                release();
+                vi.advanceTimersByTime(300);
+                expect(events).toHaveLength(1);
+
+                press(el);
+                release();
+                vi.advanceTimersByTime(300);
+                expect(events).toHaveLength(2);
+
+                expect(events.every(detail => detail.pressDurationMs < LONG_PRESS_MS)).toBe(true);
+            } finally {
+                vi.useRealTimers();
+            }
+        });
     });
 
     describe("delete button", () => {

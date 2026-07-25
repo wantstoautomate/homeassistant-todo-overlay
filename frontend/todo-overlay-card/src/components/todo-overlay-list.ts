@@ -76,6 +76,12 @@ const CLEAR_COMPLETED_ICON = html`
     </svg>
 `;
 
+const CLOSE_ICON = html`
+    <svg viewBox="0 0 24 24">
+        <path d="M19,6.41L17.59,5L12,10.59L6.41,5L5,6.41L10.59,12L5,17.59L6.41,19L12,13.41L17.59,19L19,17.59L13.41,12L19,6.41Z"></path>
+    </svg>
+`;
+
 interface TreeItemElement extends Element {
     item?: TodoItem;
 }
@@ -84,7 +90,12 @@ interface TodoListElement extends Element {
     entity?: string;
 }
 
-type RowSnapshot = {id: string; entityId: string; children: TodoItem[]; rect: DOMRect};
+// id is undefined for exactly one case: the placeholder todo-tree.ts
+// renders in place of an empty item list (see its own "empty-drop-zone"
+// element) - there's no existing item there to position relative to, so
+// dropping onto it can only ever mean "become this entity's first root
+// item" (see findDropTarget/onGlobalPointerUp's own handling of this).
+type RowSnapshot = {id: string | undefined; entityId: string; children: TodoItem[]; rect: DOMRect};
 
 // Recursively collects every rendered row across all nested shadow roots,
 // across every todo-overlay-list on the page (not just this one) - a drop
@@ -116,6 +127,19 @@ function collectAllRows(root: ParentNode, currentEntity?: string): RowSnapshot[]
                     entityId: currentEntity,
                     children: itemEl.item.children,
                     rect: rowEl.getBoundingClientRect(),
+                });
+            }
+        }
+
+        if (el.localName === "todo-overlay-tree" && currentEntity) {
+            const emptyZone = el.shadowRoot?.querySelector("[data-empty-drop-zone]");
+
+            if (emptyZone) {
+                rows.push({
+                    id: undefined,
+                    entityId: currentEntity,
+                    children: [],
+                    rect: emptyZone.getBoundingClientRect(),
                 });
             }
         }
@@ -185,7 +209,7 @@ function resolvePlacement(
 function findDropTarget(
     y: number,
     rows: RowSnapshot[],
-): {id: string; entityId: string; placement: Placement} | undefined {
+): {id: string | undefined; entityId: string; placement: Placement} | undefined {
     if (rows.length === 0) {
         return undefined;
     }
@@ -204,6 +228,14 @@ function findDropTarget(
             nearest = row;
             nearestDistance = distance;
         }
+    }
+
+    // The empty-list placeholder - nothing to be before/after/inside OF,
+    // so the only meaningful placement is "become this entity's first
+    // (and only) root item" (see onGlobalPointerUp's transferItem call,
+    // which sends no reference_id at all for this case).
+    if (nearest.id === undefined) {
+        return {id: undefined, entityId: nearest.entityId, placement: "inside"};
     }
 
     const relativeY = (y - nearest.rect.top) / nearest.rect.height;
@@ -230,6 +262,25 @@ function findItem(items: TodoItem[], id: string): TodoItem | undefined {
     return undefined;
 }
 
+// A dragged row's own subtree keeps rendering normally beneath its lifted
+// placeholder (see todo-tree-item.ts - only the dragged row's OWN content
+// collapses, its child <ul> is untouched), so those descendant rows are
+// still fully live, hit-testable rows for the rest of the drag. Dropping
+// the dragged item before/after/inside any of them is always a cycle - the
+// backend would reject it as one anyway - and it's not just a theoretical
+// case: it's the easiest way to reproduce one, since it only takes the
+// dragged item sitting at the very top (or bottom) of the list for its own
+// first (or last) child to become the new nearest row once the dragged
+// row's placeholder shrinks to almost nothing.
+function collectDescendantIds(item: TodoItem, into: Set<string> = new Set()): Set<string> {
+    for (const child of item.children) {
+        into.add(child.id);
+        collectDescendantIds(child, into);
+    }
+
+    return into;
+}
+
 function splitDueDateTime(iso: string | null): {date: string; time: string} {
     if (!iso) {
         return {date: "", time: ""};
@@ -242,6 +293,7 @@ function splitDueDateTime(iso: string | null): {date: string; time: string} {
 }
 
 const UNDO_TIMEOUT_MS = 8000;
+const ERROR_TIMEOUT_MS = 8000;
 
 const FILTER_MODES: readonly FilterMode[] = ["all", "active", "completed", "overdue"];
 
@@ -262,15 +314,30 @@ const FILTER_LABELS: Record<FilterMode, string> = {
 export class TodoOverlayList extends LitElement {
 
     static styles = css`
+        .list-header-row {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 8px;
+            padding: 8px 8px 8px 12px;
+        }
+
+        .list-title {
+            font-family: Roboto, "Noto Sans", sans-serif;
+            font-size: 16px;
+            font-weight: 500;
+            color: var(--primary-text-color);
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+            min-width: 0;
+        }
+
         .toolbar {
             display: flex;
             align-items: center;
             gap: 4px;
-            padding: 8px 12px;
-        }
-
-        .toolbar-spacer {
-            flex: 1;
+            flex-shrink: 0;
         }
 
         .toolbar-icon {
@@ -423,6 +490,53 @@ export class TodoOverlayList extends LitElement {
             cursor: pointer;
         }
 
+        /* Sits above the list rather than replacing it (see render()) -
+           an action failing is never a reason to hide items the user can
+           already see, only to flag that the one action didn't go
+           through. Auto-dismisses like the undo snackbar, and can be
+           closed early by hand. */
+        .error-banner {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            margin: 0 12px 8px;
+            padding: 10px 12px;
+            border-radius: 4px;
+            background: rgba(var(--rgb-error-color, 219, 68, 55), 0.1);
+            color: var(--error-color);
+            font-family: Roboto, "Noto Sans", sans-serif;
+            font-size: 13px;
+        }
+
+        .error-banner span {
+            flex: 1;
+        }
+
+        .error-banner button {
+            flex-shrink: 0;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            width: 20px;
+            height: 20px;
+            border: none;
+            background: none;
+            padding: 0;
+            color: inherit;
+            cursor: pointer;
+            opacity: 0.7;
+        }
+
+        .error-banner button:hover {
+            opacity: 1;
+        }
+
+        .error-banner button svg {
+            width: 16px;
+            height: 16px;
+            fill: currentColor;
+        }
+
         .section-header {
             padding: 14px 16px 6px;
             font-family: Roboto, "Noto Sans", sans-serif;
@@ -477,6 +591,14 @@ export class TodoOverlayList extends LitElement {
 
     @property()
     public entity!: string;
+
+    // The section title shown on the same row as the +/icons toolbar -
+    // the entity's friendly name in multi-entity mode, or the card's
+    // (possibly default) title in single-entity mode. Rendering it here
+    // rather than in a separate element one shadow root up is what lets
+    // it share a single flex row with the toolbar at all.
+    @property()
+    public headerTitle?: string;
 
     @property({type: Boolean})
     public hideCompleteForParents = false;
@@ -546,6 +668,46 @@ export class TodoOverlayList extends LitElement {
     // onGlobalPointerUp for how that's handled.
     private hoverEntityId?: string;
 
+    // draggedId/hoverId/hoverEntityId above are only ever populated on
+    // the ONE instance whose own row the drag actually started from -
+    // every OTHER todo-overlay-list on the page (any other section of a
+    // multi-entity card, or another card entirely) has no idea a drag is
+    // even happening via those fields alone. That's fine for highlighting
+    // an ordinary ROW (it's threaded down as a prop from ITS OWN
+    // ancestor, which for a foreign entity's row is that OTHER instance -
+    // still reachable), but an EMPTY list's placeholder belongs to a
+    // DIFFERENT todo-overlay-list instance than the one driving the drag,
+    // and by definition can never BE the drag-owning instance itself (an
+    // entity being dragged FROM can't simultaneously be empty). Without
+    // this broadcast, "am I currently a hovered empty-list target" would
+    // never be knowable outside the drag-owning instance at all - so the
+    // one dedicated to that specific state is populated for every
+    // instance (see onGlobalPointerMove/onGlobalPointerUp, which send
+    // it, and connectedCallback, which every instance listens for).
+    @state()
+    private foreignDragActive = false;
+
+    private foreignDragHoverEntityId?: string;
+    private foreignDragHoverId?: string;
+
+    private onForeignDragHover = (e: CustomEvent<{draggedId?: string; hoverEntityId?: string; hoverId?: string}>) => {
+        const wasEmptyTarget = this.isEmptyDropTarget;
+
+        this.foreignDragActive = e.detail.draggedId !== undefined;
+        this.foreignDragHoverEntityId = e.detail.hoverEntityId;
+        this.foreignDragHoverId = e.detail.hoverId;
+
+        // foreignDragHoverEntityId/foreignDragHoverId aren't reactive
+        // @state() themselves (they'd only usefully matter in
+        // combination with foreignDragActive anyway) - force a render
+        // when the combined isEmptyDropTarget verdict actually flips, or
+        // a hover arriving/leaving the empty placeholder would never
+        // repaint it.
+        if (wasEmptyTarget !== this.isEmptyDropTarget) {
+            this.requestUpdate();
+        }
+    };
+
     @state()
     private ghostPosition?: {x: number; y: number};
 
@@ -575,6 +737,7 @@ export class TodoOverlayList extends LitElement {
     private savedNames: string[] = [];
 
     private undoTimer?: number;
+    private errorTimer?: number;
     private lastEntityUpdate?: string;
 
     protected updated(changed: Map<string, unknown>) {
@@ -611,9 +774,25 @@ export class TodoOverlayList extends LitElement {
     // exists" ValueError, etc.) is meaningless to whoever's actually
     // using this card - it's logged in full for whoever's debugging,
     // and everyone else just sees one plain, consistent message.
+    //
+    // This never hides an already-loaded list (see render()): a failed
+    // drag, tap, or edit is just one action not going through, not a
+    // reason to make every item the user can already see vanish until
+    // they refresh the page. The banner auto-dismisses the same way the
+    // undo snackbar does, rather than sitting there forever.
     private reportError(action: string, err: unknown): void {
         console.error(`todo-overlay-card: ${action} failed`, err);
+
+        window.clearTimeout(this.errorTimer);
         this.error = "Something went wrong. Check the browser console for details.";
+        this.errorTimer = window.setTimeout(() => {
+            this.error = undefined;
+        }, ERROR_TIMEOUT_MS);
+    }
+
+    private dismissError() {
+        window.clearTimeout(this.errorTimer);
+        this.error = undefined;
     }
 
     private async load() {
@@ -624,6 +803,7 @@ export class TodoOverlayList extends LitElement {
                 this.moveCompletedItems,
             );
 
+            window.clearTimeout(this.errorTimer);
             this.error = undefined;
         } catch (err) {
             this.reportError("loading the list", err);
@@ -645,6 +825,20 @@ export class TodoOverlayList extends LitElement {
         return this.sortBy !== "manual";
     }
 
+    // True while a drag - from this instance or (far more commonly,
+    // since an entity being dragged FROM can't also be empty) another
+    // one entirely - is hovering this list's own empty-state placeholder
+    // (see todo-tree.ts) as its drop target. Driven by the
+    // foreignDragActive broadcast (see its own doc comment) rather than
+    // this instance's own draggedId/hoverEntityId/hoverId, which are
+    // only ever populated on whichever instance the drag actually
+    // started from.
+    private get isEmptyDropTarget(): boolean {
+        return this.foreignDragActive
+            && this.foreignDragHoverEntityId === this.entity
+            && this.foreignDragHoverId === undefined;
+    }
+
     // --- drag / tap / hold ---------------------------------------------
     //
     // A drag only ever reaches the "live" ghost-follow stage below once
@@ -662,7 +856,19 @@ export class TodoOverlayList extends LitElement {
     }
 
     private snapshotRows() {
-        this.rowSnapshot = collectAllRows(document).filter(row => row.id !== this.draggedId);
+        const excluded = new Set<string>();
+
+        if (this.draggedId) {
+            excluded.add(this.draggedId);
+
+            const dragged = this.list && findItem(this.list.items, this.draggedId);
+
+            if (dragged) {
+                collectDescendantIds(dragged, excluded);
+            }
+        }
+
+        this.rowSnapshot = collectAllRows(document).filter(row => row.id === undefined || !excluded.has(row.id));
     }
 
     private onDragStart(e: CustomEvent) {
@@ -702,6 +908,20 @@ export class TodoOverlayList extends LitElement {
         window.addEventListener("pointercancel", this.onGlobalPointerUp, {capture: true});
     }
 
+    // Lets every OTHER todo-overlay-list on the page (any other section
+    // of a multi-entity card, or a separate card entirely) know this
+    // instance's current drag/hover state - see foreignDragActive's own
+    // doc comment for why that's needed at all.
+    private broadcastDragHover() {
+        window.dispatchEvent(new CustomEvent("todo-overlay-drag-hover", {
+            detail: {
+                draggedId: this.draggedId,
+                hoverEntityId: this.hoverEntityId,
+                hoverId: this.hoverId,
+            },
+        }));
+    }
+
     private onGlobalPointerMove = (e: PointerEvent) => {
         this.ghostPosition = {x: e.clientX, y: e.clientY};
 
@@ -710,7 +930,13 @@ export class TodoOverlayList extends LitElement {
 
         this.hoverId = valid ? hit.id : undefined;
         this.hoverPlacement = valid ? hit.placement : undefined;
+        // hit.id being undefined (the empty-list placeholder) is itself a
+        // VALID target, so entity has to be tracked independently of
+        // hoverId - hoverId alone can no longer answer "is anything being
+        // hovered", only hoverEntityId can (see onGlobalPointerUp).
         this.hoverEntityId = valid ? hit.entityId : undefined;
+
+        this.broadcastDragHover();
     };
 
     private onGlobalPointerUp = async () => {
@@ -730,14 +956,27 @@ export class TodoOverlayList extends LitElement {
         this.hoverEntityId = undefined;
         this.rowSnapshot = [];
 
-        if (draggedId && hoverId && draggedId !== hoverId) {
+        // Tell every other list the drag is over - otherwise an empty
+        // list's placeholder that was highlighted mid-drag would stay
+        // stuck highlighted forever (no further pointermove is coming to
+        // naturally clear it).
+        this.broadcastDragHover();
+
+        // hoverEntityId (not hoverId) is the "is anything actually being
+        // hovered" signal - hoverId undefined can validly mean "yes, the
+        // empty-list placeholder for hoverEntityId", not just "nothing".
+        if (draggedId && hoverEntityId) {
             try {
-                if (hoverEntityId && hoverEntityId !== this.entity) {
-                    // Dropped onto a row belonging to a different entity
-                    // (another section of a multi-entity card, or a
-                    // separate card entirely) - a physical move across
-                    // two independent todo.* lists, not just a metadata
-                    // reshuffle within one.
+                if (hoverEntityId !== this.entity) {
+                    // Dropped onto a row (or an empty list's own
+                    // placeholder) belonging to a different entity -
+                    // another section of a multi-entity card, or a
+                    // separate card entirely - a physical move across two
+                    // independent todo.* lists, not just a metadata
+                    // reshuffle within one. hoverId is only undefined
+                    // here when the target list has no items at all to
+                    // position relative to; transferItem's own reference
+                    // parameter accepts that directly.
                     await transferItem(
                         this.hass,
                         this.entity,
@@ -746,7 +985,10 @@ export class TodoOverlayList extends LitElement {
                         hoverId,
                         hoverPlacement ?? "inside",
                     );
-                } else {
+                } else if (hoverId && hoverId !== draggedId) {
+                    // Same-entity reorder always has a real reference
+                    // row - the dragged item already lives in this
+                    // entity, so it can never be the empty-list case.
                     await moveItem(
                         this.hass,
                         this.entity,
@@ -754,6 +996,8 @@ export class TodoOverlayList extends LitElement {
                         hoverId,
                         hoverPlacement ?? "inside",
                     );
+                } else {
+                    return;
                 }
 
                 await this.load();
@@ -796,11 +1040,19 @@ export class TodoOverlayList extends LitElement {
         this.draggedId = undefined;
     }
 
+    connectedCallback() {
+        super.connectedCallback();
+        window.addEventListener("todo-overlay-drag-hover", this.onForeignDragHover as EventListener);
+    }
+
     disconnectedCallback() {
         super.disconnectedCallback();
         window.removeEventListener("pointermove", this.onGlobalPointerMove, {capture: true});
         window.removeEventListener("pointerup", this.onGlobalPointerUp, {capture: true});
         window.removeEventListener("pointercancel", this.onGlobalPointerUp, {capture: true});
+        window.removeEventListener("todo-overlay-drag-hover", this.onForeignDragHover as EventListener);
+        window.clearTimeout(this.undoTimer);
+        window.clearTimeout(this.errorTimer);
     }
 
     // --- collapse / filter -------------------------------------------------
@@ -1157,6 +1409,7 @@ export class TodoOverlayList extends LitElement {
                     .draggedId=${this.draggedId}
                     .hoverId=${this.hoverId}
                     .hoverPlacement=${this.hoverPlacement}
+                    .emptyDropHighlight=${this.isEmptyDropTarget}
                     .hideCompleteForParents=${this.hideCompleteForParents}
                     .showCheckboxes=${this.showCheckboxes}
                     .confirmDelete=${this.confirmDelete}
@@ -1182,6 +1435,7 @@ export class TodoOverlayList extends LitElement {
                     .draggedId=${this.draggedId}
                     .hoverId=${this.hoverId}
                     .hoverPlacement=${this.hoverPlacement}
+                    .emptyDropHighlight=${this.isEmptyDropTarget}
                     .hideCompleteForParents=${this.hideCompleteForParents}
                     .showCheckboxes=${this.showCheckboxes}
                     .confirmDelete=${this.confirmDelete}
@@ -1286,84 +1540,96 @@ export class TodoOverlayList extends LitElement {
     render() {
         const hasToolbar =
             this.showQuickAdd || this.showFilterMenu || this.showSaveLoadButtons || this.showClearButton;
+        const hasHeaderRow = !!this.headerTitle || hasToolbar;
 
         return html`
             ${
-                hasToolbar
+                hasHeaderRow
                     ? html`
-                        <div class="toolbar">
-                            <button
-                                class=${classMap({
-                                    "toolbar-icon": true,
-                                    "quick-add-toggle": true,
-                                    expanded: this.quickAddExpanded,
-                                })}
-                                aria-label="Add item"
-                                @click=${this.onToggleQuickAdd}
-                            >
-                                ${PLUS_ICON}
-                            </button>
-
-                            <div class="toolbar-spacer"></div>
-
+                        <div class="list-header-row">
+                            ${this.headerTitle ? html`<span class="list-title">${this.headerTitle}</span>` : ""}
                             ${
-                                this.showFilterMenu
+                                hasToolbar
                                     ? html`
-                                        <div
-                                            class=${classMap({
-                                                "toolbar-icon": true,
-                                                "filter-select-wrapper": true,
-                                                active: this.filterMode !== "all",
-                                            })}
-                                        >
-                                            ${FILTER_ICON}
-                                            ${this.filterMode !== "all" ? html`<span class="badge-dot"></span>` : ""}
-                                            <select
-                                                class="filter-select"
-                                                aria-label="Filter"
-                                                .value=${this.filterMode}
-                                                @change=${this.onFilterSelectChange}
+                                        <div class="toolbar">
+                                            <button
+                                                class=${classMap({
+                                                    "toolbar-icon": true,
+                                                    "quick-add-toggle": true,
+                                                    expanded: this.quickAddExpanded,
+                                                })}
+                                                aria-label="Add item"
+                                                @click=${this.onToggleQuickAdd}
                                             >
-                                                ${FILTER_MODES.map(mode => html`
-                                                    <option value=${mode}>${FILTER_LABELS[mode]}</option>
-                                                `)}
-                                            </select>
+                                                ${PLUS_ICON}
+                                            </button>
+
+                                            ${
+                                                this.showFilterMenu
+                                                    ? html`
+                                                        <div
+                                                            class=${classMap({
+                                                                "toolbar-icon": true,
+                                                                "filter-select-wrapper": true,
+                                                                active: this.filterMode !== "all",
+                                                            })}
+                                                        >
+                                                            ${FILTER_ICON}
+                                                            ${
+                                                                this.filterMode !== "all"
+                                                                    ? html`<span class="badge-dot"></span>`
+                                                                    : ""
+                                                            }
+                                                            <select
+                                                                class="filter-select"
+                                                                aria-label="Filter"
+                                                                .value=${this.filterMode}
+                                                                @change=${this.onFilterSelectChange}
+                                                            >
+                                                                ${FILTER_MODES.map(mode => html`
+                                                                    <option value=${mode}>${FILTER_LABELS[mode]}</option>
+                                                                `)}
+                                                            </select>
+                                                        </div>
+                                                    `
+                                                    : ""
+                                            }
+
+                                            ${
+                                                this.showSaveLoadButtons
+                                                    ? html`
+                                                        <button
+                                                            class="toolbar-icon"
+                                                            aria-label="Save list"
+                                                            @click=${this.openSaveDialog}
+                                                        >
+                                                            ${SAVE_ICON}
+                                                        </button>
+                                                        <button
+                                                            class="toolbar-icon"
+                                                            aria-label="Load list"
+                                                            @click=${this.openLoadDialog}
+                                                        >
+                                                            ${LOAD_ICON}
+                                                        </button>
+                                                    `
+                                                    : ""
+                                            }
+
+                                            ${
+                                                this.showClearButton
+                                                    ? html`
+                                                        <button
+                                                            class="toolbar-icon"
+                                                            aria-label="Clear completed"
+                                                            @click=${this.onClearCompleted}
+                                                        >
+                                                            ${CLEAR_COMPLETED_ICON}
+                                                        </button>
+                                                    `
+                                                    : ""
+                                            }
                                         </div>
-                                    `
-                                    : ""
-                            }
-
-                            ${
-                                this.showSaveLoadButtons
-                                    ? html`
-                                        <button
-                                            class="toolbar-icon"
-                                            aria-label="Save list"
-                                            @click=${this.openSaveDialog}
-                                        >
-                                            ${SAVE_ICON}
-                                        </button>
-                                        <button
-                                            class="toolbar-icon"
-                                            aria-label="Load list"
-                                            @click=${this.openLoadDialog}
-                                        >
-                                            ${LOAD_ICON}
-                                        </button>
-                                    `
-                                    : ""
-                            }
-
-                            ${
-                                this.showClearButton
-                                    ? html`
-                                        <button
-                                            class="toolbar-icon"
-                                            aria-label="Clear completed"
-                                            @click=${this.onClearCompleted}
-                                        >
-                                            ${CLEAR_COMPLETED_ICON}
-                                        </button>
                                     `
                                     : ""
                             }
@@ -1397,14 +1663,28 @@ export class TodoOverlayList extends LitElement {
             }
 
             ${
-                this.error
+                this.list
                     ? html`
-                        <div style="padding:16px; color: var(--error-color)">
-                            ${this.error}
-                        </div>
+                        ${
+                            this.error
+                                ? html`
+                                    <div class="error-banner">
+                                        <span>${this.error}</span>
+                                        <button aria-label="Dismiss" @click=${this.dismissError}>
+                                            ${CLOSE_ICON}
+                                        </button>
+                                    </div>
+                                `
+                                : ""
+                        }
+                        ${this.renderTree(this.list)}
                     `
-                    : this.list
-                        ? this.renderTree(this.list)
+                    : this.error
+                        ? html`
+                            <div style="padding:16px; color: var(--error-color)">
+                                ${this.error}
+                            </div>
+                        `
                         : html`
                             <div style="padding:16px">
                                 Loading...

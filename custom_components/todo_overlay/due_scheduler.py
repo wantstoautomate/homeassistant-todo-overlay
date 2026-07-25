@@ -38,6 +38,7 @@ than trying to incrementally patch a stateful schedule.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from collections.abc import Callable
 from datetime import datetime
@@ -73,6 +74,14 @@ class DueScheduler:
         self._utcnow = utcnow
         # (entity_id, item_id) -> (due_value it's scheduled for, cancel callback)
         self._scheduled: dict[tuple[str, str], tuple[str, CALLBACK_TYPE]] = {}
+        # One lock per entity, guarding reconcile_entity()'s whole body -
+        # two reconcile passes for the same entity can genuinely overlap
+        # (the per-item subscription's fire-and-forget task from a native
+        # todo.update_item edit, racing the direct hook call
+        # set_trigger_on_due() makes right after) - see reconcile_entity's
+        # own docstring for why an unserialized pair of passes can clobber
+        # each other's scheduling decisions.
+        self._reconcile_locks: dict[str, asyncio.Lock] = {}
         # entity_id -> unsubscribe callback for that entity's
         # async_subscribe_updates() registration.
         self._item_unsubs: dict[str, CALLBACK_TYPE] = {}
@@ -152,7 +161,36 @@ class DueScheduler:
         for eid, item_id in [key for key in self._scheduled if key[0] == entity_id]:
             self._cancel(eid, item_id)
 
+    def _lock_for(self, entity_id: str) -> asyncio.Lock:
+        lock = self._reconcile_locks.get(entity_id)
+
+        if lock is None:
+            lock = asyncio.Lock()
+            self._reconcile_locks[entity_id] = lock
+
+        return lock
+
     async def reconcile_entity(self, entity_id: str) -> None:
+        # Serialized per entity: this method awaits multiple times
+        # (get_list, get_due_fired, ...) before it finishes deciding what
+        # to schedule/cancel, and self._scheduled is read fresh right
+        # before acting on that decision - two unserialized passes for
+        # the same entity can interleave so the SLOWER one commits a
+        # decision made from data it read before the FASTER one's writes,
+        # clobbering whatever the faster one just scheduled. Concretely:
+        # a due-date edit's native todo.update_item fires the per-item
+        # subscription (a fire-and-forget reconcile task) at almost the
+        # same moment set_trigger_on_due() calls back into this directly
+        # - the pending subscription-triggered pass can still be mid-
+        # flight, holding a `desired` set computed BEFORE the toggle was
+        # enabled, and finish AFTER the toggle's own pass already
+        # scheduled the item - cancelling it right back out. This was a
+        # real, live-reproduced bug: enabling the trigger appeared to
+        # silently do nothing.
+        async with self._lock_for(entity_id):
+            await self._reconcile_entity_locked(entity_id)
+
+    async def _reconcile_entity_locked(self, entity_id: str) -> None:
         try:
             todo_list = await self._manager.get_list(entity_id)
         except EntityNotFoundError:

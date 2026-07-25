@@ -24,8 +24,9 @@ const holdRippleSizePx = unsafeCSS(`${HOLD_RIPPLE_SIZE}px`);
 
 // A plain tap is delayed this long before it commits to toggling
 // completion, so a following second click can still cancel it and open
-// the edit dialog instead (see onDoubleClick). Skipped entirely for
-// drags and holds, which are unambiguous the moment they happen.
+// the edit dialog instead (see pointerUp's own double-click detection).
+// Skipped entirely for drags and holds, which are unambiguous the
+// moment they happen.
 const CLICK_DEBOUNCE_MS = 250;
 
 const CLOCK_ICON = html`
@@ -153,13 +154,25 @@ export class TodoTreeItem extends LitElement {
             background: rgba(var(--rgb-primary-text-color, 0, 0, 0), 0.12);
         }
 
+        /* The dragged row itself is fully removed from the flow, not
+           shrunk to a placeholder box - a lingering box here (whatever
+           its size or fill) reads as debris left behind by the item,
+           disconnected from the ghost that's now following the pointer
+           (see renderDragGhost) elsewhere on screen. Hit-testing already
+           treats this row as gone (collectAllRows/snapshotRows exclude
+           it), so the visual now matches: nothing stays behind, the list
+           closes up around the gap immediately, and the ghost is the
+           only thing representing the item until it drops. */
         .row.lifted {
-            min-height: 10px;
-            padding: 4px 20px;
-            border-radius: 4px;
-            border: 1px dashed var(--divider-color);
-            background: rgba(var(--rgb-primary-text-color, 0, 0, 0), 0.03);
-            cursor: grabbing;
+            display: none;
+        }
+
+        /* Marks every row inside a dragged parent's subtree as moving
+           along with it - no height/layout change (unlike .lifted, which
+           collapses), so nothing reflows and nothing else on the row
+           shifts position mid-drag. */
+        .row.dimmed {
+            opacity: 0.45;
         }
 
         .row.drop-inside {
@@ -479,6 +492,20 @@ export class TodoTreeItem extends LitElement {
     @property({attribute: false})
     collapsedIds: Set<string> = new Set();
 
+    // True for every row inside a dragged parent's subtree, at any depth -
+    // set by an ancestor row once ITS OWN isBeingDragged goes true (see the
+    // child-rendering loop below, which passes isBeingDragged down as this
+    // property, and re-passes its own already-true value further down in
+    // turn so it keeps propagating past however many levels of nesting).
+    // Purely a dimmed style (see rowClasses) - deliberately NOT collapsing
+    // or unmounting these rows, which would reflow the list around the
+    // sudden gap and produce a jarring flash of blank space where the
+    // subtree used to be. Dimming in place needs no layout change at all,
+    // so there's nothing to flash: the whole moving subtree just visibly
+    // reads as one unit, exactly where it's already sitting.
+    @property({attribute: false})
+    dimmedByAncestorDrag = false;
+
     @state()
     private holdRippleOrigin?: {x: number; y: number};
 
@@ -741,26 +768,29 @@ export class TodoTreeItem extends LitElement {
             return;
         }
 
-        // Might be the first click of a double-click - give it a brief
-        // window to arrive before committing to a plain toggle.
-        window.clearTimeout(this.clickTimer);
+        // A PREVIOUS quick tap's debounce timer is still armed and
+        // waiting - this tap arrived before it fired, so together the
+        // two are a double click. Detected this way (a second tap
+        // landing inside the first tap's own debounce window) rather
+        // than by listening for the browser's native "dblclick" event -
+        // that event depends on the browser's own click-pairing timing,
+        // which was found (via CDP-driven testing, not just theory) to
+        // sometimes never fire at all for two otherwise-ordinary clicks,
+        // silently losing the second click's ability to open the edit
+        // dialog. This mirrors the row's own hand-rolled hold-to-edit
+        // gesture (see onWindowPointerMove) rather than trusting a
+        // native browser gesture event to show up reliably.
+        if (this.clickTimer !== undefined) {
+            window.clearTimeout(this.clickTimer);
+            this.clickTimer = undefined;
+            this.emitPointerUp(LONG_PRESS_MS, false);
+            return;
+        }
+
         this.clickTimer = window.setTimeout(() => {
+            this.clickTimer = undefined;
             this.emitPointerUp(pressDurationMs, false);
         }, CLICK_DEBOUNCE_MS);
-    }
-
-    private onDoubleClick() {
-        window.clearTimeout(this.clickTimer);
-
-        this.dispatchEvent(
-            new CustomEvent("tree-pointer-down", {
-                detail: {id: this.item.id},
-                bubbles: true,
-                composed: true,
-            }),
-        );
-
-        this.emitPointerUp(LONG_PRESS_MS);
     }
 
     render() {
@@ -771,6 +801,7 @@ export class TodoTreeItem extends LitElement {
             row: true,
             pressed: this.isPressed && !isBeingDragged,
             lifted: isBeingDragged,
+            dimmed: this.dimmedByAncestorDrag,
             "drop-inside": isDropTarget && this.hoverPlacement === "inside",
             "gap-before": isDropTarget && this.hoverPlacement === "before",
             "gap-after": isDropTarget && this.hoverPlacement === "after",
@@ -788,7 +819,6 @@ export class TodoTreeItem extends LitElement {
                     class=${classMap(rowClasses)}
 
                     @pointerdown=${this.pointerDown}
-                    @dblclick=${this.onDoubleClick}
                 >
                     ${
                         isBeingDragged
@@ -804,7 +834,6 @@ export class TodoTreeItem extends LitElement {
                                                 })}
                                                 aria-label=${this.isCollapsed ? "Expand" : "Collapse"}
                                                 @click=${this.toggleCollapse}
-                                                @dblclick=${(e: Event) => e.stopPropagation()}
                                                 @pointerdown=${(e: Event) => e.stopPropagation()}
                                             >
                                                 ${CHEVRON_ICON}
@@ -885,7 +914,6 @@ export class TodoTreeItem extends LitElement {
                                                 })}
                                                 aria-label=${this.confirmingDelete ? "Confirm delete" : "Delete"}
                                                 @click=${this.onDeleteClick}
-                                                @dblclick=${(e: Event) => e.stopPropagation()}
                                                 @pointerdown=${(e: Event) => e.stopPropagation()}
                                             >
                                                 ${CROSS_ICON}
@@ -926,6 +954,7 @@ export class TodoTreeItem extends LitElement {
                                             .confirmDelete=${this.confirmDelete}
                                             .dragDisabled=${this.dragDisabled}
                                             .collapsedIds=${this.collapsedIds}
+                                            .dimmedByAncestorDrag=${isBeingDragged || this.dimmedByAncestorDrag}
                                         ></todo-overlay-tree-item>
                                     `,
                                 )}
