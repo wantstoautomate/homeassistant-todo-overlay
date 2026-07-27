@@ -3,7 +3,8 @@ from types import SimpleNamespace
 import pytest
 
 from custom_components.todo_overlay.const import EVENT_ITEM_CHANGED
-from custom_components.todo_overlay.trigger import TRIGGER_SCHEMA, async_attach_trigger
+from custom_components.todo_overlay.trigger import TRIGGERS, async_get_triggers
+from homeassistant.helpers.trigger import TriggerConfig
 
 
 class FakeBus:
@@ -18,176 +19,148 @@ class FakeBus:
     async def async_fire(self, event_type, data):
         event = SimpleNamespace(data=data, context=None)
         for listener in list(self._listeners.get(event_type, [])):
-            await listener(event)
+            listener(event)
 
 
 class FakeHass:
 
     def __init__(self) -> None:
         self.bus = FakeBus()
-        self.triggered: list[dict] = []
-
-    def async_run_hass_job(self, job, run_variables, context=None):
-        self.triggered.append(run_variables)
-        return None
 
 
-async def _noop_action(run_variables, context=None) -> None:
-    pass
+def _make_trigger(cls, hass, entity_id=None, tag=None):
+    target = {"entity_id": entity_id} if entity_id else {}
+    options = {"tag": tag} if tag else {}
+    return cls(hass, TriggerConfig(key="_", target=target, options=options))
 
 
-@pytest.mark.asyncio
-async def test_trigger_fires_for_matching_entity_and_action():
-    hass = FakeHass()
+async def _attach(trigger, triggered: list[dict]):
+    def run_action(extra_trigger_payload, description, context=None):
+        triggered.append({**extra_trigger_payload, "description": description})
 
-    config = TRIGGER_SCHEMA({
-        "platform": "todo_overlay",
-        "entity_id": "todo.shopping",
-        "action": "completed",
-    })
-
-    await async_attach_trigger(hass, config, _noop_action, {"trigger_data": {"id": "1"}})
-
-    await hass.bus.async_fire(EVENT_ITEM_CHANGED, {
-        "entity_id": "todo.shopping",
-        "item_id": "1",
-        "title": "Milk",
-        "action": "completed",
-    })
-
-    assert len(hass.triggered) == 1
-    assert hass.triggered[0]["trigger"]["platform"] == "todo_overlay"
-    assert hass.triggered[0]["trigger"]["event"].data["title"] == "Milk"
+    return await trigger.async_attach_runner(run_action)
 
 
 @pytest.mark.asyncio
-async def test_trigger_ignores_non_matching_entity():
-    hass = FakeHass()
+async def test_async_get_triggers_registers_all_eight_actions():
+    triggers = await async_get_triggers(hass=None)
 
-    config = TRIGGER_SCHEMA({
-        "platform": "todo_overlay",
-        "entity_id": "todo.shopping",
-    })
-
-    await async_attach_trigger(hass, config, _noop_action, {"trigger_data": {"id": "1"}})
-
-    await hass.bus.async_fire(EVENT_ITEM_CHANGED, {
-        "entity_id": "todo.other",
-        "item_id": "1",
-        "title": "Milk",
-        "action": "completed",
-    })
-
-    assert hass.triggered == []
+    assert set(triggers.keys()) == {
+        "created", "completed", "uncompleted", "removed",
+        "tag_added", "tag_removed", "quantity_changed", "due",
+    }
 
 
+@pytest.mark.parametrize("action,cls", list(TRIGGERS.items()))
 @pytest.mark.asyncio
-async def test_trigger_ignores_non_matching_action():
+async def test_trigger_only_fires_for_its_own_action(action, cls):
     hass = FakeHass()
+    triggered: list[dict] = []
 
-    config = TRIGGER_SCHEMA({
-        "platform": "todo_overlay",
-        "action": "removed",
-    })
-
-    await async_attach_trigger(hass, config, _noop_action, {"trigger_data": {"id": "1"}})
+    trigger = _make_trigger(cls, hass)
+    await _attach(trigger, triggered)
 
     await hass.bus.async_fire(EVENT_ITEM_CHANGED, {
-        "entity_id": "todo.shopping",
-        "item_id": "1",
-        "title": "Milk",
-        "action": "created",
+        "entity_id": "todo.shopping", "item_id": "1", "title": "Milk",
+        "action": "some_other_action",
     })
+    assert triggered == []
 
-    assert hass.triggered == []
+    await hass.bus.async_fire(EVENT_ITEM_CHANGED, {
+        "entity_id": "todo.shopping", "item_id": "1", "title": "Milk",
+        "action": action,
+    })
+    assert len(triggered) == 1
+    assert triggered[0]["description"] == f"todo_overlay {action} event"
+    assert triggered[0]["event"].data["title"] == "Milk"
 
 
+@pytest.mark.parametrize("action,cls", list(TRIGGERS.items()))
 @pytest.mark.asyncio
-async def test_trigger_fires_for_due_action():
+async def test_trigger_filters_by_target_entity_id(action, cls):
     hass = FakeHass()
+    triggered: list[dict] = []
 
-    config = TRIGGER_SCHEMA({
-        "platform": "todo_overlay",
-        "action": "due",
-    })
-
-    await async_attach_trigger(hass, config, _noop_action, {"trigger_data": {"id": "1"}})
+    trigger = _make_trigger(cls, hass, entity_id=["todo.shopping"])
+    await _attach(trigger, triggered)
 
     await hass.bus.async_fire(EVENT_ITEM_CHANGED, {
-        "entity_id": "todo.shopping",
-        "item_id": "1",
-        "title": "Renew passport",
-        "action": "due",
-        "due_datetime": "2026-01-01T09:00:00+00:00",
+        "entity_id": "todo.other", "item_id": "1", "title": "Milk", "action": action,
     })
+    assert triggered == []
 
-    assert len(hass.triggered) == 1
-    assert hass.triggered[0]["trigger"]["event"].data["due_datetime"] == "2026-01-01T09:00:00+00:00"
+    await hass.bus.async_fire(EVENT_ITEM_CHANGED, {
+        "entity_id": "todo.shopping", "item_id": "1", "title": "Milk", "action": action,
+    })
+    assert len(triggered) == 1
 
 
 @pytest.mark.asyncio
 async def test_trigger_filters_by_tag():
     hass = FakeHass()
+    triggered: list[dict] = []
 
-    config = TRIGGER_SCHEMA({
-        "platform": "todo_overlay",
-        "action": "tag_added",
-        "tag": "urgent",
-    })
-
-    await async_attach_trigger(hass, config, _noop_action, {"trigger_data": {"id": "1"}})
+    trigger = _make_trigger(TRIGGERS["tag_added"], hass, tag="urgent")
+    await _attach(trigger, triggered)
 
     await hass.bus.async_fire(EVENT_ITEM_CHANGED, {
-        "entity_id": "todo.shopping",
-        "item_id": "1",
-        "title": "Milk",
-        "action": "tag_added",
-        "tag": "not-urgent",
+        "entity_id": "todo.shopping", "item_id": "1", "title": "Milk",
+        "action": "tag_added", "tag": "not-urgent",
     })
     await hass.bus.async_fire(EVENT_ITEM_CHANGED, {
-        "entity_id": "todo.shopping",
-        "item_id": "1",
-        "title": "Milk",
-        "action": "tag_added",
-        "tag": "urgent",
+        "entity_id": "todo.shopping", "item_id": "1", "title": "Milk",
+        "action": "tag_added", "tag": "urgent",
     })
 
-    assert len(hass.triggered) == 1
-    assert hass.triggered[0]["trigger"]["event"].data["tag"] == "urgent"
+    assert len(triggered) == 1
+    assert triggered[0]["event"].data["tag"] == "urgent"
 
 
 @pytest.mark.asyncio
-async def test_trigger_with_no_filters_matches_everything():
+async def test_trigger_fires_for_due_action_with_no_filters():
     hass = FakeHass()
+    triggered: list[dict] = []
 
-    config = TRIGGER_SCHEMA({"platform": "todo_overlay"})
-
-    await async_attach_trigger(hass, config, _noop_action, {"trigger_data": {"id": "1"}})
+    trigger = _make_trigger(TRIGGERS["due"], hass)
+    await _attach(trigger, triggered)
 
     await hass.bus.async_fire(EVENT_ITEM_CHANGED, {
-        "entity_id": "todo.anything",
-        "item_id": "1",
-        "title": "Anything",
-        "action": "created",
+        "entity_id": "todo.shopping", "item_id": "1", "title": "Renew passport",
+        "action": "due", "due_datetime": "2026-01-01T09:00:00+00:00",
     })
 
-    assert len(hass.triggered) == 1
+    assert len(triggered) == 1
+    assert triggered[0]["event"].data["due_datetime"] == "2026-01-01T09:00:00+00:00"
 
 
 @pytest.mark.asyncio
 async def test_detach_trigger_stops_listening():
     hass = FakeHass()
+    triggered: list[dict] = []
 
-    config = TRIGGER_SCHEMA({"platform": "todo_overlay"})
-
-    detach = await async_attach_trigger(hass, config, _noop_action, {"trigger_data": {"id": "1"}})
+    trigger = _make_trigger(TRIGGERS["created"], hass)
+    detach = await _attach(trigger, triggered)
     detach()
 
     await hass.bus.async_fire(EVENT_ITEM_CHANGED, {
-        "entity_id": "todo.shopping",
-        "item_id": "1",
-        "title": "Milk",
-        "action": "created",
+        "entity_id": "todo.shopping", "item_id": "1", "title": "Milk", "action": "created",
     })
 
-    assert hass.triggered == []
+    assert triggered == []
+
+
+@pytest.mark.asyncio
+async def test_validate_config_requires_a_target():
+    with pytest.raises(Exception):
+        await TRIGGERS["created"].async_validate_config(None, {})
+
+
+@pytest.mark.asyncio
+async def test_validate_config_accepts_target_and_tag_option():
+    config = await TRIGGERS["created"].async_validate_config(
+        None,
+        {"target": {"entity_id": "todo.shopping"}, "options": {"tag": "urgent"}},
+    )
+
+    assert config["target"]["entity_id"] == ["todo.shopping"]
+    assert config["options"]["tag"] == "urgent"

@@ -5,6 +5,7 @@ from homeassistant.components.lovelace.const import CONF_RESOURCE_TYPE_WS, LOVEL
 from homeassistant.config_entries import SOURCE_IMPORT
 from homeassistant.const import CONF_ID, CONF_URL, EVENT_HOMEASSISTANT_STARTED
 from homeassistant.core import CoreState, Event, HomeAssistant
+from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.typing import ConfigType
 from homeassistant.loader import async_get_integration
@@ -23,6 +24,12 @@ FRONTEND_DIST = Path(__file__).parent / "frontend_dist"
 CARD_FILENAME = "todo-overlay.js"
 
 TODO_ENTITY_PREFIX = "todo."
+
+# Allows a bare `todo_overlay:` YAML key (for the one-time migration below)
+# but rejects any options under it - not config_entry_only_config_schema,
+# since that forbids the key's presence entirely rather than just its
+# contents.
+CONFIG_SCHEMA = cv.empty_config_schema(DOMAIN)
 
 
 async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:

@@ -5,10 +5,11 @@
     "@wantstoautomate"
   ],
   "config_flow": true,
-  "dependencies": ["http", "frontend"],
+  "dependencies": ["http", "frontend", "lovelace"],
   "documentation": "https://github.com/wantstoautomate/homeassistant-todo-overlay",
+  "iot_class": "calculated",
   "issue_tracker": "https://github.com/wantstoautomate/homeassistant-todo-overlay/issues",
   "requirements": [],
   "single_config_entry": true,
-  "version": "0.13.0"
+  "version": "0.14.0"
 }

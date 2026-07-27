@@ -1,86 +1,155 @@
-"""Automation trigger platform: fires whenever TodoManager reports a
-meaningful change to a list (item created/completed/uncompleted/removed,
-a tag added/removed, a quantity changed, or an opted-in item's due
-time arriving) - see manager.py's _fire_event()/fire_due_event() and
-const.py's EVENT_ITEM_CHANGED. Filterable by entity_id, action, and/or
-tag so an automation only reacts to what it cares about.
+"""Automation triggers: one distinct trigger per kind of change TodoManager
+reports (item created/completed/uncompleted/removed, a tag added/removed,
+a quantity changed, or an opted-in item's due time arriving) - see
+manager.py's _fire_event()/fire_due_event() and const.py's
+EVENT_ITEM_CHANGED. Each one uses the standard target selector (the same
+entity/device/area picker every other HA trigger uses) for its todo list(s),
+matching the pattern HA's own todo integration uses for
+todo.item_added/item_completed/item_removed (see
+homeassistant.components.todo.trigger) rather than a single trigger with
+a generic action-picking field.
+
+This replaces the earlier single bare `todo_overlay` trigger (with a
+combined `action:` field and flat entity_id/tag options) entirely, since
+splitting it is what was asked for and nothing has shipped to production
+yet to stay backward-compatible with.
 """
+
+import abc
+from typing import cast
 
 import voluptuous as vol
 
-from homeassistant.const import CONF_PLATFORM
-from homeassistant.core import CALLBACK_TYPE, Event, HassJob, HomeAssistant
+from homeassistant.const import ATTR_ENTITY_ID, CONF_OPTIONS, CONF_TARGET
+from homeassistant.core import CALLBACK_TYPE, Event, HomeAssistant, callback
 from homeassistant.helpers import config_validation as cv
-from homeassistant.helpers.trigger import TriggerActionType, TriggerInfo
+from homeassistant.helpers.trigger import (
+    Trigger,
+    TriggerActionRunner,
+    TriggerConfig,
+    TriggerNotTriggeredReporter,
+)
 from homeassistant.helpers.typing import ConfigType
 
 from .const import DOMAIN, EVENT_ITEM_CHANGED
 
-CONF_ACTION = "action"
 CONF_TAG = "tag"
 
-TRIGGER_SCHEMA = cv.TRIGGER_BASE_SCHEMA.extend(
+_OPTIONS_SCHEMA = vol.Schema({vol.Optional(CONF_TAG): str})
+
+_TRIGGER_SCHEMA = vol.Schema(
     {
-        vol.Required(CONF_PLATFORM): DOMAIN,
-        vol.Optional("entity_id"): cv.entity_ids,
-        vol.Optional(CONF_ACTION): vol.In(
-            [
-                "created",
-                "completed",
-                "uncompleted",
-                "removed",
-                "tag_added",
-                "tag_removed",
-                "quantity_changed",
-                "due",
-            ]
-        ),
-        vol.Optional(CONF_TAG): str,
+        vol.Required(CONF_TARGET): cv.TARGET_FIELDS,
+        vol.Optional(CONF_OPTIONS, default={}): _OPTIONS_SCHEMA,
     }
 )
 
 
-async def async_attach_trigger(
-    hass: HomeAssistant,
-    config: ConfigType,
-    action: TriggerActionType,
-    trigger_info: TriggerInfo,
-) -> CALLBACK_TYPE:
-    """Attach a todo_overlay trigger, matching config against fired events."""
+class _TodoOverlayItemTrigger(Trigger, abc.ABC):
+    """Base for a single todo_overlay action-specific trigger.
 
-    trigger_data = trigger_info["trigger_data"]
-    job = HassJob(action)
+    Only `_item_action` differs between subclasses - it's matched against
+    EVENT_ITEM_CHANGED's own "action" field.
+    """
 
-    wanted_entity_ids = config.get("entity_id")
-    wanted_action = config.get(CONF_ACTION)
-    wanted_tag = config.get(CONF_TAG)
+    _item_action: str
 
-    async def handle_event(event: Event) -> None:
-        data = event.data
+    @classmethod
+    async def async_validate_config(cls, hass: HomeAssistant, config: ConfigType) -> ConfigType:
+        """Validate the target (required) and options (optional tag filter)."""
+        return cast(ConfigType, _TRIGGER_SCHEMA(config))
 
-        if wanted_entity_ids and data.get("entity_id") not in wanted_entity_ids:
-            return
+    def __init__(self, hass: HomeAssistant, config: TriggerConfig) -> None:
+        super().__init__(hass, config)
+        target = config.target or {}
+        self._entity_ids = target.get(ATTR_ENTITY_ID)
+        self._tag = (config.options or {}).get(CONF_TAG)
 
-        if wanted_action and data.get("action") != wanted_action:
-            return
+    async def async_attach_runner(
+        self,
+        run_action: TriggerActionRunner,
+        did_not_trigger: TriggerNotTriggeredReporter | None = None,
+    ) -> CALLBACK_TYPE:
+        """Attach to EVENT_ITEM_CHANGED, filtering by target entity/tag."""
 
-        if wanted_tag and data.get("tag") != wanted_tag:
-            return
+        @callback
+        def handle_event(event: Event) -> None:
+            data = event.data
 
-        task = hass.async_run_hass_job(
-            job,
-            {
-                "trigger": {
-                    **trigger_data,
-                    "platform": DOMAIN,
-                    "event": event,
-                    "description": f"{DOMAIN} event",
-                },
-            },
-            event.context,
-        )
+            if data.get("action") != self._item_action:
+                return
 
-        if task:
-            await task
+            if self._entity_ids and data.get("entity_id") not in self._entity_ids:
+                return
 
-    return hass.bus.async_listen(EVENT_ITEM_CHANGED, handle_event)
+            if self._tag and data.get("tag") != self._tag:
+                return
+
+            run_action({"event": event}, f"{DOMAIN} {self._item_action} event", event.context)
+
+        return self._hass.bus.async_listen(EVENT_ITEM_CHANGED, handle_event)
+
+
+class TodoOverlayItemCreatedTrigger(_TodoOverlayItemTrigger):
+    """Fires when an item is created."""
+
+    _item_action = "created"
+
+
+class TodoOverlayItemCompletedTrigger(_TodoOverlayItemTrigger):
+    """Fires when an item is completed."""
+
+    _item_action = "completed"
+
+
+class TodoOverlayItemUncompletedTrigger(_TodoOverlayItemTrigger):
+    """Fires when an item is un-completed."""
+
+    _item_action = "uncompleted"
+
+
+class TodoOverlayItemRemovedTrigger(_TodoOverlayItemTrigger):
+    """Fires when an item is removed."""
+
+    _item_action = "removed"
+
+
+class TodoOverlayTagAddedTrigger(_TodoOverlayItemTrigger):
+    """Fires when a tag is added to an item."""
+
+    _item_action = "tag_added"
+
+
+class TodoOverlayTagRemovedTrigger(_TodoOverlayItemTrigger):
+    """Fires when a tag is removed from an item."""
+
+    _item_action = "tag_removed"
+
+
+class TodoOverlayQuantityChangedTrigger(_TodoOverlayItemTrigger):
+    """Fires when an item's quantity changes."""
+
+    _item_action = "quantity_changed"
+
+
+class TodoOverlayItemDueTrigger(_TodoOverlayItemTrigger):
+    """Fires when an opted-in item's due time arrives."""
+
+    _item_action = "due"
+
+
+TRIGGERS: dict[str, type[Trigger]] = {
+    "created": TodoOverlayItemCreatedTrigger,
+    "completed": TodoOverlayItemCompletedTrigger,
+    "uncompleted": TodoOverlayItemUncompletedTrigger,
+    "removed": TodoOverlayItemRemovedTrigger,
+    "tag_added": TodoOverlayTagAddedTrigger,
+    "tag_removed": TodoOverlayTagRemovedTrigger,
+    "quantity_changed": TodoOverlayQuantityChangedTrigger,
+    "due": TodoOverlayItemDueTrigger,
+}
+
+
+async def async_get_triggers(hass: HomeAssistant) -> dict[str, type[Trigger]]:
+    """Return the triggers provided by this integration."""
+    return TRIGGERS

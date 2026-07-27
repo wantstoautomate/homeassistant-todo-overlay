@@ -9,5 +9,87 @@
     "abort": {
       "already_configured": "Todo Overlay is already set up - only one instance is needed, since it works across every todo.* entity automatically."
     }
+  },
+  "triggers": {
+    "created": {
+      "name": "Custom to-do item created",
+      "description": "Triggers when one or more items are created on a list.",
+      "fields": {
+        "tag": {
+          "name": "Tag",
+          "description": "Only trigger for items with this tag."
+        }
+      }
+    },
+    "completed": {
+      "name": "Custom to-do item completed",
+      "description": "Triggers when one or more items are marked complete.",
+      "fields": {
+        "tag": {
+          "name": "Tag",
+          "description": "Only trigger for items with this tag."
+        }
+      }
+    },
+    "uncompleted": {
+      "name": "Custom to-do item uncompleted",
+      "description": "Triggers when one or more items are marked incomplete again.",
+      "fields": {
+        "tag": {
+          "name": "Tag",
+          "description": "Only trigger for items with this tag."
+        }
+      }
+    },
+    "removed": {
+      "name": "Custom to-do item removed",
+      "description": "Triggers when one or more items are removed from a list.",
+      "fields": {
+        "tag": {
+          "name": "Tag",
+          "description": "Only trigger for items with this tag."
+        }
+      }
+    },
+    "tag_added": {
+      "name": "Custom to-do tag added",
+      "description": "Triggers when a tag is added to an item.",
+      "fields": {
+        "tag": {
+          "name": "Tag",
+          "description": "Only trigger when this specific tag is added."
+        }
+      }
+    },
+    "tag_removed": {
+      "name": "Custom to-do tag removed",
+      "description": "Triggers when a tag is removed from an item.",
+      "fields": {
+        "tag": {
+          "name": "Tag",
+          "description": "Only trigger when this specific tag is removed."
+        }
+      }
+    },
+    "quantity_changed": {
+      "name": "Custom to-do quantity changed",
+      "description": "Triggers when an item's quantity changes.",
+      "fields": {
+        "tag": {
+          "name": "Tag",
+          "description": "Only trigger for items with this tag."
+        }
+      }
+    },
+    "due": {
+      "name": "Custom to-do item due",
+      "description": "Triggers when an opted-in item's due time arrives.",
+      "fields": {
+        "tag": {
+          "name": "Tag",
+          "description": "Only trigger for items with this tag."
+        }
+      }
+    }
   }
 }
