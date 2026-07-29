@@ -2819,6 +2819,11 @@ TodoTree = __decorateClass([
 var PLUS_ICON = b2`
     <svg viewBox="0 0 24 24"><path d="M19 13H13V19H11V13H5V11H11V5H13V11H19V13Z"></path></svg>
 `;
+var LINK_ICON = b2`
+    <svg viewBox="0 0 24 24">
+        <path d="M3.9,12C3.9,10.29 5.29,8.9 7,8.9H11V7H7A5,5 0 0,0 2,12A5,5 0 0,0 7,17H11V15.1H7C5.29,15.1 3.9,13.71 3.9,12M8,13H16V11H8V13M17,7H13V8.9H17C18.71,8.9 20.1,10.29 20.1,12C20.1,13.71 18.71,15.1 17,15.1H13V17H17A5,5 0 0,0 22,12A5,5 0 0,0 17,7Z"></path>
+    </svg>
+`;
 var FILTER_ICON = b2`
     <svg viewBox="0 0 24 24">
         <path d="M14,12V19.88C14.04,20.18 13.94,20.5 13.71,20.71C13.32,21.1 12.69,21.1 12.3,20.71L10.29,18.7C10.06,18.47 9.96,18.16 10,17.87V12H9.97L4.21,4.62C3.87,4.19 3.95,3.56 4.38,3.22C4.57,3.08 4.78,3 5,3V3H19V3C19.22,3 19.43,3.08 19.62,3.22C20.05,3.56 20.13,4.19 19.79,4.62L14.03,12H14Z"></path>
@@ -3572,7 +3577,16 @@ var TodoOverlayList = class extends i4 {
     return b2`
             ${hasHeaderRow ? b2`
                         <div class="list-header-row">
-                            ${this.headerTitle ? b2`<span class="list-title">${this.headerTitle}</span>` : ""}
+                            ${this.headerTitle ? b2`
+                                        <div class="list-title-group">
+                                            <span class="list-title">${this.headerTitle}</span>
+                                            ${this.list?.link_id ? b2`
+                                                        <span class="link-badge" title="Linked list">
+                                                            ${LINK_ICON}
+                                                        </span>
+                                                    ` : ""}
+                                        </div>
+                                    ` : ""}
                             ${hasToolbar ? b2`
                                         <div class="toolbar">
                                             <button
@@ -3732,6 +3746,13 @@ TodoOverlayList.styles = i`
             padding: 8px 8px 8px 12px;
         }
 
+        .list-title-group {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            min-width: 0;
+        }
+
         .list-title {
             font-family: Roboto, "Noto Sans", sans-serif;
             font-size: 16px;
@@ -3741,6 +3762,19 @@ TodoOverlayList.styles = i`
             text-overflow: ellipsis;
             white-space: nowrap;
             min-width: 0;
+        }
+
+        .link-badge {
+            display: flex;
+            align-items: center;
+            flex-shrink: 0;
+            color: var(--secondary-text-color);
+        }
+
+        .link-badge svg {
+            width: 14px;
+            height: 14px;
+            fill: currentColor;
         }
 
         .toolbar {

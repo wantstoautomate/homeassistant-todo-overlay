@@ -272,10 +272,14 @@ describe("todo-overlay-list header row (title level with the toolbar)", () => {
         const toolbar = row?.querySelector(".toolbar");
         expect(toolbar).not.toBeNull();
 
-        // Both are direct children of the same row, i.e. genuinely on one
-        // line together rather than the toolbar being nested under the
-        // title or living in some other ancestor.
-        expect(title?.parentElement).toBe(row);
+        // The title sits in its own group (alongside the link badge, when
+        // linked), and that group plus the toolbar are direct children of
+        // the same row - genuinely on one line together rather than the
+        // toolbar being nested under the title or living in some other
+        // ancestor.
+        const titleGroup = row?.querySelector(".list-title-group");
+        expect(title?.parentElement).toBe(titleGroup);
+        expect(titleGroup?.parentElement).toBe(row);
         expect(toolbar?.parentElement).toBe(row);
     });
 
@@ -308,6 +312,26 @@ describe("todo-overlay-list header row (title level with the toolbar)", () => {
         );
 
         expect(el.shadowRoot?.querySelector(".list-header-row")).toBeNull();
+    });
+
+    it("shows a link badge next to the title when the list is linked", async () => {
+        const {el} = await renderList(
+            {entity_id: ENTITY_ID, items: [], link_id: "abc123"} as TodoList,
+            {headerTitle: "Groceries"},
+        );
+
+        const titleGroup = el.shadowRoot?.querySelector(".list-title-group");
+        expect(titleGroup?.querySelector(".link-badge")).not.toBeNull();
+    });
+
+    it("shows no link badge when the list is not linked", async () => {
+        const {el} = await renderList(
+            {entity_id: ENTITY_ID, items: [], link_id: null} as TodoList,
+            {headerTitle: "Groceries"},
+        );
+
+        const titleGroup = el.shadowRoot?.querySelector(".list-title-group");
+        expect(titleGroup?.querySelector(".link-badge")).toBeNull();
     });
 });
 

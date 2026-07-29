@@ -14,11 +14,16 @@ from custom_components.todo_overlay.models import ItemPosition, TodoItem
 
 
 class FakeConfigEntry:
-    """Stands in for a real ConfigEntry - just enough for get_manager()
-    (see runtime_data.py) to find its .runtime_data.manager."""
+    """Stands in for a real ConfigEntry - just enough for get_manager()/
+    get_metadata_store()/get_link_sync() (see runtime_data.py) to find
+    their respective .runtime_data attributes."""
 
-    def __init__(self, manager) -> None:
-        self.runtime_data = type("FakeRuntimeData", (), {"manager": manager})()
+    def __init__(self, manager, metadata_store=None, link_sync=None) -> None:
+        self.runtime_data = type("FakeRuntimeData", (), {
+            "manager": manager,
+            "metadata_store": metadata_store,
+            "link_sync": link_sync,
+        })()
 
 
 class FakeConfigEntries:
@@ -26,8 +31,8 @@ class FakeConfigEntries:
     integration's single config entry through here rather than hass.data,
     since websocket/service handlers only ever receive `hass`."""
 
-    def __init__(self, manager) -> None:
-        self._entries = [FakeConfigEntry(manager)]
+    def __init__(self, manager, metadata_store=None, link_sync=None) -> None:
+        self._entries = [FakeConfigEntry(manager, metadata_store, link_sync)]
 
     def async_entries(self, domain: str):
         return self._entries
@@ -113,6 +118,24 @@ class FakeAdapter:
 
         return new_id
 
+    async def update_item(
+        self,
+        entity_id: str,
+        item_id: str,
+        *,
+        title: str | None = None,
+        description: str | None = None,
+        due_date: str | None = None,
+        due_datetime: str | None = None,
+    ) -> None:
+        for item in self._items:
+            if item.id == item_id:
+                if title is not None:
+                    item.title = title
+                item.description = description
+                item.due_date = due_date
+                item.due_datetime = due_datetime
+
 
 class FakeMetadataStore:
 
@@ -124,6 +147,9 @@ class FakeMetadataStore:
         self._tags: dict[str, list[str]] = {}
         self._trigger_on_due: set[str] = set()
         self._due_fired: dict[str, str] = {}
+        self._instance_id: str | None = None
+        self._links: dict[str, dict] = {}
+        self._link_item_state: dict[str, dict] = {}
 
     async def get_relationships(self, entity_id: str) -> dict[str, ItemPosition]:
         return dict(self._positions)
@@ -280,6 +306,74 @@ class FakeMetadataStore:
         name: str,
     ) -> None:
         self._snapshots.pop(name, None)
+
+    async def get_instance_id(self) -> str:
+        if self._instance_id is None:
+            import uuid
+            self._instance_id = uuid.uuid4().hex
+        return self._instance_id
+
+    async def get_all_linked_entity_ids(self) -> list[str]:
+        return list(self._links)
+
+    async def get_link(self, entity_id: str) -> dict | None:
+        return self._links.get(entity_id)
+
+    async def set_link(self, entity_id: str, link_id: str) -> None:
+        self._links[entity_id] = {
+            "link_id": link_id,
+            "native_to_sync": {},
+            "sync_to_native": {},
+        }
+        self._link_item_state[entity_id] = {}
+
+    async def remove_link(self, entity_id: str) -> None:
+        self._links.pop(entity_id, None)
+        self._link_item_state.pop(entity_id, None)
+
+    async def set_native_sync_mapping(self, entity_id: str, native_uid: str, sync_id: str) -> None:
+        link = self._links.get(entity_id)
+        if link is None:
+            return
+        link["native_to_sync"][native_uid] = sync_id
+        link["sync_to_native"][sync_id] = native_uid
+
+    async def remove_native_sync_mapping(
+        self, entity_id: str, *, native_uid: str | None = None, sync_id: str | None = None,
+    ) -> None:
+        link = self._links.get(entity_id)
+        if link is None:
+            return
+        if native_uid is not None:
+            sync_id = link["native_to_sync"].pop(native_uid, sync_id)
+        if sync_id is not None:
+            link["sync_to_native"].pop(sync_id, None)
+            link["native_to_sync"] = {
+                uid: sid for uid, sid in link["native_to_sync"].items() if sid != sync_id
+            }
+
+    async def get_all_link_item_states(self, entity_id: str) -> dict[str, dict]:
+        return dict(self._link_item_state.get(entity_id, {}))
+
+    async def set_link_item_state(
+        self, entity_id: str, sync_id: str, *, updated_at: str, deleted_at: str | None, fields: dict | None,
+    ) -> None:
+        self._link_item_state.setdefault(entity_id, {})[sync_id] = {
+            "updated_at": updated_at,
+            "deleted_at": deleted_at,
+            "fields": fields,
+        }
+
+    async def prune_tombstones(self, entity_id: str, *, older_than: str) -> None:
+        entity_state = self._link_item_state.get(entity_id)
+        if not entity_state:
+            return
+        to_drop = [
+            sync_id for sync_id, state in entity_state.items()
+            if state.get("deleted_at") and state["deleted_at"] < older_than
+        ]
+        for sync_id in to_drop:
+            entity_state.pop(sync_id, None)
 
 
 class FakeMultiEntityAdapter:

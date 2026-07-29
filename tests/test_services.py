@@ -32,15 +32,15 @@ class FakeServices:
     def __init__(self):
         self.handlers: dict[str, callable] = {}
 
-    def async_register(self, domain, service, handler, schema=None):
+    def async_register(self, domain, service, handler, schema=None, supports_response=None):
         assert domain == DOMAIN
         self.handlers[service] = handler
 
 
-def make_hass(manager: TodoManager) -> tuple[object, FakeServices]:
+def make_hass(manager: TodoManager, metadata_store=None, link_sync=None) -> tuple[object, FakeServices]:
     services = FakeServices()
     hass = type("FakeHass", (), {
-        "config_entries": FakeConfigEntries(manager),
+        "config_entries": FakeConfigEntries(manager, metadata_store, link_sync),
         "services": services,
     })()
     async_register_services(hass)
@@ -66,6 +66,9 @@ def test_async_register_services_registers_every_service():
         "create_item",
         "set_quantity",
         "set_trigger_on_due",
+        "create_link",
+        "join_link",
+        "unlink",
     }
 
 
@@ -207,3 +210,74 @@ async def test_service_set_trigger_on_due_raises_due_time_required_without_due_d
         await services.handlers["set_trigger_on_due"](FakeServiceCall({
             "entity_id": ENTITY_ID, "item": "Shopping", "enabled": True,
         }))
+
+
+class FakeLinkSync:
+
+    def __init__(self):
+        self.started: list[str] = []
+        self.stopped: list[str] = []
+
+    async def async_start_link(self, entity_id: str) -> None:
+        self.started.append(entity_id)
+
+    async def async_stop_link(self, entity_id: str) -> None:
+        self.stopped.append(entity_id)
+
+
+@pytest.mark.asyncio
+async def test_service_create_link_without_a_configured_broker_raises():
+    from homeassistant.exceptions import HomeAssistantError
+
+    manager = make_manager()
+    _, services = make_hass(manager, metadata_store=FakeMetadataStore(), link_sync=None)
+
+    with pytest.raises(HomeAssistantError):
+        await services.handlers["create_link"](FakeServiceCall({"entity_id": ENTITY_ID}))
+
+
+@pytest.mark.asyncio
+async def test_service_create_link_generates_and_starts_a_link():
+    manager = make_manager()
+    metadata_store = FakeMetadataStore()
+    link_sync = FakeLinkSync()
+    _, services = make_hass(manager, metadata_store=metadata_store, link_sync=link_sync)
+
+    result = await services.handlers["create_link"](FakeServiceCall({"entity_id": ENTITY_ID}))
+
+    assert "link_id" in result
+    link = await metadata_store.get_link(ENTITY_ID)
+    assert link["link_id"] == result["link_id"]
+    assert link_sync.started == [ENTITY_ID]
+
+
+@pytest.mark.asyncio
+async def test_service_join_link_uses_the_given_link_id():
+    manager = make_manager()
+    metadata_store = FakeMetadataStore()
+    link_sync = FakeLinkSync()
+    _, services = make_hass(manager, metadata_store=metadata_store, link_sync=link_sync)
+
+    await services.handlers["join_link"](FakeServiceCall({
+        "entity_id": ENTITY_ID, "link_id": "partners-link-id",
+    }))
+
+    link = await metadata_store.get_link(ENTITY_ID)
+    assert link["link_id"] == "partners-link-id"
+    assert link_sync.started == [ENTITY_ID]
+
+
+@pytest.mark.asyncio
+async def test_service_unlink_stops_and_clears_the_link():
+    manager = make_manager()
+    metadata_store = FakeMetadataStore()
+    link_sync = FakeLinkSync()
+    _, services = make_hass(manager, metadata_store=metadata_store, link_sync=link_sync)
+
+    await services.handlers["join_link"](FakeServiceCall({
+        "entity_id": ENTITY_ID, "link_id": "some-link-id",
+    }))
+    await services.handlers["unlink"](FakeServiceCall({"entity_id": ENTITY_ID}))
+
+    assert await metadata_store.get_link(ENTITY_ID) is None
+    assert link_sync.stopped == [ENTITY_ID]

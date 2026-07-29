@@ -8,7 +8,9 @@ from homeassistant.core import HomeAssistant
 
 from .const import DOMAIN
 from .due_scheduler import DueScheduler
+from .link_sync import LinkSyncManager
 from .manager import TodoManager
+from .metadata_store import MetadataStore
 
 
 @dataclass
@@ -17,8 +19,13 @@ class TodoOverlayData:
     the websocket/service handlers need back."""
 
     manager: TodoManager
+    metadata_store: MetadataStore
     due_scheduler: DueScheduler
     unsub_entity_registry: Callable[[], None]
+    # None unless an MQTT broker is configured for linked lists (see
+    # config_flow.py's options flow) - linking services no-op with a
+    # clear error if this is unset rather than failing obscurely.
+    link_sync: LinkSyncManager | None = None
 
 
 TodoOverlayConfigEntry = ConfigEntry[TodoOverlayData]
@@ -35,3 +42,15 @@ def get_manager(hass: HomeAssistant) -> TodoManager:
 
     entry = hass.config_entries.async_entries(DOMAIN)[0]
     return entry.runtime_data.manager
+
+
+def get_metadata_store(hass: HomeAssistant) -> MetadataStore:
+    entry = hass.config_entries.async_entries(DOMAIN)[0]
+    return entry.runtime_data.metadata_store
+
+
+def get_link_sync(hass: HomeAssistant) -> LinkSyncManager | None:
+    """None unless an MQTT broker is configured - see TodoOverlayData."""
+
+    entry = hass.config_entries.async_entries(DOMAIN)[0]
+    return entry.runtime_data.link_sync

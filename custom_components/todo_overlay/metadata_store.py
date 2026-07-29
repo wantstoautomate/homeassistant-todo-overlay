@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import uuid
 from typing import Any
 
 from homeassistant.helpers.storage import Store
@@ -36,6 +37,22 @@ TRIGGER_ON_DUE_KEY = "_trigger_on_due"
 # and back on shouldn't itself cause a re-fire if the due value hasn't
 # actually changed.
 DUE_FIRED_KEY = "_due_fired"
+# Which link (if any) a linked entity belongs to, plus the native-uid <->
+# sync-id mapping for that entity - the sync id is our own, generated
+# independently of whatever uid the underlying todo platform assigns an
+# item, since two separate HA instances' native platforms have no shared
+# notion of item identity to begin with (see mqtt_link.py).
+LINKS_KEY = "_links"
+# Per-(entity, sync_id) conflict-resolution bookkeeping: the last-applied
+# update time and field values, or a tombstone (deleted_at set, fields
+# None) if the item was removed - kept for a bounded window so a
+# reordered/late "create" for an already-deleted item doesn't resurrect
+# it (see mqtt_link.py's tombstone pruning).
+LINK_ITEM_STATE_KEY = "_link_item_state"
+# A random id generated once per HA instance (not per entity) - tags
+# every MQTT message this instance publishes so it can recognize and
+# discard its own messages echoed back by the broker.
+INSTANCE_ID_KEY = "_instance_id"
 
 
 class _TodoOverlayStore(Store):
@@ -181,6 +198,8 @@ class MetadataStore:
         self._cache.get(TAGS_KEY, {}).pop(entity_id, None)
         self._cache.get(TRIGGER_ON_DUE_KEY, {}).pop(entity_id, None)
         self._cache.get(DUE_FIRED_KEY, {}).pop(entity_id, None)
+        self._cache.get(LINKS_KEY, {}).pop(entity_id, None)
+        self._cache.get(LINK_ITEM_STATE_KEY, {}).pop(entity_id, None)
 
         self._save()
 
@@ -202,7 +221,10 @@ class MetadataStore:
         if old_entity_id in self._cache:
             self._cache[new_entity_id] = self._cache.pop(old_entity_id)
 
-        for key in (QUANTITIES_KEY, TAGS_KEY, TRIGGER_ON_DUE_KEY, DUE_FIRED_KEY):
+        for key in (
+            QUANTITIES_KEY, TAGS_KEY, TRIGGER_ON_DUE_KEY, DUE_FIRED_KEY,
+            LINKS_KEY, LINK_ITEM_STATE_KEY,
+        ):
             bucket = self._cache.get(key, {})
 
             if old_entity_id in bucket:
@@ -517,3 +539,192 @@ class MetadataStore:
             entity_fired.pop(item_id, None)
 
         self._save()
+
+    async def get_instance_id(self) -> str:
+        """A random id generated once and persisted for this HA instance's
+        lifetime - see INSTANCE_ID_KEY."""
+
+        await self._load()
+
+        assert self._cache is not None
+
+        instance_id = self._cache.get(INSTANCE_ID_KEY)
+
+        if not instance_id:
+            instance_id = uuid.uuid4().hex
+            self._cache[INSTANCE_ID_KEY] = instance_id
+            self._save()
+
+        return instance_id
+
+    async def get_all_linked_entity_ids(self) -> list[str]:
+        """Every entity_id with a stored link - used at startup to resume
+        syncing whatever was already linked before a restart."""
+
+        await self._load()
+
+        assert self._cache is not None
+
+        return list(self._cache.get(LINKS_KEY, {}))
+
+    async def get_link(
+        self,
+        entity_id: str,
+    ) -> dict[str, Any] | None:
+        """The link this entity belongs to, or None if unlinked.
+
+        Shape: {"link_id": str, "native_to_sync": {uid: sync_id},
+        "sync_to_native": {sync_id: uid}}.
+        """
+
+        await self._load()
+
+        assert self._cache is not None
+
+        return self._cache.get(LINKS_KEY, {}).get(entity_id)
+
+    async def set_link(
+        self,
+        entity_id: str,
+        link_id: str,
+    ) -> None:
+        """Link this entity to link_id, replacing any existing link on it
+        (including its id<->id mappings and item state - a re-link starts
+        fresh rather than mixing bookkeeping from a previous partner)."""
+
+        await self._load()
+
+        assert self._cache is not None
+
+        self._cache.setdefault(LINKS_KEY, {})[entity_id] = {
+            "link_id": link_id,
+            "native_to_sync": {},
+            "sync_to_native": {},
+        }
+        self._cache.setdefault(LINK_ITEM_STATE_KEY, {})[entity_id] = {}
+
+        self._save()
+
+    async def remove_link(
+        self,
+        entity_id: str,
+    ) -> None:
+        """Unlink this entity - clears its link, id mappings, and item
+        state entirely. Local items themselves are untouched."""
+
+        await self._load()
+
+        assert self._cache is not None
+
+        self._cache.get(LINKS_KEY, {}).pop(entity_id, None)
+        self._cache.get(LINK_ITEM_STATE_KEY, {}).pop(entity_id, None)
+
+        self._save()
+
+    async def set_native_sync_mapping(
+        self,
+        entity_id: str,
+        native_uid: str,
+        sync_id: str,
+    ) -> None:
+        link = self._cache.get(LINKS_KEY, {}).get(entity_id) if self._cache else None
+
+        if link is None:
+            return
+
+        link["native_to_sync"][native_uid] = sync_id
+        link["sync_to_native"][sync_id] = native_uid
+
+        self._save()
+
+    async def remove_native_sync_mapping(
+        self,
+        entity_id: str,
+        *,
+        native_uid: str | None = None,
+        sync_id: str | None = None,
+    ) -> None:
+        """Remove a mapping by either of its two keys."""
+
+        link = self._cache.get(LINKS_KEY, {}).get(entity_id) if self._cache else None
+
+        if link is None:
+            return
+
+        if native_uid is not None:
+            sync_id = link["native_to_sync"].pop(native_uid, sync_id)
+        if sync_id is not None:
+            link["sync_to_native"].pop(sync_id, None)
+            link["native_to_sync"] = {
+                uid: sid for uid, sid in link["native_to_sync"].items() if sid != sync_id
+            }
+
+        self._save()
+
+    async def get_all_link_item_states(
+        self,
+        entity_id: str,
+    ) -> dict[str, dict[str, Any]]:
+        """All known (sync_id -> {"updated_at", "deleted_at", "fields"})
+        conflict-resolution state for this entity's link, including
+        tombstones for deleted items."""
+
+        await self._load()
+
+        assert self._cache is not None
+
+        return dict(self._cache.get(LINK_ITEM_STATE_KEY, {}).get(entity_id, {}))
+
+    async def set_link_item_state(
+        self,
+        entity_id: str,
+        sync_id: str,
+        *,
+        updated_at: str,
+        deleted_at: str | None,
+        fields: dict[str, Any] | None,
+    ) -> None:
+        await self._load()
+
+        assert self._cache is not None
+
+        entity_state = self._cache.setdefault(LINK_ITEM_STATE_KEY, {}).setdefault(entity_id, {})
+        entity_state[sync_id] = {
+            "updated_at": updated_at,
+            "deleted_at": deleted_at,
+            "fields": fields,
+        }
+
+        self._save()
+
+    async def prune_tombstones(
+        self,
+        entity_id: str,
+        *,
+        older_than: str,
+    ) -> None:
+        """Drop tombstones (deleted_at set) older than the given ISO8601
+        UTC cutoff - keeps LINK_ITEM_STATE_KEY from growing forever while
+        still giving a reasonable window for a late/reordered message
+        about an already-deleted item to be correctly ignored rather than
+        resurrecting it."""
+
+        await self._load()
+
+        assert self._cache is not None
+
+        entity_state = self._cache.get(LINK_ITEM_STATE_KEY, {}).get(entity_id)
+
+        if not entity_state:
+            return
+
+        to_drop = [
+            sync_id for sync_id, state in entity_state.items()
+            if state.get("deleted_at") and state["deleted_at"] < older_than
+        ]
+
+        for sync_id in to_drop:
+            entity_state.pop(sync_id, None)
+
+        if to_drop:
+            self._save()

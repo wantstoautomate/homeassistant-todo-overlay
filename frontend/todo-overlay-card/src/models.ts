@@ -14,6 +14,11 @@ export interface TodoItem {
 export interface TodoList {
     entity_id: string;
     items: TodoItem[];
+    // Which link this list belongs to, if any - status only (no broker
+    // credentials ever travel this path, see websocket.py's
+    // websocket_get_list). Linking itself is managed via services
+    // (create_link/join_link/unlink), not this card.
+    link_id: string | null;
 }
 
 export type Placement = "before" | "after" | "inside";

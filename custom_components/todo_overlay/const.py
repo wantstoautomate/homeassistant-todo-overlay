@@ -25,6 +25,18 @@ SERVICE_REMOVE_TAG = "remove_tag"
 SERVICE_CREATE_ITEM = "create_item"
 SERVICE_SET_QUANTITY = "set_quantity"
 SERVICE_SET_TRIGGER_ON_DUE = "set_trigger_on_due"
+SERVICE_CREATE_LINK = "create_link"
+SERVICE_JOIN_LINK = "join_link"
+SERVICE_UNLINK = "unlink"
+
+# Options-flow keys for the (optional, instance-wide) MQTT broker used
+# for linked lists - see mqtt_link.py/link_sync.py. Absent entirely
+# unless the user has actually configured a broker.
+CONF_MQTT_HOST = "mqtt_host"
+CONF_MQTT_PORT = "mqtt_port"
+CONF_MQTT_USERNAME = "mqtt_username"
+CONF_MQTT_PASSWORD = "mqtt_password"
+CONF_MQTT_TLS = "mqtt_tls"
 
 ATTR_NAME = "name"
 ATTR_PERSIST_STATES = "persist_states"
@@ -39,6 +51,7 @@ ATTR_QUANTITY = "quantity"
 ATTR_TAGS = "tags"
 ATTR_ENABLED = "enabled"
 ATTR_TRIGGER_ON_DUE = "trigger_on_due"
+ATTR_LINK_ID = "link_id"
 
 # Fired whenever a meaningful change happens to a list's items, so
 # automations can react via the todo_overlay trigger platform.

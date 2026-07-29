@@ -1,6 +1,9 @@
+import uuid
+
 import voluptuous as vol
 
-from homeassistant.core import HomeAssistant, ServiceCall
+from homeassistant.core import HomeAssistant, ServiceCall, SupportsResponse
+from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import config_validation as cv
 
 from .const import (
@@ -9,6 +12,7 @@ from .const import (
     ATTR_DUE_DATETIME,
     ATTR_ENABLED,
     ATTR_ITEM,
+    ATTR_LINK_ID,
     ATTR_MODE,
     ATTR_NAME,
     ATTR_PERSIST_STATES,
@@ -20,14 +24,17 @@ from .const import (
     DOMAIN,
     SERVICE_ADD_TAG,
     SERVICE_CREATE_ITEM,
+    SERVICE_CREATE_LINK,
     SERVICE_DELETE_SAVED_LIST,
+    SERVICE_JOIN_LINK,
     SERVICE_LOAD_LIST,
     SERVICE_REMOVE_TAG,
     SERVICE_SAVE_LIST,
     SERVICE_SET_QUANTITY,
     SERVICE_SET_TRIGGER_ON_DUE,
+    SERVICE_UNLINK,
 )
-from .runtime_data import get_manager
+from .runtime_data import get_link_sync, get_manager, get_metadata_store
 
 SAVE_LIST_SCHEMA = vol.Schema(
     {
@@ -87,6 +94,25 @@ SET_TRIGGER_ON_DUE_SCHEMA = vol.Schema(
         vol.Required("entity_id"): cv.entity_id,
         vol.Required(ATTR_ITEM): str,
         vol.Required(ATTR_ENABLED): bool,
+    }
+)
+
+CREATE_LINK_SCHEMA = vol.Schema(
+    {
+        vol.Required("entity_id"): cv.entity_id,
+    }
+)
+
+JOIN_LINK_SCHEMA = vol.Schema(
+    {
+        vol.Required("entity_id"): cv.entity_id,
+        vol.Required(ATTR_LINK_ID): str,
+    }
+)
+
+UNLINK_SCHEMA = vol.Schema(
+    {
+        vol.Required("entity_id"): cv.entity_id,
     }
 )
 
@@ -170,6 +196,46 @@ def async_register_services(hass: HomeAssistant) -> None:
             enabled=call.data[ATTR_ENABLED],
         )
 
+    def _require_link_sync():
+        link_sync = get_link_sync(hass)
+
+        if link_sync is None:
+            raise HomeAssistantError(
+                "No MQTT broker is configured - set one up under this integration's "
+                "options (Configure -> Configure MQTT link) before linking a list."
+            )
+
+        return link_sync
+
+    async def handle_create_link(call: ServiceCall) -> dict:
+        link_sync = _require_link_sync()
+        metadata_store = get_metadata_store(hass)
+        entity_id = call.data["entity_id"]
+
+        link_id = uuid.uuid4().hex
+        await metadata_store.set_link(entity_id, link_id)
+        await link_sync.async_start_link(entity_id)
+
+        return {ATTR_LINK_ID: link_id}
+
+    async def handle_join_link(call: ServiceCall) -> None:
+        link_sync = _require_link_sync()
+        metadata_store = get_metadata_store(hass)
+        entity_id = call.data["entity_id"]
+
+        await metadata_store.set_link(entity_id, call.data[ATTR_LINK_ID])
+        await link_sync.async_start_link(entity_id)
+
+    async def handle_unlink(call: ServiceCall) -> None:
+        metadata_store = get_metadata_store(hass)
+        entity_id = call.data["entity_id"]
+
+        link_sync = get_link_sync(hass)
+        if link_sync is not None:
+            await link_sync.async_stop_link(entity_id)
+
+        await metadata_store.remove_link(entity_id)
+
     hass.services.async_register(
         DOMAIN, SERVICE_SAVE_LIST, handle_save_list, schema=SAVE_LIST_SCHEMA
     )
@@ -199,4 +265,17 @@ def async_register_services(hass: HomeAssistant) -> None:
         SERVICE_SET_TRIGGER_ON_DUE,
         handle_set_trigger_on_due,
         schema=SET_TRIGGER_ON_DUE_SCHEMA,
+    )
+    hass.services.async_register(
+        DOMAIN,
+        SERVICE_CREATE_LINK,
+        handle_create_link,
+        schema=CREATE_LINK_SCHEMA,
+        supports_response=SupportsResponse.OPTIONAL,
+    )
+    hass.services.async_register(
+        DOMAIN, SERVICE_JOIN_LINK, handle_join_link, schema=JOIN_LINK_SCHEMA,
+    )
+    hass.services.async_register(
+        DOMAIN, SERVICE_UNLINK, handle_unlink, schema=UNLINK_SCHEMA,
     )
