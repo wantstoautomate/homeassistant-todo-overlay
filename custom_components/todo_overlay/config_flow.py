@@ -19,6 +19,11 @@ from homeassistant.config_entries import (
     OptionsFlowWithReload,
 )
 from homeassistant.core import callback
+from homeassistant.helpers.selector import (
+    TextSelector,
+    TextSelectorConfig,
+    TextSelectorType,
+)
 
 from .const import (
     CONF_MQTT_HOST,
@@ -30,6 +35,14 @@ from .const import (
     CONF_MQTT_WS_PATH,
     DOMAIN,
 )
+
+# Never redisplayed to the user - a stored password comes back from the
+# broker options form as this sentinel rather than the real value (same
+# pattern HA core's own mqtt config flow uses), so reopening the form to
+# change an unrelated field (host, transport, ...) doesn't put the actual
+# broker password into the page's DOM/autofill history.
+PASSWORD_NOT_CHANGED = "__**password_not_changed**__"
+PASSWORD_SELECTOR = TextSelector(TextSelectorConfig(type=TextSelectorType.PASSWORD))
 
 
 class TodoOverlayConfigFlow(ConfigFlow, domain=DOMAIN):
@@ -84,16 +97,23 @@ class TodoOverlayOptionsFlow(OptionsFlowWithReload):
         return self.async_show_menu(step_id="init", menu_options=menu_options)
 
     async def async_step_configure_broker(self, user_input: dict | None = None) -> ConfigFlowResult:
-        if user_input is not None:
-            return self.async_create_entry(data={**self.config_entry.options, **user_input})
-
         current = self.config_entry.options
+
+        if user_input is not None:
+            new_options = {**current, **user_input}
+
+            if user_input.get(CONF_MQTT_PASSWORD) == PASSWORD_NOT_CHANGED:
+                new_options[CONF_MQTT_PASSWORD] = current.get(CONF_MQTT_PASSWORD, "")
+
+            return self.async_create_entry(data=new_options)
+
+        password_default = PASSWORD_NOT_CHANGED if current.get(CONF_MQTT_PASSWORD) else ""
 
         schema = vol.Schema({
             vol.Required(CONF_MQTT_HOST, default=current.get(CONF_MQTT_HOST, "")): str,
             vol.Required(CONF_MQTT_PORT, default=current.get(CONF_MQTT_PORT, 8883)): int,
             vol.Optional(CONF_MQTT_USERNAME, default=current.get(CONF_MQTT_USERNAME, "")): str,
-            vol.Optional(CONF_MQTT_PASSWORD, default=current.get(CONF_MQTT_PASSWORD, "")): str,
+            vol.Optional(CONF_MQTT_PASSWORD, default=password_default): PASSWORD_SELECTOR,
             vol.Required(CONF_MQTT_TLS, default=current.get(CONF_MQTT_TLS, True)): bool,
             vol.Required(CONF_MQTT_TRANSPORT, default=current.get(CONF_MQTT_TRANSPORT, "tcp")): vol.In(
                 ["tcp", "websockets"]

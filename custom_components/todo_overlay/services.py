@@ -22,6 +22,7 @@ from .const import (
     ATTR_TITLE,
     ATTR_TRIGGER_ON_DUE,
     DOMAIN,
+    LINK_ID_PATTERN,
     SERVICE_ADD_TAG,
     SERVICE_CREATE_ITEM,
     SERVICE_CREATE_LINK,
@@ -106,7 +107,7 @@ CREATE_LINK_SCHEMA = vol.Schema(
 JOIN_LINK_SCHEMA = vol.Schema(
     {
         vol.Required("entity_id"): cv.entity_id,
-        vol.Required(ATTR_LINK_ID): str,
+        vol.Required(ATTR_LINK_ID): vol.Match(LINK_ID_PATTERN),
     }
 )
 

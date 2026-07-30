@@ -11,10 +11,11 @@ a real validated call would have, defaults included.
 """
 
 import pytest
+import voluptuous as vol
 
 from custom_components.todo_overlay.const import DOMAIN
 from custom_components.todo_overlay.manager import TodoManager
-from custom_components.todo_overlay.services import async_register_services
+from custom_components.todo_overlay.services import JOIN_LINK_SCHEMA, async_register_services
 
 from fakes import FakeAdapter, FakeConfigEntries, FakeMetadataStore
 
@@ -281,3 +282,28 @@ async def test_service_unlink_stops_and_clears_the_link():
 
     assert await metadata_store.get_link(ENTITY_ID) is None
     assert link_sync.stopped == [ENTITY_ID]
+
+
+def test_join_link_schema_accepts_a_link_id_shaped_like_create_link_generates():
+    result = JOIN_LINK_SCHEMA({"entity_id": ENTITY_ID, "link_id": "a" * 32})
+
+    assert result["link_id"] == "a" * 32
+
+
+@pytest.mark.parametrize("bad_link_id", [
+    "+",  # MQTT single-level wildcard
+    "#",  # MQTT multi-level wildcard
+    "todo_overlay/link/+/item/+",
+    "not-hex-at-all",
+    "A" * 32,  # uuid4().hex is always lowercase
+    "a" * 31,
+])
+def test_join_link_schema_rejects_anything_that_could_widen_the_mqtt_subscription(bad_link_id):
+    """A join_link link_id is spliced directly into an MQTT topic filter
+    (see link_sync.py) - anything other than create_link's own
+    32-lowercase-hex-char shape risks turning one link's subscription
+    into a broker-wide wildcard, leaking/cross-writing every other
+    link's traffic."""
+
+    with pytest.raises(vol.Invalid):
+        JOIN_LINK_SCHEMA({"entity_id": ENTITY_ID, "link_id": bad_link_id})

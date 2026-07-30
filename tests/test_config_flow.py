@@ -18,13 +18,16 @@ import pytest
 
 from homeassistant.config_entries import SOURCE_USER
 from homeassistant.data_entry_flow import AbortFlow, FlowResultType
+from homeassistant.helpers.selector import TextSelector, TextSelectorType
 
 from custom_components.todo_overlay.config_flow import (
+    PASSWORD_NOT_CHANGED,
     TodoOverlayConfigFlow,
     TodoOverlayOptionsFlow,
 )
 from custom_components.todo_overlay.const import (
     CONF_MQTT_HOST,
+    CONF_MQTT_PASSWORD,
     CONF_MQTT_PORT,
     CONF_MQTT_TLS,
     CONF_MQTT_TRANSPORT,
@@ -243,3 +246,63 @@ async def test_configure_broker_saves_websockets_transport_and_path():
     assert result["type"] == FlowResultType.CREATE_ENTRY
     assert result["data"][CONF_MQTT_TRANSPORT] == "websockets"
     assert result["data"][CONF_MQTT_WS_PATH] == "/mqtt"
+
+
+@pytest.mark.asyncio
+async def test_configure_broker_password_field_uses_a_password_selector():
+    """Must not be a plain str - ha-form has no name-based masking
+    heuristic for "mqtt_password", so a bare str renders the broker
+    password in cleartext (unlike core's own mqtt integration, which
+    uses this exact selector for the same field)."""
+
+    flow = make_options_flow()
+
+    result = await flow.async_step_configure_broker()
+
+    marker = result["data_schema"].schema[CONF_MQTT_PASSWORD]
+    assert isinstance(marker, TextSelector)
+    assert marker.config["type"] == TextSelectorType.PASSWORD
+
+
+@pytest.mark.asyncio
+async def test_configure_broker_defaults_password_to_a_sentinel_when_already_set():
+    """The real stored password must never be reflected back into the
+    form - reopening this step to change an unrelated field (host,
+    transport, ...) would otherwise put the actual broker password into
+    the page's DOM every time."""
+
+    flow = make_options_flow({CONF_MQTT_HOST: "broker.local", CONF_MQTT_PASSWORD: "s3cret"})
+
+    result = await flow.async_step_configure_broker()
+
+    for key in result["data_schema"].schema:
+        if key == CONF_MQTT_PASSWORD:
+            assert key.default() == PASSWORD_NOT_CHANGED
+
+
+@pytest.mark.asyncio
+async def test_configure_broker_keeps_the_existing_password_when_sentinel_is_submitted():
+    flow = make_options_flow({CONF_MQTT_HOST: "broker.local", CONF_MQTT_PASSWORD: "s3cret"})
+
+    result = await flow.async_step_configure_broker({
+        CONF_MQTT_HOST: "broker.local",
+        CONF_MQTT_PORT: 8883,
+        CONF_MQTT_TLS: True,
+        CONF_MQTT_PASSWORD: PASSWORD_NOT_CHANGED,
+    })
+
+    assert result["data"][CONF_MQTT_PASSWORD] == "s3cret"
+
+
+@pytest.mark.asyncio
+async def test_configure_broker_updates_the_password_when_a_new_one_is_submitted():
+    flow = make_options_flow({CONF_MQTT_HOST: "broker.local", CONF_MQTT_PASSWORD: "s3cret"})
+
+    result = await flow.async_step_configure_broker({
+        CONF_MQTT_HOST: "broker.local",
+        CONF_MQTT_PORT: 8883,
+        CONF_MQTT_TLS: True,
+        CONF_MQTT_PASSWORD: "new-password",
+    })
+
+    assert result["data"][CONF_MQTT_PASSWORD] == "new-password"

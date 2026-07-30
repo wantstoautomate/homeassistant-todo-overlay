@@ -180,6 +180,75 @@ async def test_incoming_create_adds_a_local_item():
 
 
 @pytest.mark.asyncio
+async def test_incoming_message_missing_a_title_is_ignored_without_crashing():
+    """A link message is arbitrary JSON from the wire with no schema
+    guarantee (a hostile/misbehaving peer, or a broker ACL misconfig
+    letting unrelated traffic through) - a missing/invalid title must
+    not raise out of the fire-and-forget task."""
+
+    hass, adapter, store, manager, transport, sync = make_sync_manager(items=[])
+    await sync.async_setup()
+    await store.set_link(ENTITY_ID, LINK_ID)
+    await sync.async_start_link(ENTITY_ID)
+
+    transport.deliver(f"todo_overlay/link/{LINK_ID}/item/sync-1", {
+        "origin": "some-other-instance",
+        "sync_id": "sync-1",
+        "updated_at": "2026-01-01T00:00:00+00:00",
+        "deleted": False,
+        "fields": {"completed": False},
+    })
+    await _flush(hass)
+
+    assert await adapter.get_items(ENTITY_ID) == []
+
+
+@pytest.mark.asyncio
+async def test_incoming_message_with_non_dict_fields_is_ignored_without_crashing():
+    hass, adapter, store, manager, transport, sync = make_sync_manager(items=[])
+    await sync.async_setup()
+    await store.set_link(ENTITY_ID, LINK_ID)
+    await sync.async_start_link(ENTITY_ID)
+
+    transport.deliver(f"todo_overlay/link/{LINK_ID}/item/sync-1", {
+        "origin": "some-other-instance",
+        "sync_id": "sync-1",
+        "updated_at": "2026-01-01T00:00:00+00:00",
+        "deleted": False,
+        "fields": "not-a-dict",
+    })
+    await _flush(hass)
+
+    assert await adapter.get_items(ENTITY_ID) == []
+
+
+@pytest.mark.asyncio
+async def test_incoming_message_title_is_capped_to_a_sane_length():
+    hass, adapter, store, manager, transport, sync = make_sync_manager(items=[])
+    await sync.async_setup()
+    await store.set_link(ENTITY_ID, LINK_ID)
+    await sync.async_start_link(ENTITY_ID)
+
+    huge_title = "x" * 5000
+
+    transport.deliver(f"todo_overlay/link/{LINK_ID}/item/sync-1", {
+        "origin": "some-other-instance",
+        "sync_id": "sync-1",
+        "updated_at": "2026-01-01T00:00:00+00:00",
+        "deleted": False,
+        "fields": {
+            "title": huge_title, "completed": False, "description": None,
+            "due_date": None, "due_datetime": None, "quantity": None, "tags": [],
+        },
+    })
+    await _flush(hass)
+
+    items = await adapter.get_items(ENTITY_ID)
+    assert len(items) == 1
+    assert len(items[0].title) == 1000
+
+
+@pytest.mark.asyncio
 async def test_incoming_message_from_our_own_origin_is_ignored():
     hass, adapter, store, manager, transport, sync = make_sync_manager(items=[])
     await sync.async_setup()
