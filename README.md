@@ -11,6 +11,7 @@ A Home Assistant custom integration and Lovelace card that overlays a parent/chi
 - **Multi-entity cards** - combine several `todo.*` lists onto one card, each keeping its own hierarchy and drag-and-drop.
 - **Filtering** - a compact toolbar with All/Active/Completed/Overdue filtering.
 - **Configurable completion behavior** - by default, ticking an item just ticks it (no repositioning or splitting into separate sections); both are opt-in per card.
+- **Linked lists** - sync a list across two Home Assistant instances (e.g. two households) over MQTT, so an item added, completed, or removed on one side shows up on the other. Optional - only relevant if you want a shared list between separate HA instances.
 
 ## Installation
 
@@ -69,18 +70,48 @@ or use the visual card editor from the dashboard's "Add Card" dialog, which also
 
 See each service's own description in the Home Assistant UI (**Developer Tools → Actions**) for its full field list.
 
-## Automation trigger
+## Automation triggers
 
-The `todo_overlay` trigger platform fires whenever a meaningful change happens to an item:
+Eight triggers are available - one per kind of change - each showing up in the automation editor's "+ Add Trigger" picker under "Custom to-do item created", "Custom to-do item completed", etc. (search for "Custom to-do"):
+
+- `todo_overlay.created`
+- `todo_overlay.completed`
+- `todo_overlay.uncompleted`
+- `todo_overlay.removed`
+- `todo_overlay.tag_added`
+- `todo_overlay.tag_removed`
+- `todo_overlay.quantity_changed`
+- `todo_overlay.due`
+
+Each takes a standard target entity selector (defaults to any `todo.*` entity if left blank) and an optional `tag` field to only match items with that tag:
 
 ```yaml
 trigger:
-  - platform: todo_overlay
-    entity_id: todo.chores
-    action: due   # created | completed | uncompleted | removed | tag_added | tag_removed | quantity_changed | due
+  - trigger: todo_overlay.due
+    target:
+      entity_id: todo.chores
+    tag: urgent   # optional
 ```
 
-`entity_id`, `action`, and `tag` (for `tag_added`/`tag_removed`) are all optional filters - omit any of them to match more broadly. The trigger provides `trigger.event.data` with the item's `entity_id`, `item_id`, `title`, `action`, and any action-specific fields (e.g. `due_datetime` for `due`).
+The trigger provides `trigger.event.data` with the item's `entity_id`, `item_id`, `title`, and any action-specific fields (e.g. `due_datetime` for `due`).
+
+## Linked lists
+
+Two independent Home Assistant instances (e.g. two households) can keep one list in sync over MQTT - an item created, completed, uncompleted, or removed on one side is mirrored on the other. Only item content syncs (title, completed, description, due, quantity, tags), not position/hierarchy; deletions and conflicts are resolved automatically. This is entirely optional - skip it for normal, non-linked use.
+
+### Requirements
+
+- An MQTT broker reachable from both instances. It does not need to be the same broker either instance already uses for other things - a dedicated broker (or a dedicated set of credentials/ACLs on a shared one) is recommended, since this integration's credentials only need publish/subscribe access to its own topic namespace.
+- Each side connects independently, so one instance can reach the broker directly on your LAN (plain `tcp://`) while the other reaches it remotely over `wss://` through a reverse proxy (e.g. Nginx Proxy Manager terminating TLS) - no forwarded port for raw MQTT is required for the remote side.
+
+### Setup
+
+1. On **each** instance: **Settings → Devices & Services → Todo Overlay → Configure → Configure MQTT link**, and fill in the broker host/port/username/password, whether to use TLS, and the connection type (`tcp` for a direct/LAN broker, `websockets` for one reached through a reverse proxy's WSS).
+2. On one side, call the `todo_overlay.create_link` service against the entity you want to share, which generates a link id.
+3. On the other side, call `todo_overlay.join_link` against its own entity, passing that same link id.
+4. Both entities now sync. Call `todo_overlay.unlink` on either side to stop.
+
+The card shows a small link icon in a linked list's header (status only - no credentials or configuration exposed to the frontend).
 
 ## Development
 
