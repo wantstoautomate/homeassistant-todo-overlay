@@ -3,6 +3,95 @@
 All notable changes to this project are documented here. Versions follow the
 integration's `manifest.json`/card's `package.json` (kept in lockstep).
 
+## 0.15.1
+
+- Added MQTT-over-WSS support for the broker connection, so a linked-list
+  broker can be reached through a reverse proxy's WSS (e.g. Nginx Proxy
+  Manager terminating TLS with an existing wildcard cert) instead of
+  needing a dedicated forwarded port for raw MQTT+TLS. New options-flow
+  fields: connection type (`tcp`/`websockets`, default `tcp`) and
+  websocket path (default `/mqtt`). Each instance's broker connection is
+  independent, so this is opt-in per instance - a local instance can stay
+  on plain `tcp://broker:1883` against the same broker a remote instance
+  reaches via `wss://mqtt.example.com:443`.
+- Verified against a real Mosquitto instance with both a plain and a
+  websocket listener configured: the real transport connects,
+  authenticates, and round-trips a message over the websocket listener
+  specifically.
+
+## 0.15.0
+
+- Added linked lists: two independent Home Assistant instances (e.g. two
+  households) can now keep one list in sync over MQTT. Designed with
+  security explicitly in mind - no inbound port on either instance ever
+  needs to open, credentials never touch the card/frontend, and the sync
+  protocol is narrow and purpose-built rather than exposing general API
+  access to either side.
+- One MQTT broker connection per instance, configured once via a new
+  Options flow (Configure MQTT link/Disable MQTT link) - entirely
+  skippable, host/port/username/password/TLS, stored server-side in the
+  config entry.
+- Any number of independent, strictly two-party links, each created via
+  services (`create_link`/`join_link`/`unlink`) rather than the config
+  flow, since linking is a repeatable per-list action. A link is defined
+  purely by a shared random link id - the two sides' entity IDs/names
+  never need to match.
+- Sync is deliberately scoped: only item content syncs (title/completed/
+  description/due/quantity/tags), not position/hierarchy; conflicts
+  resolve last-write-wins by wall-clock UTC timestamp; deletions are
+  tombstoned for a bounded window so a late/reordered message can't
+  resurrect an already-deleted item; a full retained snapshot is
+  exchanged on (re)connect so an offline side reconciles immediately.
+  Frontend gets a small read-only link badge on the list header (status
+  only, no credentials).
+- Verified at every layer: unit tests against a fake transport, a real
+  local Mosquitto instance (TLS, no anonymous access, per-user ACLs), a
+  real two-instance simulation over that broker, and live end-to-end
+  against the real dev instance (pointed at a disposable test broker,
+  never a production one) - the dev instance's actual todo items were
+  never touched at any point.
+
+## 0.14.1
+
+- Added a local brand icon (`custom_components/todo_overlay/brand/
+  icon.png`), the one genuine gap HACS' brands check found now that the
+  repo is public - it looks for a local icon before falling back to the
+  community brands repository.
+
+## 0.14.0
+
+- Fixed the GitHub Actions frontend job failing on a stale
+  `package-lock.json` (npm 11 tolerated it locally; CI's npm 10 correctly
+  refused it) and 3 hassfest errors (missing `iot_class`, missing
+  `lovelace` in `dependencies`, no `triggers.yaml` for the trigger
+  platform), plus a `CONFIG_SCHEMA` warning via `cv.empty_config_schema`.
+- Made the `todo_overlay` trigger properly discoverable in the automation
+  editor's "+ Add Trigger" picker - it always validated and attached fine
+  standalone, but HA's picker reads a separate description system that
+  only recognizes the newer class-based `Trigger` pattern. Split the
+  single flat trigger into 8 distinct triggers (created/completed/
+  uncompleted/removed/tag_added/tag_removed/quantity_changed/due), each
+  with a standard target entity selector, matching how HA's own `todo`
+  integration exposes its own item-change events.
+
+## 0.13.0
+
+- Fixed a crash ("Something went wrong") when dragging a nested item to
+  the top level, plus the leftover grey-band placeholder after a drag.
+- Fixed the trigger-on-due and mark-complete checkboxes silently
+  cancelling out on a real click, due to a double-firing native click
+  event; both now bind to `@change` and read the checkbox's own `.checked`
+  value.
+- Restored a 12h/AM-PM due-date selector with a calendar-style date
+  picker popup, hand-rolled after confirming `ha-date-input`/
+  `ha-time-input` aren't reliably registered as custom elements in a
+  third-party card's context.
+- Fixed dragging an item into a completely empty list, and a backend race
+  where a stale trigger-on-due reconcile pass could clobber a
+  just-scheduled trigger.
+- Moved each list's title onto the same row as its toolbar icons, instead
+  of stacked on two lines.
+
 ## 0.12.2
 
 - Checkboxes are now an optional, off-by-default row element (`show_checkboxes`
