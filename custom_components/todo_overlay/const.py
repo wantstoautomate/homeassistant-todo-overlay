@@ -60,6 +60,13 @@ ATTR_ENABLED = "enabled"
 ATTR_TRIGGER_ON_DUE = "trigger_on_due"
 ATTR_LINK_ID = "link_id"
 
+# The exact shape create_link's uuid.uuid4().hex always produces. join_link
+# must reject anything else - a link_id is spliced directly into an MQTT
+# topic filter (see link_sync.py), so an unvalidated value containing "+"
+# or "#" would turn a single link's subscription into a broker-wide
+# wildcard, leaking and cross-writing every other link's traffic.
+LINK_ID_PATTERN = r"^[0-9a-f]{32}$"
+
 # Fired whenever a meaningful change happens to a list's items, so
 # automations can react via the todo_overlay trigger platform.
 EVENT_ITEM_CHANGED = "todo_overlay_item_event"

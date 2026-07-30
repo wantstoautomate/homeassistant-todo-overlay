@@ -50,6 +50,43 @@ _LOGGER = logging.getLogger(__name__)
 
 _SYNCED_FIELDS = ("title", "completed", "description", "due_date", "due_datetime", "quantity", "tags")
 
+# Caps on incoming remote fields before they're ever applied to a real
+# todo.* entity - a link message is otherwise arbitrary JSON from the
+# wire with no schema guarantee (a hostile or misbehaving peer, or a
+# broker ACL misconfiguration letting unrelated traffic through).
+_MAX_TEXT_LENGTH = 1000
+_MAX_TAGS = 50
+
+
+def _sanitize_incoming_fields(fields: dict[str, Any] | None) -> dict[str, Any] | None:
+    """Validate and normalize a remote peer's item fields. Returns None
+    if fields isn't a dict or is missing a usable title, so the caller
+    can skip applying it rather than crash on a malformed payload."""
+
+    if not isinstance(fields, dict):
+        return None
+
+    title = fields.get("title")
+
+    if not isinstance(title, str) or not title.strip():
+        return None
+
+    def _text(value: Any, max_length: int = _MAX_TEXT_LENGTH) -> str | None:
+        return value[:max_length] if isinstance(value, str) else None
+
+    tags = fields.get("tags")
+    tags = [tag[:_MAX_TEXT_LENGTH] for tag in tags if isinstance(tag, str)][:_MAX_TAGS] if isinstance(tags, list) else []
+
+    return {
+        "title": title[:_MAX_TEXT_LENGTH],
+        "completed": bool(fields.get("completed")),
+        "description": _text(fields.get("description")),
+        "due_date": _text(fields.get("due_date"), 32),
+        "due_datetime": _text(fields.get("due_datetime"), 64),
+        "quantity": _text(fields.get("quantity"), 64),
+        "tags": tags,
+    }
+
 
 def _now_iso() -> str:
     return datetime.now(UTC).isoformat()
@@ -348,6 +385,12 @@ class LinkSyncManager:
             return
 
         if fields is None:
+            return
+
+        fields = _sanitize_incoming_fields(fields)
+
+        if fields is None:
+            _LOGGER.warning("Ignoring link message with invalid/missing item fields for %s", entity_id)
             return
 
         if native_uid is None:

@@ -3,6 +3,31 @@
 All notable changes to this project are documented here. Versions follow the
 integration's `manifest.json`/card's `package.json` (kept in lockstep).
 
+## 0.15.2
+
+Security review of the linked-lists feature, before the first real
+install/PVT against a production broker:
+
+- Fixed `join_link` accepting an arbitrary, unvalidated `link_id` string
+  and splicing it directly into MQTT topic filters. A value containing
+  `+`/`#` (MQTT wildcards) could widen a single link's subscription into
+  every link's traffic on the broker - cross-link data leakage and
+  forged writes into a real `todo.*` entity from an unrelated link
+  sharing the same broker. `link_id` is now validated against the exact
+  shape `create_link` generates (32 lowercase hex characters).
+- The MQTT broker password field in **Configure MQTT link** was a plain
+  text input (no password selector, unlike HA core's own `mqtt`
+  integration) and re-displayed the real stored password as the form's
+  default every time the step was reopened to change an unrelated field.
+  Now uses a proper password selector, and a sentinel placeholder instead
+  of the real value - matching core's own pattern for the identical
+  problem.
+- Incoming MQTT link messages had no schema/type validation before being
+  applied to a real entity - a missing title raised an unhandled
+  exception (log spam), and remote field values had no length cap.
+  Malformed or oversized incoming fields are now sanitized and capped
+  before being applied.
+
 ## 0.15.1
 
 - Added MQTT-over-WSS support for the broker connection, so a linked-list
