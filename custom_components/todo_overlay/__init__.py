@@ -10,11 +10,22 @@ from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.typing import ConfigType
 from homeassistant.loader import async_get_integration
 
-from .const import DOMAIN
+from .const import (
+    CONF_MQTT_HOST,
+    CONF_MQTT_PASSWORD,
+    CONF_MQTT_PORT,
+    CONF_MQTT_TLS,
+    CONF_MQTT_TRANSPORT,
+    CONF_MQTT_USERNAME,
+    CONF_MQTT_WS_PATH,
+    DOMAIN,
+)
 from .due_scheduler import DueScheduler
 from .ha_adapter import HomeAssistantTodoProvider
+from .link_sync import LinkSyncManager
 from .manager import TodoManager
 from .metadata_store import MetadataStore
+from .mqtt_link import PahoMqttTransport
 from .runtime_data import TodoOverlayConfigEntry, TodoOverlayData
 from .services import async_register_services
 from .websocket import async_register_websocket
@@ -87,10 +98,14 @@ async def async_setup_entry(hass: HomeAssistant, entry: TodoOverlayConfigEntry) 
         er.EVENT_ENTITY_REGISTRY_UPDATED, _handle_entity_registry_updated,
     )
 
+    link_sync = await _async_setup_link_sync(hass, entry, manager, metadata_store)
+
     entry.runtime_data = TodoOverlayData(
         manager=manager,
+        metadata_store=metadata_store,
         due_scheduler=due_scheduler,
         unsub_entity_registry=unsub_entity_registry,
+        link_sync=link_sync,
     )
 
     return True
@@ -102,7 +117,45 @@ async def async_unload_entry(hass: HomeAssistant, entry: TodoOverlayConfigEntry)
     entry.runtime_data.due_scheduler.async_stop()
     entry.runtime_data.unsub_entity_registry()
 
+    if entry.runtime_data.link_sync is not None:
+        await entry.runtime_data.link_sync.async_shutdown()
+
     return True
+
+
+async def _async_setup_link_sync(
+    hass: HomeAssistant,
+    entry: TodoOverlayConfigEntry,
+    manager: TodoManager,
+    metadata_store: MetadataStore,
+) -> LinkSyncManager | None:
+    """Connect to the configured MQTT broker and resume any lists already
+    linked before this restart - None (no-op) unless a broker has been
+    set up via the options flow (see config_flow.py)."""
+
+    if not entry.options.get(CONF_MQTT_HOST):
+        return None
+
+    instance_id = await metadata_store.get_instance_id()
+
+    transport = PahoMqttTransport(
+        hass,
+        host=entry.options[CONF_MQTT_HOST],
+        port=entry.options.get(CONF_MQTT_PORT, 8883),
+        username=entry.options.get(CONF_MQTT_USERNAME) or None,
+        password=entry.options.get(CONF_MQTT_PASSWORD) or None,
+        use_tls=entry.options.get(CONF_MQTT_TLS, True),
+        client_id=f"todo_overlay-{instance_id}",
+        transport=entry.options.get(CONF_MQTT_TRANSPORT, "tcp"),
+        ws_path=entry.options.get(CONF_MQTT_WS_PATH, "/mqtt"),
+    )
+
+    link_sync = LinkSyncManager(
+        hass, manager, metadata_store, HomeAssistantTodoProvider(hass), transport,
+    )
+    await link_sync.async_setup()
+
+    return link_sync
 
 
 async def _async_handle_entity_registry_updated(

@@ -4,6 +4,9 @@ version = "0.12.2"
 description = "Enhanced overlay for Home Assistant Todo entities."
 readme = "README.md"
 requires-python = ">=3.13"
+dependencies = [
+    "paho-mqtt==2.1.0",
+]
 
 [dependency-groups]
 dev = [

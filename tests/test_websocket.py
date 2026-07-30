@@ -43,7 +43,9 @@ class FakeConnection:
 
 
 def make_hass(manager: TodoManager):
-    return type("FakeHass", (), {"config_entries": FakeConfigEntries(manager)})()
+    return type("FakeHass", (), {
+        "config_entries": FakeConfigEntries(manager, metadata_store=manager._metadata_store),
+    })()
 
 
 async def call_handler(handler, manager: TodoManager, msg: dict):
@@ -77,6 +79,19 @@ async def test_websocket_get_list_returns_serialised_list():
     assert msg_id == 1
     assert result["entity_id"] == ENTITY_ID
     assert {item["title"] for item in result["items"]} == {"Shopping", "Milk"}
+    assert result["link_id"] is None
+
+
+@pytest.mark.asyncio
+async def test_websocket_get_list_includes_link_id_when_linked():
+    manager = make_manager()
+    await manager._metadata_store.set_link(ENTITY_ID, "abc123")
+
+    connection = await call_handler(
+        websocket.websocket_get_list, manager, {"entity_id": ENTITY_ID, "group_completed": False},
+    )
+
+    assert connection.results[0][1]["link_id"] == "abc123"
 
 
 # "not_found" for an unknown entity_id is covered by ha_adapter's own

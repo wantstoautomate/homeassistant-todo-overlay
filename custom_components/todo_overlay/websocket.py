@@ -32,7 +32,7 @@ from .errors import (
     ItemNotFoundError,
     SnapshotNotFoundError,
 )
-from .runtime_data import get_manager
+from .runtime_data import get_manager, get_metadata_store
 
 # Every TodoManager method that validates its input (a missing item,
 # entity, or saved list) raises one of these - all ValueError subclasses,
@@ -97,15 +97,25 @@ async def websocket_get_list(
     """Return a Todo list."""
 
     manager = get_manager(hass)
+    metadata_store = get_metadata_store(hass)
 
     todo_list = await manager.get_list(
         msg["entity_id"],
         group_completed=msg["group_completed"],
     )
 
+    link = await metadata_store.get_link(msg["entity_id"])
+
+    payload = todo_list.to_dict()
+    # Status only - which link_id (if any) this list belongs to, for the
+    # card's read-only badge. Broker credentials never travel this path;
+    # they live only in the options flow, server-side (see
+    # config_flow.py).
+    payload["link_id"] = link["link_id"] if link else None
+
     connection.send_result(
         msg["id"],
-        todo_list.to_dict(),
+        payload,
     )
 
 

@@ -10,6 +10,34 @@
       "already_configured": "Todo Overlay is already set up - only one instance is needed, since it works across every todo.* entity automatically."
     }
   },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Todo Overlay options",
+        "menu_options": {
+          "configure_broker": "Configure MQTT link",
+          "remove_broker": "Disable MQTT link"
+        }
+      },
+      "configure_broker": {
+        "title": "MQTT broker for linked lists",
+        "description": "Optional - only needed if you want to link a list with another Home Assistant instance. Leave this unconfigured for normal, non-linked use.",
+        "data": {
+          "mqtt_host": "Host",
+          "mqtt_port": "Port",
+          "mqtt_username": "Username",
+          "mqtt_password": "Password",
+          "mqtt_tls": "Use TLS",
+          "mqtt_transport": "Connection type",
+          "mqtt_ws_path": "WebSocket path"
+        },
+        "data_description": {
+          "mqtt_transport": "\"tcp\" for a direct/LAN broker, \"websockets\" for one reached through a reverse proxy's WSS (e.g. Nginx Proxy Manager) without needing a dedicated forwarded port.",
+          "mqtt_ws_path": "Only used when connection type is websockets - the path the broker's websocket listener expects (Mosquitto's default is /mqtt)."
+        }
+      }
+    }
+  },
   "triggers": {
     "created": {
       "name": "Custom to-do item created",

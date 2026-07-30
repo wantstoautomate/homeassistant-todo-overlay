@@ -85,6 +85,43 @@ class HomeAssistantTodoProvider:
             blocking=True,
         )
 
+    async def update_item(
+        self,
+        entity_id: str,
+        item_id: str,
+        *,
+        title: str | None = None,
+        description: str | None = None,
+        due_date: str | None = None,
+        due_datetime: str | None = None,
+    ) -> None:
+        """Update an item's native fields - mirrors the frontend's own
+        direct todo.update_item call for these same fields (title/
+        description/due), used here to apply an incoming linked-list
+        change rather than a user edit."""
+
+        service_data: dict = {"entity_id": entity_id, "item": item_id}
+
+        if title is not None:
+            service_data["rename"] = title
+
+        supported = self._supported_features(entity_id)
+
+        if description is not None and supported & TodoListEntityFeature.SET_DESCRIPTION_ON_ITEM:
+            service_data["description"] = description
+
+        if due_datetime and supported & TodoListEntityFeature.SET_DUE_DATETIME_ON_ITEM:
+            service_data["due_datetime"] = due_datetime
+        elif due_date and supported & TodoListEntityFeature.SET_DUE_DATE_ON_ITEM:
+            service_data["due_date"] = due_date
+
+        await self._hass.services.async_call(
+            "todo",
+            "update_item",
+            service_data,
+            blocking=True,
+        )
+
     async def remove_item(
         self,
         entity_id: str,

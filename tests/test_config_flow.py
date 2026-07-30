@@ -19,8 +19,18 @@ import pytest
 from homeassistant.config_entries import SOURCE_USER
 from homeassistant.data_entry_flow import AbortFlow, FlowResultType
 
-from custom_components.todo_overlay.config_flow import TodoOverlayConfigFlow
-from custom_components.todo_overlay.const import DOMAIN
+from custom_components.todo_overlay.config_flow import (
+    TodoOverlayConfigFlow,
+    TodoOverlayOptionsFlow,
+)
+from custom_components.todo_overlay.const import (
+    CONF_MQTT_HOST,
+    CONF_MQTT_PORT,
+    CONF_MQTT_TLS,
+    CONF_MQTT_TRANSPORT,
+    CONF_MQTT_WS_PATH,
+    DOMAIN,
+)
 
 
 class FakeConfigEntry:
@@ -122,3 +132,114 @@ async def test_async_step_import_aborts_if_already_configured():
         await flow.async_step_import({})
 
     assert exc_info.value.reason == "already_configured"
+
+
+class FakeOptionsConfigEntry:
+
+    def __init__(self, options: dict | None = None):
+        self.options = options or {}
+
+
+class FakeOptionsConfigEntries:
+
+    def __init__(self, entry: FakeOptionsConfigEntry):
+        self._entry = entry
+
+    def async_get_known_entry(self, entry_id):
+        return self._entry
+
+
+class FakeOptionsHass:
+
+    def __init__(self, entry: FakeOptionsConfigEntry):
+        self.config_entries = FakeOptionsConfigEntries(entry)
+
+
+def make_options_flow(options: dict | None = None) -> TodoOverlayOptionsFlow:
+    entry = FakeOptionsConfigEntry(options)
+    flow = TodoOverlayOptionsFlow()
+    flow.hass = FakeOptionsHass(entry)
+    flow.handler = "test-entry-id"
+    flow.flow_id = "test-flow-id"
+    return flow
+
+
+@pytest.mark.asyncio
+async def test_options_init_offers_only_configure_when_no_broker_set():
+    flow = make_options_flow()
+
+    result = await flow.async_step_init()
+
+    assert result["type"] == FlowResultType.MENU
+    assert result["menu_options"] == ["configure_broker"]
+
+
+@pytest.mark.asyncio
+async def test_options_init_also_offers_remove_when_broker_already_configured():
+    flow = make_options_flow({CONF_MQTT_HOST: "broker.local"})
+
+    result = await flow.async_step_init()
+
+    assert result["menu_options"] == ["configure_broker", "remove_broker"]
+
+
+@pytest.mark.asyncio
+async def test_configure_broker_shows_a_form_first():
+    flow = make_options_flow()
+
+    result = await flow.async_step_configure_broker()
+
+    assert result["type"] == FlowResultType.FORM
+    assert result["step_id"] == "configure_broker"
+
+
+@pytest.mark.asyncio
+async def test_configure_broker_saves_submitted_options():
+    flow = make_options_flow()
+
+    result = await flow.async_step_configure_broker({
+        CONF_MQTT_HOST: "broker.local",
+        CONF_MQTT_PORT: 8883,
+        CONF_MQTT_TLS: True,
+    })
+
+    assert result["type"] == FlowResultType.CREATE_ENTRY
+    assert result["data"][CONF_MQTT_HOST] == "broker.local"
+    assert result["data"][CONF_MQTT_PORT] == 8883
+
+
+@pytest.mark.asyncio
+async def test_remove_broker_clears_all_broker_options():
+    flow = make_options_flow({
+        CONF_MQTT_HOST: "broker.local",
+        CONF_MQTT_PORT: 8883,
+        CONF_MQTT_TLS: True,
+        CONF_MQTT_TRANSPORT: "websockets",
+        CONF_MQTT_WS_PATH: "/mqtt",
+    })
+
+    result = await flow.async_step_remove_broker()
+
+    assert result["type"] == FlowResultType.CREATE_ENTRY
+    assert CONF_MQTT_HOST not in result["data"]
+    assert CONF_MQTT_PORT not in result["data"]
+    assert CONF_MQTT_TLS not in result["data"]
+    assert CONF_MQTT_TRANSPORT not in result["data"]
+    assert CONF_MQTT_WS_PATH not in result["data"]
+
+
+@pytest.mark.asyncio
+async def test_configure_broker_saves_websockets_transport_and_path():
+    flow = make_options_flow()
+
+    result = await flow.async_step_configure_broker({
+        CONF_MQTT_HOST: "mqtt.example.duckdns.org",
+        CONF_MQTT_PORT: 443,
+        CONF_MQTT_TLS: True,
+        CONF_MQTT_TRANSPORT: "websockets",
+        CONF_MQTT_WS_PATH: "/mqtt",
+    })
+
+    assert result["type"] == FlowResultType.CREATE_ENTRY
+    assert result["data"][CONF_MQTT_TRANSPORT] == "websockets"
+    assert result["data"][CONF_MQTT_WS_PATH] == "/mqtt"
