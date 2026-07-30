@@ -25,7 +25,9 @@ from .const import (
     CONF_MQTT_PASSWORD,
     CONF_MQTT_PORT,
     CONF_MQTT_TLS,
+    CONF_MQTT_TRANSPORT,
     CONF_MQTT_USERNAME,
+    CONF_MQTT_WS_PATH,
     DOMAIN,
 )
 
@@ -93,6 +95,10 @@ class TodoOverlayOptionsFlow(OptionsFlowWithReload):
             vol.Optional(CONF_MQTT_USERNAME, default=current.get(CONF_MQTT_USERNAME, "")): str,
             vol.Optional(CONF_MQTT_PASSWORD, default=current.get(CONF_MQTT_PASSWORD, "")): str,
             vol.Required(CONF_MQTT_TLS, default=current.get(CONF_MQTT_TLS, True)): bool,
+            vol.Required(CONF_MQTT_TRANSPORT, default=current.get(CONF_MQTT_TRANSPORT, "tcp")): vol.In(
+                ["tcp", "websockets"]
+            ),
+            vol.Optional(CONF_MQTT_WS_PATH, default=current.get(CONF_MQTT_WS_PATH, "/mqtt")): str,
         })
 
         return self.async_show_form(step_id="configure_broker", data_schema=schema)
@@ -100,7 +106,10 @@ class TodoOverlayOptionsFlow(OptionsFlowWithReload):
     async def async_step_remove_broker(self, user_input: dict | None = None) -> ConfigFlowResult:
         new_options = dict(self.config_entry.options)
 
-        for key in (CONF_MQTT_HOST, CONF_MQTT_PORT, CONF_MQTT_USERNAME, CONF_MQTT_PASSWORD, CONF_MQTT_TLS):
+        for key in (
+            CONF_MQTT_HOST, CONF_MQTT_PORT, CONF_MQTT_USERNAME, CONF_MQTT_PASSWORD,
+            CONF_MQTT_TLS, CONF_MQTT_TRANSPORT, CONF_MQTT_WS_PATH,
+        ):
             new_options.pop(key, None)
 
         return self.async_create_entry(data=new_options)

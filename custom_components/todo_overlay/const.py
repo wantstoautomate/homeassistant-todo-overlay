@@ -37,6 +37,13 @@ CONF_MQTT_PORT = "mqtt_port"
 CONF_MQTT_USERNAME = "mqtt_username"
 CONF_MQTT_PASSWORD = "mqtt_password"
 CONF_MQTT_TLS = "mqtt_tls"
+# "tcp" (default - a direct/LAN broker connection) or "websockets" (for
+# reaching a broker fronted by a reverse proxy's WSS, e.g. NPM, without
+# needing a dedicated forwarded port - see mqtt_link.py). Each HA
+# instance's broker connection is independent, so one side of a link can
+# use tcp while the other uses websockets against the very same broker.
+CONF_MQTT_TRANSPORT = "mqtt_transport"
+CONF_MQTT_WS_PATH = "mqtt_ws_path"
 
 ATTR_NAME = "name"
 ATTR_PERSIST_STATES = "persist_states"

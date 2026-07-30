@@ -73,6 +73,8 @@ class PahoMqttTransport:
         password: str | None,
         use_tls: bool,
         client_id: str,
+        transport: str = "tcp",
+        ws_path: str = "/mqtt",
     ) -> None:
         self._hass = hass
         self._host = host
@@ -83,7 +85,11 @@ class PahoMqttTransport:
             callback_api_version=mqtt.CallbackAPIVersion.VERSION2,
             client_id=client_id,
             protocol=mqtt.MQTTv5,
+            transport=transport,
         )
+
+        if transport == "websockets":
+            self._client.ws_set_options(path=ws_path)
 
         if username:
             self._client.username_pw_set(username, password)

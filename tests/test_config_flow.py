@@ -27,6 +27,8 @@ from custom_components.todo_overlay.const import (
     CONF_MQTT_HOST,
     CONF_MQTT_PORT,
     CONF_MQTT_TLS,
+    CONF_MQTT_TRANSPORT,
+    CONF_MQTT_WS_PATH,
     DOMAIN,
 )
 
@@ -212,6 +214,8 @@ async def test_remove_broker_clears_all_broker_options():
         CONF_MQTT_HOST: "broker.local",
         CONF_MQTT_PORT: 8883,
         CONF_MQTT_TLS: True,
+        CONF_MQTT_TRANSPORT: "websockets",
+        CONF_MQTT_WS_PATH: "/mqtt",
     })
 
     result = await flow.async_step_remove_broker()
@@ -220,3 +224,22 @@ async def test_remove_broker_clears_all_broker_options():
     assert CONF_MQTT_HOST not in result["data"]
     assert CONF_MQTT_PORT not in result["data"]
     assert CONF_MQTT_TLS not in result["data"]
+    assert CONF_MQTT_TRANSPORT not in result["data"]
+    assert CONF_MQTT_WS_PATH not in result["data"]
+
+
+@pytest.mark.asyncio
+async def test_configure_broker_saves_websockets_transport_and_path():
+    flow = make_options_flow()
+
+    result = await flow.async_step_configure_broker({
+        CONF_MQTT_HOST: "mqtt.example.duckdns.org",
+        CONF_MQTT_PORT: 443,
+        CONF_MQTT_TLS: True,
+        CONF_MQTT_TRANSPORT: "websockets",
+        CONF_MQTT_WS_PATH: "/mqtt",
+    })
+
+    assert result["type"] == FlowResultType.CREATE_ENTRY
+    assert result["data"][CONF_MQTT_TRANSPORT] == "websockets"
+    assert result["data"][CONF_MQTT_WS_PATH] == "/mqtt"

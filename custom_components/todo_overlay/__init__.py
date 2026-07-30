@@ -15,7 +15,9 @@ from .const import (
     CONF_MQTT_PASSWORD,
     CONF_MQTT_PORT,
     CONF_MQTT_TLS,
+    CONF_MQTT_TRANSPORT,
     CONF_MQTT_USERNAME,
+    CONF_MQTT_WS_PATH,
     DOMAIN,
 )
 from .due_scheduler import DueScheduler
@@ -144,6 +146,8 @@ async def _async_setup_link_sync(
         password=entry.options.get(CONF_MQTT_PASSWORD) or None,
         use_tls=entry.options.get(CONF_MQTT_TLS, True),
         client_id=f"todo_overlay-{instance_id}",
+        transport=entry.options.get(CONF_MQTT_TRANSPORT, "tcp"),
+        ws_path=entry.options.get(CONF_MQTT_WS_PATH, "/mqtt"),
     )
 
     link_sync = LinkSyncManager(
