@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
@@ -12,6 +13,14 @@ from .link_sync import LinkSyncManager
 from .manager import TodoManager
 from .metadata_store import MetadataStore
 
+if TYPE_CHECKING:
+    # sensor.py imports get_manager() from this module - importing
+    # OpenItemsSensorRegistry back at runtime would be circular. Safe
+    # under TYPE_CHECKING only since `from __future__ import annotations`
+    # (above) means this dataclass's field annotation is never evaluated
+    # at runtime anyway.
+    from .sensor import OpenItemsSensorRegistry
+
 
 @dataclass
 class TodoOverlayData:
@@ -21,6 +30,7 @@ class TodoOverlayData:
     manager: TodoManager
     metadata_store: MetadataStore
     due_scheduler: DueScheduler
+    open_items_registry: OpenItemsSensorRegistry
     unsub_entity_registry: Callable[[], None]
     # None unless an MQTT broker is configured for linked lists (see
     # config_flow.py's options flow) - linking services no-op with a

@@ -12,6 +12,7 @@ A Home Assistant custom integration and Lovelace card that overlays a parent/chi
 - **Filtering** - a compact toolbar with All/Active/Completed/Overdue filtering.
 - **Configurable completion behavior** - by default, ticking an item just ticks it (no repositioning or splitting into separate sections); both are opt-in per card.
 - **Linked lists** - sync a list across two Home Assistant instances (e.g. two households) over MQTT, so an item added, completed, or removed on one side shows up on the other. Optional - only relevant if you want a shared list between separate HA instances.
+- **Open-items sensor** - an auto-created sensor per list exposing incomplete-item detail (titles, tags, due dates) for use in automation conditions and notification messages, without a `todo.get_items` service call in every automation.
 
 ## Installation
 
@@ -112,6 +113,42 @@ Two independent Home Assistant instances (e.g. two households) can keep one list
 4. Both entities now sync. Call `todo_overlay.unlink` on either side to stop.
 
 The card shows a small link icon in a linked list's header (status only - no credentials or configuration exposed to the frontend).
+
+## Open-items sensor
+
+A sensor is auto-created for every `todo.*` entity - no configuration needed. Given `todo.shopping_list`, you get `sensor.todo_overlay_shopping_list_open_items`:
+
+- **State** - the count of incomplete items (the same number native HA's own `todo.*` entity state already reports, kept here too for dashboard/history convenience).
+- **`items` attribute** - a list of every incomplete item's detail: `title`, `description`, `due_date`, `due_datetime`, `quantity`, `tags`, and `top_level` (`false` for a child item nested under a parent).
+
+Since HA has no way to expose per-item detail without a `todo.get_items` service call in every automation, this attribute is meant to be used directly in a template. A couple of examples:
+
+```yaml
+# Numeric trigger on the plain count (equivalent to using todo.shopping_list's own state directly)
+trigger:
+  - trigger: numeric_state
+    entity_id: sensor.todo_overlay_shopping_list_open_items
+    above: 0
+```
+
+```yaml
+# Notify with the actual titles
+action:
+  - action: notify.mobile_app
+    data:
+      message: >-
+        You have {{ states('sensor.todo_overlay_shopping_list_open_items') }} items open in Shopping List.
+        They are {{ state_attr('sensor.todo_overlay_shopping_list_open_items', 'items') | map(attribute='title') | join(', ') }}.
+```
+
+```yaml
+# Tag-filtered condition (only "urgent"-tagged items)
+condition:
+  - condition: template
+    value_template: >-
+      {{ state_attr('sensor.todo_overlay_shopping_list_open_items', 'items')
+         | selectattr('tags', 'contains', 'urgent') | list | count > 0 }}
+```
 
 ## Development
 

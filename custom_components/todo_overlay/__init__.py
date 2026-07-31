@@ -3,7 +3,7 @@ from pathlib import Path
 from homeassistant.components.http import StaticPathConfig
 from homeassistant.components.lovelace.const import CONF_RESOURCE_TYPE_WS, LOVELACE_DATA
 from homeassistant.config_entries import SOURCE_IMPORT
-from homeassistant.const import CONF_ID, CONF_URL, EVENT_HOMEASSISTANT_STARTED
+from homeassistant.const import CONF_ID, CONF_URL, EVENT_HOMEASSISTANT_STARTED, Platform
 from homeassistant.core import CoreState, Event, HomeAssistant
 from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers import entity_registry as er
@@ -27,6 +27,7 @@ from .manager import TodoManager
 from .metadata_store import MetadataStore
 from .mqtt_link import PahoMqttTransport
 from .runtime_data import TodoOverlayConfigEntry, TodoOverlayData
+from .sensor import OpenItemsSensorRegistry
 from .services import async_register_services
 from .websocket import async_register_websocket
 
@@ -35,6 +36,8 @@ FRONTEND_DIST = Path(__file__).parent / "frontend_dist"
 CARD_FILENAME = "todo-overlay.js"
 
 TODO_ENTITY_PREFIX = "todo."
+
+PLATFORMS = [Platform.SENSOR]
 
 # Allows a bare `todo_overlay:` YAML key (for the one-time migration below)
 # but rejects any options under it - not config_entry_only_config_schema,
@@ -76,6 +79,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: TodoOverlayConfigEntry) 
     due_scheduler = DueScheduler(hass, manager)
     await due_scheduler.async_start()
 
+    open_items_registry = OpenItemsSensorRegistry(hass)
+
     async_register_websocket(hass)
     async_register_services(hass)
 
@@ -92,7 +97,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: TodoOverlayConfigEntry) 
         hass.bus.async_listen_once(EVENT_HOMEASSISTANT_STARTED, _register_lovelace_resource)
 
     async def _handle_entity_registry_updated(event: Event) -> None:
-        await _async_handle_entity_registry_updated(metadata_store, due_scheduler, event)
+        await _async_handle_entity_registry_updated(
+            metadata_store, due_scheduler, open_items_registry, event,
+        )
 
     unsub_entity_registry = hass.bus.async_listen(
         er.EVENT_ENTITY_REGISTRY_UPDATED, _handle_entity_registry_updated,
@@ -104,9 +111,16 @@ async def async_setup_entry(hass: HomeAssistant, entry: TodoOverlayConfigEntry) 
         manager=manager,
         metadata_store=metadata_store,
         due_scheduler=due_scheduler,
+        open_items_registry=open_items_registry,
         unsub_entity_registry=unsub_entity_registry,
         link_sync=link_sync,
     )
+
+    # Must come after entry.runtime_data is set - the sensor platform's
+    # own async_setup_entry() reads open_items_registry back off it, and
+    # each sensor's first refresh calls get_manager(hass), which also
+    # depends on runtime_data already being in place.
+    await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
 
     return True
 
@@ -114,13 +128,15 @@ async def async_setup_entry(hass: HomeAssistant, entry: TodoOverlayConfigEntry) 
 async def async_unload_entry(hass: HomeAssistant, entry: TodoOverlayConfigEntry) -> bool:
     """Unload a config entry."""
 
+    unloaded = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
+
     entry.runtime_data.due_scheduler.async_stop()
     entry.runtime_data.unsub_entity_registry()
 
     if entry.runtime_data.link_sync is not None:
         await entry.runtime_data.link_sync.async_shutdown()
 
-    return True
+    return unloaded
 
 
 async def _async_setup_link_sync(
@@ -161,10 +177,11 @@ async def _async_setup_link_sync(
 async def _async_handle_entity_registry_updated(
     metadata_store: MetadataStore,
     due_scheduler: DueScheduler,
+    open_items_registry: OpenItemsSensorRegistry,
     event: Event,
 ) -> None:
-    """Keep stored metadata and pending due-schedules in sync with the
-    entity registry.
+    """Keep stored metadata, pending due-schedules, and open-items sensors
+    in sync with the entity registry.
 
     Nothing else in this integration ever notices an entity disappearing
     or being renamed outside of it - get_list() only cleans up metadata
@@ -185,9 +202,11 @@ async def _async_handle_entity_registry_updated(
     if data["action"] == "remove":
         await metadata_store.clear_entity(entity_id)
         due_scheduler.cancel_entity(entity_id)
+        await open_items_registry.remove_entity(entity_id)
     elif data["action"] == "create":
         due_scheduler.subscribe_entity(entity_id)
         await due_scheduler.reconcile_entity(entity_id)
+        open_items_registry.add_entity(entity_id)
     elif data["action"] == "update":
         old_entity_id = data.get("old_entity_id")
 
@@ -196,6 +215,8 @@ async def _async_handle_entity_registry_updated(
             due_scheduler.cancel_entity(old_entity_id)
             due_scheduler.subscribe_entity(entity_id)
             await due_scheduler.reconcile_entity(entity_id)
+            await open_items_registry.remove_entity(old_entity_id)
+            open_items_registry.add_entity(entity_id)
 
 
 async def _async_register_lovelace_resource(hass: HomeAssistant) -> None:
