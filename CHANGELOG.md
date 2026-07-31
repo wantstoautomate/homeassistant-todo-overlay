@@ -3,6 +3,23 @@
 All notable changes to this project are documented here. Versions follow the
 integration's `manifest.json`/card's `package.json` (kept in lockstep).
 
+## 0.16.0
+
+- Added an "open items" sensor, auto-created one per `todo.*` entity
+  (`sensor.todo_overlay_<list>_open_items`) - state is the count of
+  incomplete items (the same number native HA's own `todo.*` entity
+  state already reports - kept here too for dashboard/history
+  convenience), and an `items` attribute with full per-item detail
+  (title, description, due date/time, quantity, tags, whether it's a
+  top-level item) that native HA has no way to expose without an extra
+  `todo.get_items` service call in every automation. Meant to be
+  referenced directly in a template trigger/condition (e.g.
+  tag-filtering via `items | selectattr('tags', 'contains', 'urgent')`)
+  or a notification message listing what's still open.
+  Reactive via the same `async_subscribe_updates()` mechanism
+  due_scheduler.py already uses, and tracks todo.* entities being
+  added/removed/renamed the same way due_scheduler does too.
+
 ## 0.15.2
 
 Security review of the linked-lists feature, before the first real
