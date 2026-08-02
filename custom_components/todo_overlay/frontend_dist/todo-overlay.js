@@ -2930,6 +2930,7 @@ var REORDER_TOGGLE_ICON = b2`
         <path d="M9,3L5,6.99H8V14H10V6.99H13M16,17.01V10H14V17.01H11L15,21L19,17.01H16Z"></path>
     </svg>
 `;
+var ITEM_CHANGED_EVENT = "todo_overlay_item_event";
 function collectAllRows(root, currentEntity) {
   const rows = [];
   for (const el of Array.from(root.querySelectorAll("*"))) {
@@ -3068,6 +3069,7 @@ var TodoOverlayList = class extends i4 {
     this.quickAddValue = "";
     this.saveLoadValue = EMPTY_SAVE_LOAD_VALUE;
     this.savedNames = [];
+    this.itemChangedSubscribeStarted = false;
     this.onGlobalPointerMove = (e7) => {
       if (e7.pointerType !== "mouse") {
         e7.preventDefault();
@@ -3124,9 +3126,34 @@ var TodoOverlayList = class extends i4 {
       }
     };
   }
+  // Native hass.states-based reloading (below) only fires for changes
+  // that touch the native entity itself - a same-list reorder is purely
+  // overlay metadata and never does (see manager_position.py's
+  // move_item, which fires this event for exactly that reason). Without
+  // this, another open card (a different browser/device/tab) has no
+  // way to know a reorder - or a tag/quantity change, which also don't
+  // reliably touch native state - happened at all. Subscribed once,
+  // the first time hass becomes available - the callback re-reads
+  // this.entity fresh on every event rather than closing over it, so a
+  // live card-editor repoint to a different entity doesn't need a
+  // fresh subscription.
+  async subscribeToItemChanged() {
+    this.unsubItemChanged = await this.hass.connection.subscribeEvents(
+      (event) => {
+        if (event.data.entity_id === this.entity) {
+          this.load();
+        }
+      },
+      ITEM_CHANGED_EVENT
+    );
+  }
   updated(changed) {
     if (changed.has("entity") && this.entity) {
       this.collapsedIds = loadCollapsedIds(this.entity);
+    }
+    if (this.hass && !this.itemChangedSubscribeStarted) {
+      this.itemChangedSubscribeStarted = true;
+      this.subscribeToItemChanged();
     }
     if (!changed.has("hass") || !this.hass || !this.entity) {
       return;
@@ -3277,6 +3304,7 @@ var TodoOverlayList = class extends i4 {
     window.removeEventListener("todo-overlay-drag-hover", this.onForeignDragHover);
     window.clearTimeout(this.undoTimer);
     window.clearTimeout(this.errorTimer);
+    this.unsubItemChanged?.();
   }
   // --- collapse / filter -------------------------------------------------
   toggleCollapseId(id) {

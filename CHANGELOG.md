@@ -3,6 +3,26 @@
 All notable changes to this project are documented here. Versions follow the
 integration's `manifest.json`/card's `package.json` (kept in lockstep).
 
+## 0.16.3
+
+- Fixed other open cards (a different browser/device/tab) never
+  reflecting a reorder - reported live right after 0.16.2's touch-drag
+  fix made reordering on mobile actually work, which is what surfaced
+  this. Root cause: reordering is purely `todo_overlay`'s own overlay
+  metadata, never touching the native `todo.*` entity's items or state
+  at all - and the card's *only* live-refresh trigger was watching that
+  native entity's `state_changed` (via `hass.states[entity].last_updated`
+  changing). With nothing ever touching native state, no other open card
+  had any signal at all that anything had changed.
+  `move_item` now fires the same `EVENT_ITEM_CHANGED` event every other
+  mutation already fires (action `"moved"`), and the card now subscribes
+  to that event directly (`hass.connection.subscribeEvents`) instead of
+  relying solely on native `state_changed` - reloading any time a
+  matching event arrives for its entity. This closes the same gap for
+  tag/quantity changes too, which shared the identical root cause: the
+  backend already fired an event for them, but nothing on the frontend
+  was ever listening for it.
+
 ## 0.16.2
 
 - Replaced 0.16.1's fix for drag-to-reorder on touch (below) - confirmed

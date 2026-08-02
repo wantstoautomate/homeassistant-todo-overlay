@@ -2,6 +2,7 @@ import asyncio
 
 import pytest
 
+from custom_components.todo_overlay.const import EVENT_ITEM_CHANGED
 from custom_components.todo_overlay.errors import (
     CycleError,
     ItemNotFoundError,
@@ -150,6 +151,47 @@ async def test_manager_move_item_inside_appends_to_new_parent():
     assert len(todo_list.items) == 1
     assert todo_list.items[0].id == "1"
     assert todo_list.items[0].children[0].id == "2"
+
+
+@pytest.mark.asyncio
+async def test_manager_move_item_fires_a_moved_event():
+    # Reordering is purely overlay metadata - it never touches the
+    # native entity's items or state, so without this event, no OTHER
+    # open card (a different browser/device/tab) has any signal a
+    # reorder happened at all - see todo-overlay-list.ts's frontend
+    # subscription to this same event.
+    calls: list[tuple] = []
+
+    class FakeHass:
+        class bus:
+            @staticmethod
+            def async_fire(event, data):
+                calls.append((event, data))
+
+    metadata_store = FakeMetadataStore({
+        "1": ItemPosition(parent_id=None, order=0),
+        "2": ItemPosition(parent_id=None, order=1),
+    })
+    adapter = FakeAdapter(items=[
+        TodoItem(id="1", title="Milk", completed=False),
+        TodoItem(id="2", title="Eggs", completed=False),
+    ])
+    manager = TodoManager(adapter=adapter, metadata_store=metadata_store, hass=FakeHass())
+
+    await manager.move_item(
+        entity_id="todo.shopping",
+        child_id="2",
+        reference_id="1",
+        placement="before",
+    )
+
+    assert len(calls) == 1
+    event, data = calls[0]
+    assert event == EVENT_ITEM_CHANGED
+    assert data["entity_id"] == "todo.shopping"
+    assert data["item_id"] == "2"
+    assert data["title"] == "Eggs"
+    assert data["action"] == "moved"
 
 
 @pytest.mark.asyncio

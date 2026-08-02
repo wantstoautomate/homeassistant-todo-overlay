@@ -94,6 +94,11 @@ const REORDER_TOGGLE_ICON = html`
     </svg>
 `;
 
+// Must match const.py's EVENT_ITEM_CHANGED exactly - there's no shared
+// source of truth between the Python backend and this TS frontend to
+// enforce that automatically.
+const ITEM_CHANGED_EVENT = "todo_overlay_item_event";
+
 interface TreeItemElement extends Element {
     item?: TodoItem;
 }
@@ -807,6 +812,30 @@ export class TodoOverlayList extends LitElement {
     private undoTimer?: number;
     private errorTimer?: number;
     private lastEntityUpdate?: string;
+    private unsubItemChanged?: () => void;
+    private itemChangedSubscribeStarted = false;
+
+    // Native hass.states-based reloading (below) only fires for changes
+    // that touch the native entity itself - a same-list reorder is purely
+    // overlay metadata and never does (see manager_position.py's
+    // move_item, which fires this event for exactly that reason). Without
+    // this, another open card (a different browser/device/tab) has no
+    // way to know a reorder - or a tag/quantity change, which also don't
+    // reliably touch native state - happened at all. Subscribed once,
+    // the first time hass becomes available - the callback re-reads
+    // this.entity fresh on every event rather than closing over it, so a
+    // live card-editor repoint to a different entity doesn't need a
+    // fresh subscription.
+    private async subscribeToItemChanged(): Promise<void> {
+        this.unsubItemChanged = await this.hass.connection.subscribeEvents<{entity_id: string; action: string}>(
+            (event) => {
+                if (event.data.entity_id === this.entity) {
+                    this.load();
+                }
+            },
+            ITEM_CHANGED_EVENT,
+        );
+    }
 
     protected updated(changed: Map<string, unknown>) {
         // Restores whatever collapse state this entity was left in on a
@@ -817,6 +846,11 @@ export class TodoOverlayList extends LitElement {
         // same list instance at a different entity.
         if (changed.has("entity") && this.entity) {
             this.collapsedIds = loadCollapsedIds(this.entity);
+        }
+
+        if (this.hass && !this.itemChangedSubscribeStarted) {
+            this.itemChangedSubscribeStarted = true;
+            this.subscribeToItemChanged();
         }
 
         if (!changed.has("hass") || !this.hass || !this.entity) {
@@ -1133,6 +1167,7 @@ export class TodoOverlayList extends LitElement {
         window.removeEventListener("todo-overlay-drag-hover", this.onForeignDragHover as EventListener);
         window.clearTimeout(this.undoTimer);
         window.clearTimeout(this.errorTimer);
+        this.unsubItemChanged?.();
     }
 
     // --- collapse / filter -------------------------------------------------

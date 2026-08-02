@@ -7,6 +7,9 @@ export class FakeConnection {
     sent: Record<string, unknown>[] = [];
     responses: Record<string, unknown> = {};
     errors: Record<string, Error> = {};
+    // eventType -> every callback subscribeEvents() was given for it, so
+    // a test can drive one by calling fireEvent() below.
+    eventSubscriptions: Record<string, ((event: {data: unknown}) => void)[]> = {};
 
     async sendMessagePromise<T>(message: Record<string, unknown>): Promise<T> {
         this.sent.push(message);
@@ -22,6 +25,24 @@ export class FakeConnection {
         }
 
         return undefined as T;
+    }
+
+    async subscribeEvents<T>(callback: (event: {data: T}) => void, eventType: string): Promise<() => void> {
+        const callbacks = this.eventSubscriptions[eventType] ??= [];
+        callbacks.push(callback as (event: {data: unknown}) => void);
+
+        return () => {
+            const index = callbacks.indexOf(callback as (event: {data: unknown}) => void);
+            if (index !== -1) {
+                callbacks.splice(index, 1);
+            }
+        };
+    }
+
+    fireEvent(eventType: string, data: unknown): void {
+        for (const callback of this.eventSubscriptions[eventType] ?? []) {
+            callback({data});
+        }
     }
 }
 

@@ -107,6 +107,45 @@ describe("todo-overlay-list loading", () => {
     });
 });
 
+// Native hass.states-based reloading only fires for changes that touch
+// the native entity itself - a same-list reorder (and, separately, a
+// tag/quantity change) is purely overlay metadata and never does (see
+// manager_position.py's move_item). Without this subscription, another
+// open card (a different browser/device/tab) would have no way to know
+// any of that happened at all.
+describe("todo-overlay-list live-sync via EVENT_ITEM_CHANGED", () => {
+    it("reloads when a matching event arrives for this entity", async () => {
+        const {el, hass} = await renderList({entity_id: ENTITY_ID, items: []});
+
+        expect(hass.connection.sent.filter(m => m.type === "todo_overlay/get_list")).toHaveLength(1);
+
+        hass.connection.fireEvent("todo_overlay_item_event", {entity_id: ENTITY_ID, action: "moved"});
+        await settle(el);
+
+        expect(hass.connection.sent.filter(m => m.type === "todo_overlay/get_list")).toHaveLength(2);
+    });
+
+    it("ignores an event for a different entity", async () => {
+        const {el, hass} = await renderList({entity_id: ENTITY_ID, items: []});
+
+        hass.connection.fireEvent("todo_overlay_item_event", {entity_id: "todo.other", action: "moved"});
+        await settle(el);
+
+        expect(hass.connection.sent.filter(m => m.type === "todo_overlay/get_list")).toHaveLength(1);
+    });
+
+    it("stops reloading once removed from the DOM", async () => {
+        const {el, hass} = await renderList({entity_id: ENTITY_ID, items: []});
+
+        document.body.removeChild(el);
+
+        hass.connection.fireEvent("todo_overlay_item_event", {entity_id: ENTITY_ID, action: "moved"});
+        await flushAsync();
+
+        expect(hass.connection.sent.filter(m => m.type === "todo_overlay/get_list")).toHaveLength(1);
+    });
+});
+
 describe("todo-overlay-list completed-item grouping", () => {
     const items = [
         makeItem({id: "1", title: "Active one", completed: false}),

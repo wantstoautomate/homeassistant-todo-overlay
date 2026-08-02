@@ -53,6 +53,17 @@ class PositionMixin:
                 },
             )
 
+        # Purely overlay metadata - never touches the native entity's
+        # items or state at all, so without this, no OTHER card instance
+        # (a different browser/device/tab) has any way to know a reorder
+        # happened at all (see todo-overlay-list.ts's own comment on its
+        # hass-state-based refresh trigger, which only reacts to a native
+        # todo.* entity actually changing).
+        moved_item = next((item for item in items if item.id == child_id), None)
+
+        if moved_item is not None:
+            self._fire_event(entity_id, child_id, moved_item.title, "moved")
+
     async def transfer_item(
         self,
         source_entity_id: str,
