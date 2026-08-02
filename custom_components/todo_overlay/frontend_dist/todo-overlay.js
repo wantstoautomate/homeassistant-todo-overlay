@@ -2931,6 +2931,7 @@ var REORDER_TOGGLE_ICON = b2`
     </svg>
 `;
 var ITEM_CHANGED_EVENT = "todo_overlay_item_event";
+var HOVER_DEAD_ZONE_PX = 12;
 function collectAllRows(root, currentEntity) {
   const rows = [];
   for (const el of Array.from(root.querySelectorAll("*"))) {
@@ -3066,6 +3067,7 @@ var TodoOverlayList = class extends i4 {
     };
     this.dragGhostOffset = { x: 0, y: 0 };
     this.rowSnapshot = [];
+    this.dragStartPointerPos = { x: 0, y: 0 };
     this.quickAddValue = "";
     this.saveLoadValue = EMPTY_SAVE_LOAD_VALUE;
     this.savedNames = [];
@@ -3075,6 +3077,13 @@ var TodoOverlayList = class extends i4 {
         e7.preventDefault();
       }
       this.ghostPosition = { x: e7.clientX, y: e7.clientY };
+      const distanceFromStart = Math.hypot(
+        e7.clientX - this.dragStartPointerPos.x,
+        e7.clientY - this.dragStartPointerPos.y
+      );
+      if (distanceFromStart < HOVER_DEAD_ZONE_PX) {
+        return;
+      }
       const hit = findDropTarget(e7.clientY, this.rowSnapshot);
       const valid = hit && hit.id !== this.draggedId;
       this.hoverId = valid ? hit.id : void 0;
@@ -3254,6 +3263,7 @@ var TodoOverlayList = class extends i4 {
     this.dragGhostOffset = { x: grabOffsetX ?? 0, y: grabOffsetY ?? 0 };
     this.dragGhostSize = rect ? { width: rect.width, height: rect.height } : void 0;
     this.ghostPosition = { x: pointerX, y: pointerY };
+    this.dragStartPointerPos = { x: pointerX, y: pointerY };
     this.snapshotRows();
     requestAnimationFrame(() => this.snapshotRows());
     window.addEventListener("pointermove", this.onGlobalPointerMove, { capture: true });

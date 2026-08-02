@@ -99,6 +99,23 @@ const REORDER_TOGGLE_ICON = html`
 // enforce that automatically.
 const ITEM_CHANGED_EVENT = "todo_overlay_item_event";
 
+// Hit-testing (onGlobalPointerMove) is suppressed until the pointer has
+// moved at least this far from where the drag actually started - live-
+// reported bug: the dragged row disappears (.lifted) and every row below
+// it slides up to close the gap the instant a drag engages, so the very
+// first hit-test right after engaging - still at essentially the pickup
+// point, before any real movement - lands on whichever row just slid
+// into the dragged item's old on-screen slot, highlighting it as the
+// drop target despite nothing having actually been dragged there yet.
+// Mice have this exact same race technically, but it's barely noticed in
+// practice (a mouse drag usually has real travel before anyone's looking
+// closely at the highlight); a handle-initiated touch drag engages
+// almost instantly with near-zero travel, and a finger physically
+// covers the very row whose highlight just silently jumped, so it reads
+// as an obvious, disorienting glitch rather than a mouse drag's more
+// forgiving one.
+const HOVER_DEAD_ZONE_PX = 12;
+
 interface TreeItemElement extends Element {
     item?: TodoItem;
 }
@@ -787,6 +804,7 @@ export class TodoOverlayList extends LitElement {
     private dragGhostOffset = {x: 0, y: 0};
     private dragGhostSize?: {width: number; height: number};
     private rowSnapshot: RowSnapshot[] = [];
+    private dragStartPointerPos = {x: 0, y: 0};
 
     @state()
     private dialogMode?: "create" | "edit";
@@ -982,6 +1000,7 @@ export class TodoOverlayList extends LitElement {
         this.dragGhostOffset = {x: grabOffsetX ?? 0, y: grabOffsetY ?? 0};
         this.dragGhostSize = rect ? {width: rect.width, height: rect.height} : undefined;
         this.ghostPosition = {x: pointerX, y: pointerY};
+        this.dragStartPointerPos = {x: pointerX, y: pointerY};
 
         // Captured twice: immediately (approximate - the dragged row's own
         // collapse to its lifted placeholder hasn't rendered yet, since
@@ -1038,6 +1057,19 @@ export class TodoOverlayList extends LitElement {
         }
 
         this.ghostPosition = {x: e.clientX, y: e.clientY};
+
+        // See HOVER_DEAD_ZONE_PX's own comment - skip hit-testing
+        // entirely until the pointer has actually moved, rather than
+        // resolving a drop target against the just-reflowed layout at
+        // essentially the pickup point.
+        const distanceFromStart = Math.hypot(
+            e.clientX - this.dragStartPointerPos.x,
+            e.clientY - this.dragStartPointerPos.y,
+        );
+
+        if (distanceFromStart < HOVER_DEAD_ZONE_PX) {
+            return;
+        }
 
         const hit = findDropTarget(e.clientY, this.rowSnapshot);
         const valid = hit && hit.id !== this.draggedId;

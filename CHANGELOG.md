@@ -3,6 +3,26 @@
 All notable changes to this project are documented here. Versions follow the
 integration's `manifest.json`/card's `package.json` (kept in lockstep).
 
+## 0.16.4
+
+- Fixed the drag highlight visually jumping onto the next row the
+  instant an item was picked up on mobile, before any real movement -
+  reported live right after 0.16.3. Root cause: the dragged row
+  disappears (`.lifted`) and every row below it slides up to close the
+  gap the moment a drag engages, so the very first hit-test right after
+  engaging - still at essentially the pickup point - lands on whichever
+  row just slid into the dragged item's old on-screen slot, highlighting
+  it as the drop target despite nothing having actually been dragged
+  there. Mouse has this exact same race technically, but it's barely
+  noticed in practice (a mouse drag usually has real travel before
+  anyone's looking closely); a handle-initiated touch drag engages
+  almost instantly with near-zero travel, and a finger physically covers
+  the very row whose highlight just silently jumped, so it read as an
+  obvious, disorienting glitch. Fixed by suppressing hit-testing until
+  the pointer has moved a small, deliberate distance (12px) from where
+  the drag actually started - comfortably below a real "move to the next
+  slot" gesture, comfortably above incidental jitter.
+
 ## 0.16.3
 
 - Fixed other open cards (a different browser/device/tab) never

@@ -481,6 +481,69 @@ describe("todo-overlay-list onGlobalPointerMove vs. native scroll", () => {
     });
 });
 
+// Live-reported bug: on mobile, the moment an item was picked up, the
+// highlight seemed to jump onto the NEXT row instead of staying on the
+// dragged item - before any intentional movement at all. Root cause: the
+// dragged row disappears (.lifted) and rows below it slide up to close
+// the gap the instant a drag engages, so the very first hit-test right
+// after engaging - still at essentially the pickup point - lands on
+// whichever row just slid into the dragged item's old on-screen slot.
+describe("todo-overlay-list hover dead zone right after drag engages", () => {
+    it("does not set a hover target for movement still within the dead zone", async () => {
+        const {el} = await renderList({
+            entity_id: ENTITY_ID,
+            items: [makeItem({id: "1", title: "Milk"}), makeItem({id: "2", title: "Bread"})],
+        });
+
+        const rows = deepQueryAll(el.shadowRoot!, "todo-overlay-tree-item") as (Element & {shadowRoot: ShadowRoot})[];
+        mockRect(rows[0].shadowRoot.querySelector(".row")!, {top: 0, bottom: 40, height: 40});
+        mockRect(rows[1].shadowRoot.querySelector(".row")!, {top: 40, bottom: 80, height: 40});
+
+        const draggable = el as unknown as DraggableList & {hoverId?: string};
+
+        draggable.draggedId = "1";
+        draggable.onDragStart(new CustomEvent("tree-drag-start", {
+            detail: {rect: undefined, pointerX: 20, pointerY: 20, grabOffsetX: 0, grabOffsetY: 0},
+        }));
+
+        // Row 1 just vanished (lifted) and row 2 slid up into its old
+        // 0-40 slot - squarely inside it, but only 5px from the drag's
+        // actual start position (20,20 -> 20,25).
+        draggable.onGlobalPointerMove(new PointerEvent("pointermove", {clientX: 20, clientY: 25}));
+
+        expect(draggable.hoverId).toBeUndefined();
+
+        await draggable.onGlobalPointerUp();
+    });
+
+    it("resolves a hover target normally once past the dead zone", async () => {
+        const {el, hass} = await renderList({
+            entity_id: ENTITY_ID,
+            items: [makeItem({id: "1", title: "Milk"}), makeItem({id: "2", title: "Bread"})],
+        });
+
+        const rows = deepQueryAll(el.shadowRoot!, "todo-overlay-tree-item") as (Element & {shadowRoot: ShadowRoot})[];
+        mockRect(rows[0].shadowRoot.querySelector(".row")!, {top: 0, bottom: 40, height: 40});
+        mockRect(rows[1].shadowRoot.querySelector(".row")!, {top: 40, bottom: 80, height: 40});
+
+        const draggable = el as unknown as DraggableList;
+
+        draggable.draggedId = "1";
+        draggable.onDragStart(new CustomEvent("tree-drag-start", {
+            detail: {rect: undefined, pointerX: 20, pointerY: 20, grabOffsetX: 0, grabOffsetY: 0},
+        }));
+
+        // Genuinely moved onto row 2 - well past the dead zone.
+        draggable.onGlobalPointerMove(new PointerEvent("pointermove", {clientX: 20, clientY: 60}));
+        await draggable.onGlobalPointerUp();
+
+        expect(hass.connection.sent).toContainEqual(expect.objectContaining({
+            type: "todo_overlay/move_item",
+            child_id: "1",
+        }));
+    });
+});
+
 describe("todo-overlay-list cross-entity drag", () => {
     it("calls transferItem (not moveItem) when dropped on a row belonging to a different entity", async () => {
         const hassA = makeFakeHass({
