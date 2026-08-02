@@ -68,6 +68,16 @@ export interface TodoOverlayCardConfig {
     // Opt-in (unlike the show_* flags above) since it's new UI an existing
     // card has never shown before, not a pre-existing element being hidden.
     show_filter_menu?: boolean;
+    // On by default (unlike show_filter_menu) since this is the fix for
+    // existing broken functionality, not a purely optional add-on: a
+    // touchscreen has no reliable way to distinguish "hold this row to
+    // drag it" from "scroll the list" (see todo-tree-item.ts's .row.row
+    // - drag-handle comment), so touch devices need an explicit way to
+    // enter reorder mode instead. CSS-gated to touch/coarse-pointer
+    // devices only (see todo-overlay-list.ts's @media (pointer: coarse))
+    // - mouse users never see it, since hold-anywhere-to-drag already
+    // works reliably for them.
+    show_reorder_toggle?: boolean;
 }
 
 function friendlyName(hass: HassLike, entityId: string): string {
@@ -172,6 +182,7 @@ export class TodoOverlayCard extends LitElement {
                             .showQuickAdd=${this.config.show_quick_add ?? true}
                             .confirmDelete=${this.config.confirm_delete ?? true}
                             .showFilterMenu=${this.config.show_filter_menu ?? false}
+                            .showReorderToggle=${this.config.show_reorder_toggle ?? true}
                             .moveCompletedItems=${this.config.move_completed_items ?? false}
                         ></todo-overlay-list>
                     </div>

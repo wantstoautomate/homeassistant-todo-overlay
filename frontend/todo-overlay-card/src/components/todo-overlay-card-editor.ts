@@ -291,6 +291,13 @@ export class TodoOverlayCardEditor extends LitElement {
                             @change=${this.onSwitchChanged("show_filter_menu", false)}
                         ></ha-switch>
                     </ha-formfield>
+
+                    <ha-formfield label="Reorder-mode toggle (touch devices only)">
+                        <ha-switch
+                            .checked=${this._config.show_reorder_toggle ?? true}
+                            @change=${this.onSwitchChanged("show_reorder_toggle", true)}
+                        ></ha-switch>
+                    </ha-formfield>
                 </div>
             </details>
         `;

@@ -107,6 +107,45 @@ describe("todo-overlay-list loading", () => {
     });
 });
 
+// Native hass.states-based reloading only fires for changes that touch
+// the native entity itself - a same-list reorder (and, separately, a
+// tag/quantity change) is purely overlay metadata and never does (see
+// manager_position.py's move_item). Without this subscription, another
+// open card (a different browser/device/tab) would have no way to know
+// any of that happened at all.
+describe("todo-overlay-list live-sync via EVENT_ITEM_CHANGED", () => {
+    it("reloads when a matching event arrives for this entity", async () => {
+        const {el, hass} = await renderList({entity_id: ENTITY_ID, items: []});
+
+        expect(hass.connection.sent.filter(m => m.type === "todo_overlay/get_list")).toHaveLength(1);
+
+        hass.connection.fireEvent("todo_overlay_item_event", {entity_id: ENTITY_ID, action: "moved"});
+        await settle(el);
+
+        expect(hass.connection.sent.filter(m => m.type === "todo_overlay/get_list")).toHaveLength(2);
+    });
+
+    it("ignores an event for a different entity", async () => {
+        const {el, hass} = await renderList({entity_id: ENTITY_ID, items: []});
+
+        hass.connection.fireEvent("todo_overlay_item_event", {entity_id: "todo.other", action: "moved"});
+        await settle(el);
+
+        expect(hass.connection.sent.filter(m => m.type === "todo_overlay/get_list")).toHaveLength(1);
+    });
+
+    it("stops reloading once removed from the DOM", async () => {
+        const {el, hass} = await renderList({entity_id: ENTITY_ID, items: []});
+
+        document.body.removeChild(el);
+
+        hass.connection.fireEvent("todo_overlay_item_event", {entity_id: ENTITY_ID, action: "moved"});
+        await flushAsync();
+
+        expect(hass.connection.sent.filter(m => m.type === "todo_overlay/get_list")).toHaveLength(1);
+    });
+});
+
 describe("todo-overlay-list completed-item grouping", () => {
     const items = [
         makeItem({id: "1", title: "Active one", completed: false}),
@@ -235,7 +274,7 @@ describe("todo-overlay-list toolbar visibility", () => {
     it("shows no toolbar at all when every toolbar flag is off", async () => {
         const {el} = await renderList(
             {entity_id: ENTITY_ID, items: []},
-            {showQuickAdd: false, showFilterMenu: false, showSaveLoadButtons: false, showClearButton: false},
+            {showQuickAdd: false, showFilterMenu: false, showSaveLoadButtons: false, showClearButton: false, showReorderToggle: false},
         );
 
         expect(el.shadowRoot?.querySelector(".toolbar")).toBeNull();
@@ -292,6 +331,7 @@ describe("todo-overlay-list header row (title level with the toolbar)", () => {
                 showFilterMenu: false,
                 showSaveLoadButtons: false,
                 showClearButton: false,
+                showReorderToggle: false,
             },
         );
 
@@ -308,6 +348,7 @@ describe("todo-overlay-list header row (title level with the toolbar)", () => {
                 showFilterMenu: false,
                 showSaveLoadButtons: false,
                 showClearButton: false,
+                showReorderToggle: false,
             },
         );
 
@@ -393,6 +434,115 @@ type DraggableList = TodoOverlayList & {
     onGlobalPointerMove: (e: PointerEvent) => void;
     onGlobalPointerUp: () => Promise<void>;
 };
+
+// Live-reported bug: drag-to-reorder didn't work at all on a real
+// touchscreen (HA Companion App) - see todo-tree-item.test.ts's matching
+// describe block for the engagement-moment half of the fix. This is the
+// other half: nothing continued to suppress native scrolling for the
+// rest of an already-engaged drag, so the page could still get yanked
+// out from under an in-progress touch drag.
+describe("todo-overlay-list onGlobalPointerMove vs. native scroll", () => {
+    it("calls preventDefault on every move of an active touch drag", () => {
+        const el = document.createElement("todo-overlay-list") as unknown as DraggableList;
+        document.body.appendChild(el);
+
+        el.draggedId = "1";
+        el.onDragStart(new CustomEvent("tree-drag-start", {
+            detail: {rect: undefined, pointerX: 0, pointerY: 0, grabOffsetX: 0, grabOffsetY: 0},
+        }));
+
+        const moveEvent = new PointerEvent("pointermove", {clientY: 20, pointerType: "touch"});
+        const preventDefaultSpy = vi.spyOn(moveEvent, "preventDefault");
+
+        el.onGlobalPointerMove(moveEvent);
+
+        expect(preventDefaultSpy).toHaveBeenCalled();
+
+        document.body.removeChild(el);
+    });
+
+    it("does not call preventDefault for a mouse drag", () => {
+        const el = document.createElement("todo-overlay-list") as unknown as DraggableList;
+        document.body.appendChild(el);
+
+        el.draggedId = "1";
+        el.onDragStart(new CustomEvent("tree-drag-start", {
+            detail: {rect: undefined, pointerX: 0, pointerY: 0, grabOffsetX: 0, grabOffsetY: 0},
+        }));
+
+        const moveEvent = new PointerEvent("pointermove", {clientY: 20, pointerType: "mouse"});
+        const preventDefaultSpy = vi.spyOn(moveEvent, "preventDefault");
+
+        el.onGlobalPointerMove(moveEvent);
+
+        expect(preventDefaultSpy).not.toHaveBeenCalled();
+
+        document.body.removeChild(el);
+    });
+});
+
+// Live-reported bug: on mobile, the moment an item was picked up, the
+// highlight seemed to jump onto the NEXT row instead of staying on the
+// dragged item - before any intentional movement at all. Root cause: the
+// dragged row disappears (.lifted) and rows below it slide up to close
+// the gap the instant a drag engages, so the very first hit-test right
+// after engaging - still at essentially the pickup point - lands on
+// whichever row just slid into the dragged item's old on-screen slot.
+describe("todo-overlay-list hover dead zone right after drag engages", () => {
+    it("does not set a hover target for movement still within the dead zone", async () => {
+        const {el} = await renderList({
+            entity_id: ENTITY_ID,
+            items: [makeItem({id: "1", title: "Milk"}), makeItem({id: "2", title: "Bread"})],
+        });
+
+        const rows = deepQueryAll(el.shadowRoot!, "todo-overlay-tree-item") as (Element & {shadowRoot: ShadowRoot})[];
+        mockRect(rows[0].shadowRoot.querySelector(".row")!, {top: 0, bottom: 40, height: 40});
+        mockRect(rows[1].shadowRoot.querySelector(".row")!, {top: 40, bottom: 80, height: 40});
+
+        const draggable = el as unknown as DraggableList & {hoverId?: string};
+
+        draggable.draggedId = "1";
+        draggable.onDragStart(new CustomEvent("tree-drag-start", {
+            detail: {rect: undefined, pointerX: 20, pointerY: 20, grabOffsetX: 0, grabOffsetY: 0},
+        }));
+
+        // Row 1 just vanished (lifted) and row 2 slid up into its old
+        // 0-40 slot - squarely inside it, but only 5px from the drag's
+        // actual start position (20,20 -> 20,25).
+        draggable.onGlobalPointerMove(new PointerEvent("pointermove", {clientX: 20, clientY: 25}));
+
+        expect(draggable.hoverId).toBeUndefined();
+
+        await draggable.onGlobalPointerUp();
+    });
+
+    it("resolves a hover target normally once past the dead zone", async () => {
+        const {el, hass} = await renderList({
+            entity_id: ENTITY_ID,
+            items: [makeItem({id: "1", title: "Milk"}), makeItem({id: "2", title: "Bread"})],
+        });
+
+        const rows = deepQueryAll(el.shadowRoot!, "todo-overlay-tree-item") as (Element & {shadowRoot: ShadowRoot})[];
+        mockRect(rows[0].shadowRoot.querySelector(".row")!, {top: 0, bottom: 40, height: 40});
+        mockRect(rows[1].shadowRoot.querySelector(".row")!, {top: 40, bottom: 80, height: 40});
+
+        const draggable = el as unknown as DraggableList;
+
+        draggable.draggedId = "1";
+        draggable.onDragStart(new CustomEvent("tree-drag-start", {
+            detail: {rect: undefined, pointerX: 20, pointerY: 20, grabOffsetX: 0, grabOffsetY: 0},
+        }));
+
+        // Genuinely moved onto row 2 - well past the dead zone.
+        draggable.onGlobalPointerMove(new PointerEvent("pointermove", {clientX: 20, clientY: 60}));
+        await draggable.onGlobalPointerUp();
+
+        expect(hass.connection.sent).toContainEqual(expect.objectContaining({
+            type: "todo_overlay/move_item",
+            child_id: "1",
+        }));
+    });
+});
 
 describe("todo-overlay-list cross-entity drag", () => {
     it("calls transferItem (not moveItem) when dropped on a row belonging to a different entity", async () => {

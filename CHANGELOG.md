@@ -3,6 +3,86 @@
 All notable changes to this project are documented here. Versions follow the
 integration's `manifest.json`/card's `package.json` (kept in lockstep).
 
+## 0.16.4
+
+- Fixed the drag highlight visually jumping onto the next row the
+  instant an item was picked up on mobile, before any real movement -
+  reported live right after 0.16.3. Root cause: the dragged row
+  disappears (`.lifted`) and every row below it slides up to close the
+  gap the moment a drag engages, so the very first hit-test right after
+  engaging - still at essentially the pickup point - lands on whichever
+  row just slid into the dragged item's old on-screen slot, highlighting
+  it as the drop target despite nothing having actually been dragged
+  there. Mouse has this exact same race technically, but it's barely
+  noticed in practice (a mouse drag usually has real travel before
+  anyone's looking closely); a handle-initiated touch drag engages
+  almost instantly with near-zero travel, and a finger physically covers
+  the very row whose highlight just silently jumped, so it read as an
+  obvious, disorienting glitch. Fixed by suppressing hit-testing until
+  the pointer has moved a small, deliberate distance (12px) from where
+  the drag actually started - comfortably below a real "move to the next
+  slot" gesture, comfortably above incidental jitter.
+
+## 0.16.3
+
+- Fixed other open cards (a different browser/device/tab) never
+  reflecting a reorder - reported live right after 0.16.2's touch-drag
+  fix made reordering on mobile actually work, which is what surfaced
+  this. Root cause: reordering is purely `todo_overlay`'s own overlay
+  metadata, never touching the native `todo.*` entity's items or state
+  at all - and the card's *only* live-refresh trigger was watching that
+  native entity's `state_changed` (via `hass.states[entity].last_updated`
+  changing). With nothing ever touching native state, no other open card
+  had any signal at all that anything had changed.
+  `move_item` now fires the same `EVENT_ITEM_CHANGED` event every other
+  mutation already fires (action `"moved"`), and the card now subscribes
+  to that event directly (`hass.connection.subscribeEvents`) instead of
+  relying solely on native `state_changed` - reloading any time a
+  matching event arrives for its entity. This closes the same gap for
+  tag/quantity changes too, which shared the identical root cause: the
+  backend already fired an event for them, but nothing on the frontend
+  was ever listening for it.
+
+## 0.16.2
+
+- Replaced 0.16.1's fix for drag-to-reorder on touch (below) - confirmed
+  live on a real device that it still didn't reliably work. Root cause of
+  *that*: `touch-action` changes made mid-gesture (toggled once the
+  hold-to-drag threshold was reached) aren't consistently honored by
+  mobile browsers - by the 500ms mark, the browser has often already
+  committed the touch to native scrolling, which is also why the drag
+  ghost wasn't tracking in real time (a touch the browser has claimed for
+  scrolling stops giving JS meaningful pointer data for it).
+  Added a dedicated reorder mode instead: a new toolbar icon (only
+  visible on touch/coarse-pointer devices - `show_reorder_toggle`,
+  default on) toggles every row into showing a small drag-handle in place
+  of its delete button. The handle is `touch-action: none` from the very
+  first touchstart, never toggled - the actual reliable fix, since the
+  browser never gets a chance to consider it scrollable in the first
+  place, rather than having that decision taken back from it mid-gesture.
+  Picking up the handle engages a drag immediately (no hold wait, like a
+  mouse), since it has no "quick swipe should still scroll" ambiguity to
+  protect against - only the handle drags; the rest of the row still
+  scrolls the list normally, and tap-to-complete/edit are unaffected.
+  Mouse users never see any of this (hold-anywhere-on-the-row already
+  works reliably for them, unaffected by any of the above).
+
+## 0.16.1 (superseded by 0.16.2 - see above)
+
+- Fixed drag-to-reorder not working at all on a real touchscreen (reported
+  live via the HA Companion App). Root cause: nothing ever called
+  `preventDefault()` or restricted `touch-action`, so the browser's own
+  scroll-gesture recognizer regularly won the race against the JS
+  hold-then-move drag logic - a held finger is never perfectly still, and
+  that alone was usually enough for the browser to commit to a native
+  scroll before the drag ever got a chance to engage. Fixed at all three
+  points that needed it: the row locks `touch-action: none` once the
+  hold-to-drag threshold is reached (previously unrestricted the whole
+  time), the move event that actually engages a drag calls
+  `preventDefault()`, and every subsequent move for the rest of an
+  already-engaged drag keeps calling it too - none of this affects mouse,
+  which has no competing native gesture to suppress.
+
 ## 0.16.0
 
 - Added an "open items" sensor, auto-created one per `todo.*` entity

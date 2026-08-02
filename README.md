@@ -56,6 +56,7 @@ or use the visual card editor from the dashboard's "Add Card" dialog, which also
 | `show_save_load_buttons` | boolean | `true` | Show the save/load list toolbar icons. |
 | `show_quick_add` | boolean | `true` | Show the quick-add ("+") toolbar icon. |
 | `show_filter_menu` | boolean | `false` | Show the filter toolbar icon (All/Active/Completed/Overdue). |
+| `show_reorder_toggle` | boolean | `true` | Show a toolbar icon that toggles reorder mode, revealing a dedicated drag handle on every row. Only visible on touch/coarse-pointer devices (CSS `@media (pointer: coarse)`) - mouse users never see it, since holding anywhere on a row already drags reliably for them. Touch has no reliable way to hold-and-drag from anywhere on a row (the browser's native scroll gesture wins that race almost every time), so this is how touch reorders instead. |
 
 ## Services
 

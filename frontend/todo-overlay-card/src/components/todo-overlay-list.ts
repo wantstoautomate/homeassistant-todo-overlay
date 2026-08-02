@@ -88,6 +88,34 @@ const CLOSE_ICON = html`
     </svg>
 `;
 
+const REORDER_TOGGLE_ICON = html`
+    <svg viewBox="0 0 24 24">
+        <path d="M9,3L5,6.99H8V14H10V6.99H13M16,17.01V10H14V17.01H11L15,21L19,17.01H16Z"></path>
+    </svg>
+`;
+
+// Must match const.py's EVENT_ITEM_CHANGED exactly - there's no shared
+// source of truth between the Python backend and this TS frontend to
+// enforce that automatically.
+const ITEM_CHANGED_EVENT = "todo_overlay_item_event";
+
+// Hit-testing (onGlobalPointerMove) is suppressed until the pointer has
+// moved at least this far from where the drag actually started - live-
+// reported bug: the dragged row disappears (.lifted) and every row below
+// it slides up to close the gap the instant a drag engages, so the very
+// first hit-test right after engaging - still at essentially the pickup
+// point, before any real movement - lands on whichever row just slid
+// into the dragged item's old on-screen slot, highlighting it as the
+// drop target despite nothing having actually been dragged there yet.
+// Mice have this exact same race technically, but it's barely noticed in
+// practice (a mouse drag usually has real travel before anyone's looking
+// closely at the highlight); a handle-initiated touch drag engages
+// almost instantly with near-zero travel, and a finger physically
+// covers the very row whose highlight just silently jumped, so it reads
+// as an obvious, disorienting glitch rather than a mouse drag's more
+// forgiving one.
+const HOVER_DEAD_ZONE_PX = 12;
+
 interface TreeItemElement extends Element {
     item?: TodoItem;
 }
@@ -414,6 +442,24 @@ export class TodoOverlayList extends LitElement {
             transform: rotate(45deg);
         }
 
+        /* Hidden by default (mouse/trackpad primary input) - hold-
+           anywhere-to-drag already works reliably for a mouse, so this
+           would just be clutter. (pointer: coarse) is the actual primary-
+           input-is-imprecise signal, not a viewport-width breakpoint - a
+           narrow desktop browser window shouldn't show it, and a tablet
+           in the HA Companion App should, regardless of its screen size.
+           See todo-tree-item.ts's .drag-handle for what this puts each
+           row into once active. */
+        .reorder-toggle {
+            display: none;
+        }
+
+        @media (pointer: coarse) {
+            .reorder-toggle {
+                display: flex;
+            }
+        }
+
         .quick-add-panel {
             padding: 0 16px 10px;
             font-family: Roboto, "Noto Sans", sans-serif;
@@ -656,6 +702,13 @@ export class TodoOverlayList extends LitElement {
     @property({type: Boolean})
     public showFilterMenu = false;
 
+    // See TodoOverlayCardConfig's own show_reorder_toggle comment - the
+    // toggle button itself is additionally CSS-gated to touch/coarse-
+    // pointer devices (see .reorder-toggle's own @media rule), so this
+    // being true doesn't put anything in front of a mouse user at all.
+    @property({type: Boolean})
+    public showReorderToggle = true;
+
     // Off by default: completing/uncompleting an item never repositions
     // it (backend) or splits it into a separate Active/Completed section
     // (see renderTree) - a plain checkbox tap just flips the check, full
@@ -675,6 +728,17 @@ export class TodoOverlayList extends LitElement {
 
     @state()
     private quickAddExpanded = false;
+
+    // Touch-only reorder mode - see TodoOverlayCardConfig's
+    // show_reorder_toggle comment for why this exists as a separate
+    // mode at all rather than just letting touch hold-and-drag like a
+    // mouse does.
+    @state()
+    private reorderModeActive = false;
+
+    private onToggleReorderMode = () => {
+        this.reorderModeActive = !this.reorderModeActive;
+    };
 
     @state()
     private error?: string;
@@ -740,6 +804,7 @@ export class TodoOverlayList extends LitElement {
     private dragGhostOffset = {x: 0, y: 0};
     private dragGhostSize?: {width: number; height: number};
     private rowSnapshot: RowSnapshot[] = [];
+    private dragStartPointerPos = {x: 0, y: 0};
 
     @state()
     private dialogMode?: "create" | "edit";
@@ -765,6 +830,30 @@ export class TodoOverlayList extends LitElement {
     private undoTimer?: number;
     private errorTimer?: number;
     private lastEntityUpdate?: string;
+    private unsubItemChanged?: () => void;
+    private itemChangedSubscribeStarted = false;
+
+    // Native hass.states-based reloading (below) only fires for changes
+    // that touch the native entity itself - a same-list reorder is purely
+    // overlay metadata and never does (see manager_position.py's
+    // move_item, which fires this event for exactly that reason). Without
+    // this, another open card (a different browser/device/tab) has no
+    // way to know a reorder - or a tag/quantity change, which also don't
+    // reliably touch native state - happened at all. Subscribed once,
+    // the first time hass becomes available - the callback re-reads
+    // this.entity fresh on every event rather than closing over it, so a
+    // live card-editor repoint to a different entity doesn't need a
+    // fresh subscription.
+    private async subscribeToItemChanged(): Promise<void> {
+        this.unsubItemChanged = await this.hass.connection.subscribeEvents<{entity_id: string; action: string}>(
+            (event) => {
+                if (event.data.entity_id === this.entity) {
+                    this.load();
+                }
+            },
+            ITEM_CHANGED_EVENT,
+        );
+    }
 
     protected updated(changed: Map<string, unknown>) {
         // Restores whatever collapse state this entity was left in on a
@@ -775,6 +864,11 @@ export class TodoOverlayList extends LitElement {
         // same list instance at a different entity.
         if (changed.has("entity") && this.entity) {
             this.collapsedIds = loadCollapsedIds(this.entity);
+        }
+
+        if (this.hass && !this.itemChangedSubscribeStarted) {
+            this.itemChangedSubscribeStarted = true;
+            this.subscribeToItemChanged();
         }
 
         if (!changed.has("hass") || !this.hass || !this.entity) {
@@ -906,6 +1000,7 @@ export class TodoOverlayList extends LitElement {
         this.dragGhostOffset = {x: grabOffsetX ?? 0, y: grabOffsetY ?? 0};
         this.dragGhostSize = rect ? {width: rect.width, height: rect.height} : undefined;
         this.ghostPosition = {x: pointerX, y: pointerY};
+        this.dragStartPointerPos = {x: pointerX, y: pointerY};
 
         // Captured twice: immediately (approximate - the dragged row's own
         // collapse to its lifted placeholder hasn't rendered yet, since
@@ -949,7 +1044,32 @@ export class TodoOverlayList extends LitElement {
     }
 
     private onGlobalPointerMove = (e: PointerEvent) => {
+        // Touch only: this handler only ever runs while a drag is already
+        // engaged (registered in onDragStart, removed in
+        // onGlobalPointerUp) - without this, the page can still scroll out
+        // from under an in-progress drag on a real touchscreen the moment
+        // the finger drifts far enough for the browser's own gesture
+        // recognizer to reassert itself mid-gesture. See
+        // todo-tree-item.ts's .row.holding comment for the matching
+        // engagement-moment call this reinforces.
+        if (e.pointerType !== "mouse") {
+            e.preventDefault();
+        }
+
         this.ghostPosition = {x: e.clientX, y: e.clientY};
+
+        // See HOVER_DEAD_ZONE_PX's own comment - skip hit-testing
+        // entirely until the pointer has actually moved, rather than
+        // resolving a drop target against the just-reflowed layout at
+        // essentially the pickup point.
+        const distanceFromStart = Math.hypot(
+            e.clientX - this.dragStartPointerPos.x,
+            e.clientY - this.dragStartPointerPos.y,
+        );
+
+        if (distanceFromStart < HOVER_DEAD_ZONE_PX) {
+            return;
+        }
 
         const hit = findDropTarget(e.clientY, this.rowSnapshot);
         const valid = hit && hit.id !== this.draggedId;
@@ -1079,6 +1199,7 @@ export class TodoOverlayList extends LitElement {
         window.removeEventListener("todo-overlay-drag-hover", this.onForeignDragHover as EventListener);
         window.clearTimeout(this.undoTimer);
         window.clearTimeout(this.errorTimer);
+        this.unsubItemChanged?.();
     }
 
     // --- collapse / filter -------------------------------------------------
@@ -1441,6 +1562,7 @@ export class TodoOverlayList extends LitElement {
                     .confirmDelete=${this.confirmDelete}
                     .dragDisabled=${this.dragDisabled}
                     .collapsedIds=${this.collapsedIds}
+                    .reorderModeActive=${this.reorderModeActive}
 
                     @tree-pointer-down=${this.onPointerDown}
                     @tree-drag-start=${this.onDragStart}
@@ -1467,6 +1589,7 @@ export class TodoOverlayList extends LitElement {
                     .confirmDelete=${this.confirmDelete}
                     .dragDisabled=${this.dragDisabled}
                     .collapsedIds=${this.collapsedIds}
+                    .reorderModeActive=${this.reorderModeActive}
 
                     @tree-pointer-down=${this.onPointerDown}
                     @tree-drag-start=${this.onDragStart}
@@ -1495,6 +1618,7 @@ export class TodoOverlayList extends LitElement {
                             .confirmDelete=${this.confirmDelete}
                             .dragDisabled=${this.dragDisabled}
                             .collapsedIds=${this.collapsedIds}
+                    .reorderModeActive=${this.reorderModeActive}
 
                             @tree-pointer-down=${this.onPointerDown}
                             @tree-drag-start=${this.onDragStart}
@@ -1518,6 +1642,7 @@ export class TodoOverlayList extends LitElement {
                 .confirmDelete=${this.confirmDelete}
                 .dragDisabled=${this.dragDisabled}
                 .collapsedIds=${this.collapsedIds}
+                .reorderModeActive=${this.reorderModeActive}
 
                 @tree-pointer-down=${this.onPointerDown}
                 @tree-drag-start=${this.onDragStart}
@@ -1565,7 +1690,11 @@ export class TodoOverlayList extends LitElement {
 
     render() {
         const hasToolbar =
-            this.showQuickAdd || this.showFilterMenu || this.showSaveLoadButtons || this.showClearButton;
+            this.showQuickAdd
+            || this.showFilterMenu
+            || this.showSaveLoadButtons
+            || this.showClearButton
+            || this.showReorderToggle;
         const hasHeaderRow = !!this.headerTitle || hasToolbar;
 
         return html`
@@ -1668,6 +1797,28 @@ export class TodoOverlayList extends LitElement {
                                                             @click=${this.onClearCompleted}
                                                         >
                                                             ${CLEAR_COMPLETED_ICON}
+                                                        </button>
+                                                    `
+                                                    : ""
+                                            }
+
+                                            ${
+                                                this.showReorderToggle
+                                                    ? html`
+                                                        <button
+                                                            class=${classMap({
+                                                                "toolbar-icon": true,
+                                                                "reorder-toggle": true,
+                                                                active: this.reorderModeActive,
+                                                            })}
+                                                            aria-label=${
+                                                                this.reorderModeActive
+                                                                    ? "Done reordering"
+                                                                    : "Reorder items"
+                                                            }
+                                                            @click=${this.onToggleReorderMode}
+                                                        >
+                                                            ${REORDER_TOGGLE_ICON}
                                                         </button>
                                                     `
                                                     : ""
