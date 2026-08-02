@@ -3,6 +3,22 @@
 All notable changes to this project are documented here. Versions follow the
 integration's `manifest.json`/card's `package.json` (kept in lockstep).
 
+## 0.16.1
+
+- Fixed drag-to-reorder not working at all on a real touchscreen (reported
+  live via the HA Companion App). Root cause: nothing ever called
+  `preventDefault()` or restricted `touch-action`, so the browser's own
+  scroll-gesture recognizer regularly won the race against the JS
+  hold-then-move drag logic - a held finger is never perfectly still, and
+  that alone was usually enough for the browser to commit to a native
+  scroll before the drag ever got a chance to engage. Fixed at all three
+  points that needed it: the row locks `touch-action: none` once the
+  hold-to-drag threshold is reached (previously unrestricted the whole
+  time), the move event that actually engages a drag calls
+  `preventDefault()`, and every subsequent move for the rest of an
+  already-engaged drag keeps calling it too - none of this affects mouse,
+  which has no competing native gesture to suppress.
+
 ## 0.16.0
 
 - Added an "open items" sensor, auto-created one per `todo.*` entity

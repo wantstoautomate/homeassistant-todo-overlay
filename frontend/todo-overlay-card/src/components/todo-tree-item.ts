@@ -175,6 +175,23 @@ export class TodoTreeItem extends LitElement {
             opacity: 0.45;
         }
 
+        /* Left unset at rest (defaults to allowing native scroll, so a
+           swipe over a row scrolls the list normally) - only restricted
+           once the hold-to-drag threshold is reached. Without this, the
+           browser's own touch-scroll gesture recognizer races the JS
+           hold-then-move logic below on every touch drag attempt, and
+           regularly wins: a held finger is never perfectly still, and
+           that jitter alone is enough for the browser to commit to a
+           native scroll before onWindowPointerMove's own threshold check
+           ever gets a say - the drag just silently never engages. Paired
+           with the pointermove preventDefault() calls below and in
+           todo-overlay-list.ts's onGlobalPointerMove, since mid-gesture
+           touch-action changes alone aren't reliably honored by every
+           mobile browser engine. */
+        .row.holding {
+            touch-action: none;
+        }
+
         .row.drop-inside {
             outline-color: var(--accent-color, var(--primary-color));
             background: rgba(var(--rgb-accent-color, 255, 152, 0), 0.08);
@@ -691,6 +708,17 @@ export class TodoTreeItem extends LitElement {
             this.hasMoved = true;
             this.dragEngaged = true;
 
+            // Touch only: stops the browser's own scroll-gesture recognizer
+            // from claiming this exact move event, right at the moment
+            // we've decided it's a drag rather than a scroll - see
+            // .row.holding's own comment for why this alone isn't
+            // sufficient (todo-overlay-list.ts's onGlobalPointerMove keeps
+            // preventing default for the rest of the drag). No-op for
+            // mouse, which has no competing native gesture to suppress.
+            if (!this.pointerIsMouse) {
+                e.preventDefault();
+            }
+
             // Captured from the ORIGINAL press, not the current event: for
             // a mouse, drag now engages on the very first move past the
             // jitter threshold (see pointerIsMouse above), so a fast flick
@@ -801,6 +829,7 @@ export class TodoTreeItem extends LitElement {
             row: true,
             pressed: this.isPressed && !isBeingDragged,
             lifted: isBeingDragged,
+            holding: this.holdReady,
             dimmed: this.dimmedByAncestorDrag,
             "drop-inside": isDropTarget && this.hoverPlacement === "inside",
             "gap-before": isDropTarget && this.hoverPlacement === "before",

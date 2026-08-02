@@ -949,6 +949,18 @@ export class TodoOverlayList extends LitElement {
     }
 
     private onGlobalPointerMove = (e: PointerEvent) => {
+        // Touch only: this handler only ever runs while a drag is already
+        // engaged (registered in onDragStart, removed in
+        // onGlobalPointerUp) - without this, the page can still scroll out
+        // from under an in-progress drag on a real touchscreen the moment
+        // the finger drifts far enough for the browser's own gesture
+        // recognizer to reassert itself mid-gesture. See
+        // todo-tree-item.ts's .row.holding comment for the matching
+        // engagement-moment call this reinforces.
+        if (e.pointerType !== "mouse") {
+            e.preventDefault();
+        }
+
         this.ghostPosition = {x: e.clientX, y: e.clientY};
 
         const hit = findDropTarget(e.clientY, this.rowSnapshot);

@@ -2037,6 +2037,9 @@ var TodoTreeItem = class extends i4 {
       if (!this.dragDisabled && (this.pointerIsMouse || this.holdReady)) {
         this.hasMoved = true;
         this.dragEngaged = true;
+        if (!this.pointerIsMouse) {
+          e7.preventDefault();
+        }
         const grabOffset = this.holdRippleOrigin ?? { x: 0, y: 0 };
         this.clearHoldRipple();
         const rowEl = this.shadowRoot?.querySelector(".row");
@@ -2213,6 +2216,7 @@ var TodoTreeItem = class extends i4 {
       row: true,
       pressed: this.isPressed && !isBeingDragged,
       lifted: isBeingDragged,
+      holding: this.holdReady,
       dimmed: this.dimmedByAncestorDrag,
       "drop-inside": isDropTarget && this.hoverPlacement === "inside",
       "gap-before": isDropTarget && this.hoverPlacement === "before",
@@ -2386,6 +2390,23 @@ TodoTreeItem.styles = i`
            shifts position mid-drag. */
         .row.dimmed {
             opacity: 0.45;
+        }
+
+        /* Left unset at rest (defaults to allowing native scroll, so a
+           swipe over a row scrolls the list normally) - only restricted
+           once the hold-to-drag threshold is reached. Without this, the
+           browser's own touch-scroll gesture recognizer races the JS
+           hold-then-move logic below on every touch drag attempt, and
+           regularly wins: a held finger is never perfectly still, and
+           that jitter alone is enough for the browser to commit to a
+           native scroll before onWindowPointerMove's own threshold check
+           ever gets a say - the drag just silently never engages. Paired
+           with the pointermove preventDefault() calls below and in
+           todo-overlay-list.ts's onGlobalPointerMove, since mid-gesture
+           touch-action changes alone aren't reliably honored by every
+           mobile browser engine. */
+        .row.holding {
+            touch-action: none;
         }
 
         .row.drop-inside {
@@ -2983,6 +3004,9 @@ var TodoOverlayList = class extends i4 {
     this.saveLoadValue = EMPTY_SAVE_LOAD_VALUE;
     this.savedNames = [];
     this.onGlobalPointerMove = (e7) => {
+      if (e7.pointerType !== "mouse") {
+        e7.preventDefault();
+      }
       this.ghostPosition = { x: e7.clientX, y: e7.clientY };
       const hit = findDropTarget(e7.clientY, this.rowSnapshot);
       const valid = hit && hit.id !== this.draggedId;

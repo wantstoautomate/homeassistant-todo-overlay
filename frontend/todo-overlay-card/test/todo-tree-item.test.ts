@@ -224,6 +224,110 @@ describe("todo-overlay-tree-item", () => {
         expect(childEl.shadowRoot.querySelector(".row")?.classList.contains("dimmed")).toBe(false);
     });
 
+    // Live-reported bug: drag-to-reorder didn't work at all on a real
+    // touchscreen (HA Companion App) - nothing anywhere called
+    // preventDefault() or restricted touch-action, so the browser's own
+    // scroll-gesture recognizer regularly won the race against the JS
+    // hold-then-move logic and just scrolled the page instead of ever
+    // engaging a drag. Mouse was never affected (pointerIsMouse skips the
+    // hold delay entirely - see onWindowPointerMove).
+    describe("touch drag engagement vs. native scroll", () => {
+        it("marks the row as holding (touch-action: none) once the hold threshold is reached", async () => {
+            const el = await renderItem(makeItem({id: "1"}));
+            const row = el.shadowRoot?.querySelector(".row") as HTMLElement;
+
+            expect(row.classList.contains("holding")).toBe(false);
+
+            // Normally set by the parent todo-overlay-list in response to
+            // the bubbled tree-pointer-down event (see isPressed) - there's
+            // no parent here, so it's set directly.
+            el.draggedId = "1";
+
+            vi.useFakeTimers();
+
+            try {
+                row.dispatchEvent(
+                    new PointerEvent("pointerdown", {clientX: 0, clientY: 0, pointerType: "touch", bubbles: true}),
+                );
+                vi.advanceTimersByTime(LONG_PRESS_MS);
+                await el.updateComplete;
+
+                expect(row.classList.contains("holding")).toBe(true);
+            } finally {
+                window.dispatchEvent(new PointerEvent("pointerup", {clientX: 0, clientY: 0, pointerType: "touch"}));
+                vi.useRealTimers();
+            }
+        });
+
+        it("calls preventDefault on the touch move that engages a drag, past the hold threshold", async () => {
+            const el = await renderItem(makeItem({id: "1"}));
+            const row = el.shadowRoot?.querySelector(".row") as HTMLElement;
+            const draggable = el as unknown as {onWindowPointerMove: (e: PointerEvent) => void};
+
+            el.draggedId = "1";
+            vi.useFakeTimers();
+
+            try {
+                row.dispatchEvent(
+                    new PointerEvent("pointerdown", {clientX: 0, clientY: 0, pointerType: "touch", bubbles: true}),
+                );
+                vi.advanceTimersByTime(LONG_PRESS_MS);
+                await el.updateComplete;
+
+                const moveEvent = new PointerEvent("pointermove", {clientX: 0, clientY: 20, pointerType: "touch"});
+                const preventDefaultSpy = vi.spyOn(moveEvent, "preventDefault");
+
+                draggable.onWindowPointerMove(moveEvent);
+
+                expect(preventDefaultSpy).toHaveBeenCalled();
+            } finally {
+                window.dispatchEvent(new PointerEvent("pointerup", {clientX: 0, clientY: 0, pointerType: "touch"}));
+                vi.useRealTimers();
+            }
+        });
+
+        it("does not call preventDefault on a quick touch swipe before the hold threshold - it must still scroll normally", async () => {
+            const el = await renderItem(makeItem({id: "1"}));
+            const row = el.shadowRoot?.querySelector(".row") as HTMLElement;
+            const draggable = el as unknown as {onWindowPointerMove: (e: PointerEvent) => void};
+
+            el.draggedId = "1";
+            row.dispatchEvent(
+                new PointerEvent("pointerdown", {clientX: 0, clientY: 0, pointerType: "touch", bubbles: true}),
+            );
+
+            // No time advanced - still well before LONG_PRESS_MS, so
+            // holdReady is false even though the row is pressed.
+            const moveEvent = new PointerEvent("pointermove", {clientX: 0, clientY: 20, pointerType: "touch"});
+            const preventDefaultSpy = vi.spyOn(moveEvent, "preventDefault");
+
+            draggable.onWindowPointerMove(moveEvent);
+
+            expect(preventDefaultSpy).not.toHaveBeenCalled();
+
+            window.dispatchEvent(new PointerEvent("pointerup", {clientX: 0, clientY: 0, pointerType: "touch"}));
+        });
+
+        it("does not call preventDefault for a mouse drag - no competing native gesture to suppress", async () => {
+            const el = await renderItem(makeItem({id: "1"}));
+            const row = el.shadowRoot?.querySelector(".row") as HTMLElement;
+            const draggable = el as unknown as {onWindowPointerMove: (e: PointerEvent) => void};
+
+            row.dispatchEvent(
+                new PointerEvent("pointerdown", {clientX: 0, clientY: 0, pointerType: "mouse", bubbles: true}),
+            );
+
+            const moveEvent = new PointerEvent("pointermove", {clientX: 0, clientY: 20, pointerType: "mouse"});
+            const preventDefaultSpy = vi.spyOn(moveEvent, "preventDefault");
+
+            draggable.onWindowPointerMove(moveEvent);
+
+            expect(preventDefaultSpy).not.toHaveBeenCalled();
+
+            window.dispatchEvent(new PointerEvent("pointerup", {clientX: 0, clientY: 0, pointerType: "mouse"}));
+        });
+    });
+
     it("dispatches tree-toggle-collapse with the item's id when the chevron is clicked", async () => {
         const el = await renderItem(makeItem({id: "parent", children: [makeItem({id: "child"})]}));
 

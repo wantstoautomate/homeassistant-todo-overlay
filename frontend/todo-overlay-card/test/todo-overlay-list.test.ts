@@ -394,6 +394,52 @@ type DraggableList = TodoOverlayList & {
     onGlobalPointerUp: () => Promise<void>;
 };
 
+// Live-reported bug: drag-to-reorder didn't work at all on a real
+// touchscreen (HA Companion App) - see todo-tree-item.test.ts's matching
+// describe block for the engagement-moment half of the fix. This is the
+// other half: nothing continued to suppress native scrolling for the
+// rest of an already-engaged drag, so the page could still get yanked
+// out from under an in-progress touch drag.
+describe("todo-overlay-list onGlobalPointerMove vs. native scroll", () => {
+    it("calls preventDefault on every move of an active touch drag", () => {
+        const el = document.createElement("todo-overlay-list") as unknown as DraggableList;
+        document.body.appendChild(el);
+
+        el.draggedId = "1";
+        el.onDragStart(new CustomEvent("tree-drag-start", {
+            detail: {rect: undefined, pointerX: 0, pointerY: 0, grabOffsetX: 0, grabOffsetY: 0},
+        }));
+
+        const moveEvent = new PointerEvent("pointermove", {clientY: 20, pointerType: "touch"});
+        const preventDefaultSpy = vi.spyOn(moveEvent, "preventDefault");
+
+        el.onGlobalPointerMove(moveEvent);
+
+        expect(preventDefaultSpy).toHaveBeenCalled();
+
+        document.body.removeChild(el);
+    });
+
+    it("does not call preventDefault for a mouse drag", () => {
+        const el = document.createElement("todo-overlay-list") as unknown as DraggableList;
+        document.body.appendChild(el);
+
+        el.draggedId = "1";
+        el.onDragStart(new CustomEvent("tree-drag-start", {
+            detail: {rect: undefined, pointerX: 0, pointerY: 0, grabOffsetX: 0, grabOffsetY: 0},
+        }));
+
+        const moveEvent = new PointerEvent("pointermove", {clientY: 20, pointerType: "mouse"});
+        const preventDefaultSpy = vi.spyOn(moveEvent, "preventDefault");
+
+        el.onGlobalPointerMove(moveEvent);
+
+        expect(preventDefaultSpy).not.toHaveBeenCalled();
+
+        document.body.removeChild(el);
+    });
+});
+
 describe("todo-overlay-list cross-entity drag", () => {
     it("calls transferItem (not moveItem) when dropped on a row belonging to a different entity", async () => {
         const hassA = makeFakeHass({
