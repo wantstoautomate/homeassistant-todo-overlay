@@ -12,12 +12,12 @@ import {LONG_PRESS_MS, type Placement, type TodoItem, isOverdue} from "../models
 export const BEFORE_AFTER_ZONE = 0.3;
 
 // Pointer movement beyond this many pixels, while still under the hold
-// threshold, cancels the hold-to-edit gesture rather than engaging a
-// drag - a small allowance for natural hand/touch jitter rather than a
-// strict zero-tolerance check. Movement past the hold threshold instead
-// engages a live drag (see onWindowPointerMove) - the two are gated on
-// timing so a quick swipe on mobile still scrolls the page normally,
-// and only a sustained hold-then-move picks an item up.
+// threshold, cancels the hold-to-edit gesture - a small allowance for
+// natural hand/touch jitter rather than a strict zero-tolerance check.
+// For a mouse, movement past this threshold also engages a live drag
+// (see onWindowPointerMove) without waiting out the hold at all - touch
+// never engages a drag through this path (see the class docstring
+// above), only the hold-to-edit cancellation still applies to it.
 const MOVE_CANCEL_THRESHOLD_PX = 6;
 const HOLD_RIPPLE_SIZE = 72;
 const holdRippleSizePx = unsafeCSS(`${HOLD_RIPPLE_SIZE}px`);
@@ -60,6 +60,15 @@ const BELL_ICON = html`
 const CROSS_ICON = html`
     <svg viewBox="0 0 24 24">
         <path d="M19,6.41L17.59,5L12,10.59L6.41,5L5,6.41L10.59,12L5,17.59L6.41,19L12,13.41L17.59,19L19,17.59L13.41,12L19,6.41Z"></path>
+    </svg>
+`;
+
+// Only ever rendered while reorderModeActive - see .drag-handle's own
+// comment for why this exists as a dedicated element rather than
+// letting touch pick up a drag from anywhere on the row.
+const DRAG_HANDLE_ICON = html`
+    <svg viewBox="0 0 24 24">
+        <path d="M9,3H11V5H9V3M13,3H15V5H13V3M9,7H11V9H9V7M13,7H15V9H13V7M9,11H11V13H9V11M13,11H15V13H13V11M9,15H11V17H9V15M13,15H15V17H13V15M9,19H11V21H9V19M13,19H15V21H13V19Z"></path>
     </svg>
 `;
 
@@ -106,17 +115,25 @@ function formatDue(item: TodoItem): {label: string; overdue: boolean} | undefine
     };
 }
 
-// Drag-and-drop model: a hold (matching the existing hold-to-edit
-// threshold) followed by movement picks an item up - the card then
-// takes over entirely via its own window-level pointermove/pointerup
-// listeners and a floating "ghost" that follows the pointer, since
-// per-row hover listeners don't work on touch (a touch pointer is
+// Drag-and-drop model: for a mouse, a hold (matching the existing
+// hold-to-edit threshold) followed by movement picks an item up - the
+// card then takes over entirely via its own window-level pointermove/
+// pointerup listeners and a floating "ghost" that follows the pointer,
+// since per-row hover listeners don't work on touch (a touch pointer is
 // implicitly captured to whichever element it started on, so
 // pointerenter/pointermove never fire on OTHER rows during a real
-// touch drag - see todo-overlay.ts's hit-testing). Movement BEFORE the
-// hold threshold is left alone entirely (no preventDefault), so a
-// quick swipe still scrolls the page normally instead of fighting a
-// drag that was never actually intended.
+// touch drag - see todo-overlay.ts's hit-testing).
+//
+// Touch does NOT use this hold-then-move path at all - see
+// .drag-handle's own comment for why (live-reproduced: it doesn't
+// reliably win the race against the browser's native scroll-gesture
+// recognizer, even with preventDefault()/touch-action tried at the
+// hold-ready moment - touch-action changes made mid-gesture aren't
+// consistently honored). Touch instead drags only via the dedicated
+// handle rendered while reorderModeActive, which engages immediately
+// like a mouse does (see initiatedFromHandle) rather than waiting out
+// a hold, since the handle has no competing "quick swipe = scroll"
+// ambiguity to protect against in the first place.
 @customElement("todo-overlay-tree-item")
 export class TodoTreeItem extends LitElement {
 
@@ -173,23 +190,6 @@ export class TodoTreeItem extends LitElement {
            shifts position mid-drag. */
         .row.dimmed {
             opacity: 0.45;
-        }
-
-        /* Left unset at rest (defaults to allowing native scroll, so a
-           swipe over a row scrolls the list normally) - only restricted
-           once the hold-to-drag threshold is reached. Without this, the
-           browser's own touch-scroll gesture recognizer races the JS
-           hold-then-move logic below on every touch drag attempt, and
-           regularly wins: a held finger is never perfectly still, and
-           that jitter alone is enough for the browser to commit to a
-           native scroll before onWindowPointerMove's own threshold check
-           ever gets a say - the drag just silently never engages. Paired
-           with the pointermove preventDefault() calls below and in
-           todo-overlay-list.ts's onGlobalPointerMove, since mid-gesture
-           touch-action changes alone aren't reliably honored by every
-           mobile browser engine. */
-        .row.holding {
-            touch-action: none;
         }
 
         .row.drop-inside {
@@ -447,6 +447,39 @@ export class TodoTreeItem extends LitElement {
             background: rgba(var(--rgb-error-color, 219, 68, 55), 0.15);
         }
 
+        /* Shown instead of the delete button (see the template) while
+           reorderModeActive, for every row regardless of hasChildren -
+           dragging needs to work on parents too, unlike delete.
+           touch-action: none is static here, never toggled - that's the
+           whole point: a dedicated element the browser knows from the
+           very first touchstart is drag-only means its gesture
+           recognition never has a native-scroll option to race against
+           in the first place, unlike trying to flip touch-action on the
+           row mid-gesture once a hold is judged "ready" (tried first,
+           doesn't reliably work - see the class docstring above). */
+        .drag-handle {
+            touch-action: none;
+            flex-shrink: 0;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            width: 24px;
+            height: 24px;
+            margin-inline-end: -4px;
+            border: none;
+            background: none;
+            padding: 0;
+            border-radius: 50%;
+            cursor: grab;
+            color: var(--secondary-text-color);
+        }
+
+        .drag-handle svg {
+            width: 18px;
+            height: 18px;
+            fill: currentColor;
+        }
+
         .hold-ripple {
             position: absolute;
             width: ${holdRippleSizePx};
@@ -523,6 +556,12 @@ export class TodoTreeItem extends LitElement {
     @property({attribute: false})
     dimmedByAncestorDrag = false;
 
+    // Set by todo-overlay-list.ts's toolbar toggle - see .drag-handle's
+    // own comment for why touch needs this at all instead of just
+    // holding anywhere on the row like a mouse does.
+    @property({attribute: false})
+    reorderModeActive = false;
+
     @state()
     private holdRippleOrigin?: {x: number; y: number};
 
@@ -543,6 +582,11 @@ export class TodoTreeItem extends LitElement {
     // against, unlike touch, where a quick swipe must be left alone (see
     // onWindowPointerMove) so the page still scrolls normally.
     private pointerIsMouse = false;
+    // Set only by handlePointerDown (the dedicated .drag-handle, touch's
+    // only path to a drag) - engages immediately on the first move past
+    // the jitter threshold, same as pointerIsMouse, since the handle has
+    // no "quick swipe = scroll" ambiguity to wait out in the first place.
+    private initiatedFromHandle = false;
 
     private get isPressed(): boolean {
         return this.draggedId === this.item.id;
@@ -634,9 +678,17 @@ export class TodoTreeItem extends LitElement {
         this.pointerDownScreenPos = {x: e.clientX, y: e.clientY};
         this.hasMoved = false;
         this.dragEngaged = false;
+        this.initiatedFromHandle = false;
         this.pointerIsMouse = e.pointerType === "mouse";
 
-        const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+        // Always the ROW's rect, even when this fires from the small
+        // .drag-handle (handlePointerDown calls straight into this) - the
+        // ghost is sized and dragged as the whole row (see onDragStart in
+        // todo-overlay-list.ts), so its grab offset needs to be relative
+        // to the row too, not to whichever small element the pointer
+        // actually landed on.
+        const rect = (this.shadowRoot?.querySelector(".row") as HTMLElement | null)?.getBoundingClientRect()
+            ?? (e.currentTarget as HTMLElement).getBoundingClientRect();
         this.holdRippleOrigin = {x: e.clientX - rect.left, y: e.clientY - rect.top};
 
         window.clearTimeout(this.holdTimer);
@@ -666,6 +718,18 @@ export class TodoTreeItem extends LitElement {
             }),
         );
     }
+
+    // .drag-handle's own pointerdown - stops propagation so the row's own
+    // pointerDown (bound on .row) doesn't ALSO fire for the same press
+    // (it would otherwise, since the handle is a child of .row). Runs the
+    // exact same setup as a normal press, then marks it as handle-
+    // initiated so onWindowPointerMove engages immediately instead of
+    // waiting out (or ever reaching) the hold threshold.
+    private handlePointerDown = (e: PointerEvent) => {
+        e.stopPropagation();
+        this.pointerDown(e);
+        this.initiatedFromHandle = true;
+    };
 
     private get holdReady(): boolean {
         return (
@@ -704,18 +768,17 @@ export class TodoTreeItem extends LitElement {
             return;
         }
 
-        if (!this.dragDisabled && (this.pointerIsMouse || this.holdReady)) {
+        if (!this.dragDisabled && (this.pointerIsMouse || this.initiatedFromHandle)) {
             this.hasMoved = true;
             this.dragEngaged = true;
 
-            // Touch only: stops the browser's own scroll-gesture recognizer
-            // from claiming this exact move event, right at the moment
-            // we've decided it's a drag rather than a scroll - see
-            // .row.holding's own comment for why this alone isn't
-            // sufficient (todo-overlay-list.ts's onGlobalPointerMove keeps
-            // preventing default for the rest of the drag). No-op for
-            // mouse, which has no competing native gesture to suppress.
-            if (!this.pointerIsMouse) {
+            // Handle-initiated only: belt-and-suspenders alongside the
+            // handle's static touch-action: none - see .drag-handle's own
+            // comment. No-op for mouse, which has no competing native
+            // gesture to suppress. todo-overlay-list.ts's
+            // onGlobalPointerMove keeps preventing default for the rest
+            // of the drag once it's engaged.
+            if (this.initiatedFromHandle) {
                 e.preventDefault();
             }
 
@@ -829,7 +892,6 @@ export class TodoTreeItem extends LitElement {
             row: true,
             pressed: this.isPressed && !isBeingDragged,
             lifted: isBeingDragged,
-            holding: this.holdReady,
             dimmed: this.dimmedByAncestorDrag,
             "drop-inside": isDropTarget && this.hoverPlacement === "inside",
             "gap-before": isDropTarget && this.hoverPlacement === "before",
@@ -933,21 +995,31 @@ export class TodoTreeItem extends LitElement {
                                 </div>
 
                                 ${
-                                    this.hasChildren
-                                        ? ""
-                                        : html`
+                                    this.reorderModeActive
+                                        ? html`
                                             <button
-                                                class=${classMap({
-                                                    "delete-button": true,
-                                                    confirming: this.confirmingDelete,
-                                                })}
-                                                aria-label=${this.confirmingDelete ? "Confirm delete" : "Delete"}
-                                                @click=${this.onDeleteClick}
-                                                @pointerdown=${(e: Event) => e.stopPropagation()}
+                                                class="drag-handle"
+                                                aria-label="Drag to reorder"
+                                                @pointerdown=${this.handlePointerDown}
                                             >
-                                                ${CROSS_ICON}
+                                                ${DRAG_HANDLE_ICON}
                                             </button>
                                         `
+                                        : this.hasChildren
+                                            ? ""
+                                            : html`
+                                                <button
+                                                    class=${classMap({
+                                                        "delete-button": true,
+                                                        confirming: this.confirmingDelete,
+                                                    })}
+                                                    aria-label=${this.confirmingDelete ? "Confirm delete" : "Delete"}
+                                                    @click=${this.onDeleteClick}
+                                                    @pointerdown=${(e: Event) => e.stopPropagation()}
+                                                >
+                                                    ${CROSS_ICON}
+                                                </button>
+                                            `
                                 }
 
                                 ${
@@ -984,6 +1056,7 @@ export class TodoTreeItem extends LitElement {
                                             .dragDisabled=${this.dragDisabled}
                                             .collapsedIds=${this.collapsedIds}
                                             .dimmedByAncestorDrag=${isBeingDragged || this.dimmedByAncestorDrag}
+                                            .reorderModeActive=${this.reorderModeActive}
                                         ></todo-overlay-tree-item>
                                     `,
                                 )}

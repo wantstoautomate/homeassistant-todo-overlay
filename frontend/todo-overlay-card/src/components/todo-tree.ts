@@ -77,6 +77,9 @@ export class TodoTree extends LitElement {
     @property({attribute: false})
     collapsedIds: Set<string> = new Set();
 
+    @property({attribute: false})
+    reorderModeActive = false;
+
     render() {
         return html`
             <ul>
@@ -104,6 +107,7 @@ export class TodoTree extends LitElement {
                                     .confirmDelete=${this.confirmDelete}
                                     .dragDisabled=${this.dragDisabled}
                                     .collapsedIds=${this.collapsedIds}
+                                    .reorderModeActive=${this.reorderModeActive}
                                 ></todo-overlay-tree-item>
                             `,
                         )

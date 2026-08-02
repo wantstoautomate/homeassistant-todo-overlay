@@ -3,7 +3,31 @@
 All notable changes to this project are documented here. Versions follow the
 integration's `manifest.json`/card's `package.json` (kept in lockstep).
 
-## 0.16.1
+## 0.16.2
+
+- Replaced 0.16.1's fix for drag-to-reorder on touch (below) - confirmed
+  live on a real device that it still didn't reliably work. Root cause of
+  *that*: `touch-action` changes made mid-gesture (toggled once the
+  hold-to-drag threshold was reached) aren't consistently honored by
+  mobile browsers - by the 500ms mark, the browser has often already
+  committed the touch to native scrolling, which is also why the drag
+  ghost wasn't tracking in real time (a touch the browser has claimed for
+  scrolling stops giving JS meaningful pointer data for it).
+  Added a dedicated reorder mode instead: a new toolbar icon (only
+  visible on touch/coarse-pointer devices - `show_reorder_toggle`,
+  default on) toggles every row into showing a small drag-handle in place
+  of its delete button. The handle is `touch-action: none` from the very
+  first touchstart, never toggled - the actual reliable fix, since the
+  browser never gets a chance to consider it scrollable in the first
+  place, rather than having that decision taken back from it mid-gesture.
+  Picking up the handle engages a drag immediately (no hold wait, like a
+  mouse), since it has no "quick swipe should still scroll" ambiguity to
+  protect against - only the handle drags; the rest of the row still
+  scrolls the list normally, and tap-to-complete/edit are unaffected.
+  Mouse users never see any of this (hold-anywhere-on-the-row already
+  works reliably for them, unaffected by any of the above).
+
+## 0.16.1 (superseded by 0.16.2 - see above)
 
 - Fixed drag-to-reorder not working at all on a real touchscreen (reported
   live via the HA Companion App). Root cause: nothing ever called

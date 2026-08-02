@@ -147,6 +147,7 @@ describe("todo-overlay-card-editor", () => {
             "Confirm before deleting an item",
             "Save/load list buttons",
             "Filter icon in toolbar",
+            "Reorder-mode toggle (touch devices only)",
         ]);
 
         const mainLabels = [...(el.shadowRoot?.querySelectorAll("ha-formfield") ?? [])]

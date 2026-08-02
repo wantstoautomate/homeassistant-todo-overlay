@@ -88,6 +88,12 @@ const CLOSE_ICON = html`
     </svg>
 `;
 
+const REORDER_TOGGLE_ICON = html`
+    <svg viewBox="0 0 24 24">
+        <path d="M9,3L5,6.99H8V14H10V6.99H13M16,17.01V10H14V17.01H11L15,21L19,17.01H16Z"></path>
+    </svg>
+`;
+
 interface TreeItemElement extends Element {
     item?: TodoItem;
 }
@@ -414,6 +420,24 @@ export class TodoOverlayList extends LitElement {
             transform: rotate(45deg);
         }
 
+        /* Hidden by default (mouse/trackpad primary input) - hold-
+           anywhere-to-drag already works reliably for a mouse, so this
+           would just be clutter. (pointer: coarse) is the actual primary-
+           input-is-imprecise signal, not a viewport-width breakpoint - a
+           narrow desktop browser window shouldn't show it, and a tablet
+           in the HA Companion App should, regardless of its screen size.
+           See todo-tree-item.ts's .drag-handle for what this puts each
+           row into once active. */
+        .reorder-toggle {
+            display: none;
+        }
+
+        @media (pointer: coarse) {
+            .reorder-toggle {
+                display: flex;
+            }
+        }
+
         .quick-add-panel {
             padding: 0 16px 10px;
             font-family: Roboto, "Noto Sans", sans-serif;
@@ -656,6 +680,13 @@ export class TodoOverlayList extends LitElement {
     @property({type: Boolean})
     public showFilterMenu = false;
 
+    // See TodoOverlayCardConfig's own show_reorder_toggle comment - the
+    // toggle button itself is additionally CSS-gated to touch/coarse-
+    // pointer devices (see .reorder-toggle's own @media rule), so this
+    // being true doesn't put anything in front of a mouse user at all.
+    @property({type: Boolean})
+    public showReorderToggle = true;
+
     // Off by default: completing/uncompleting an item never repositions
     // it (backend) or splits it into a separate Active/Completed section
     // (see renderTree) - a plain checkbox tap just flips the check, full
@@ -675,6 +706,17 @@ export class TodoOverlayList extends LitElement {
 
     @state()
     private quickAddExpanded = false;
+
+    // Touch-only reorder mode - see TodoOverlayCardConfig's
+    // show_reorder_toggle comment for why this exists as a separate
+    // mode at all rather than just letting touch hold-and-drag like a
+    // mouse does.
+    @state()
+    private reorderModeActive = false;
+
+    private onToggleReorderMode = () => {
+        this.reorderModeActive = !this.reorderModeActive;
+    };
 
     @state()
     private error?: string;
@@ -1453,6 +1495,7 @@ export class TodoOverlayList extends LitElement {
                     .confirmDelete=${this.confirmDelete}
                     .dragDisabled=${this.dragDisabled}
                     .collapsedIds=${this.collapsedIds}
+                    .reorderModeActive=${this.reorderModeActive}
 
                     @tree-pointer-down=${this.onPointerDown}
                     @tree-drag-start=${this.onDragStart}
@@ -1479,6 +1522,7 @@ export class TodoOverlayList extends LitElement {
                     .confirmDelete=${this.confirmDelete}
                     .dragDisabled=${this.dragDisabled}
                     .collapsedIds=${this.collapsedIds}
+                    .reorderModeActive=${this.reorderModeActive}
 
                     @tree-pointer-down=${this.onPointerDown}
                     @tree-drag-start=${this.onDragStart}
@@ -1507,6 +1551,7 @@ export class TodoOverlayList extends LitElement {
                             .confirmDelete=${this.confirmDelete}
                             .dragDisabled=${this.dragDisabled}
                             .collapsedIds=${this.collapsedIds}
+                    .reorderModeActive=${this.reorderModeActive}
 
                             @tree-pointer-down=${this.onPointerDown}
                             @tree-drag-start=${this.onDragStart}
@@ -1530,6 +1575,7 @@ export class TodoOverlayList extends LitElement {
                 .confirmDelete=${this.confirmDelete}
                 .dragDisabled=${this.dragDisabled}
                 .collapsedIds=${this.collapsedIds}
+                .reorderModeActive=${this.reorderModeActive}
 
                 @tree-pointer-down=${this.onPointerDown}
                 @tree-drag-start=${this.onDragStart}
@@ -1577,7 +1623,11 @@ export class TodoOverlayList extends LitElement {
 
     render() {
         const hasToolbar =
-            this.showQuickAdd || this.showFilterMenu || this.showSaveLoadButtons || this.showClearButton;
+            this.showQuickAdd
+            || this.showFilterMenu
+            || this.showSaveLoadButtons
+            || this.showClearButton
+            || this.showReorderToggle;
         const hasHeaderRow = !!this.headerTitle || hasToolbar;
 
         return html`
@@ -1680,6 +1730,28 @@ export class TodoOverlayList extends LitElement {
                                                             @click=${this.onClearCompleted}
                                                         >
                                                             ${CLEAR_COMPLETED_ICON}
+                                                        </button>
+                                                    `
+                                                    : ""
+                                            }
+
+                                            ${
+                                                this.showReorderToggle
+                                                    ? html`
+                                                        <button
+                                                            class=${classMap({
+                                                                "toolbar-icon": true,
+                                                                "reorder-toggle": true,
+                                                                active: this.reorderModeActive,
+                                                            })}
+                                                            aria-label=${
+                                                                this.reorderModeActive
+                                                                    ? "Done reordering"
+                                                                    : "Reorder items"
+                                                            }
+                                                            @click=${this.onToggleReorderMode}
+                                                        >
+                                                            ${REORDER_TOGGLE_ICON}
                                                         </button>
                                                     `
                                                     : ""

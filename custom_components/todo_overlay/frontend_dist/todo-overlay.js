@@ -1977,6 +1977,11 @@ var CROSS_ICON = b2`
         <path d="M19,6.41L17.59,5L12,10.59L6.41,5L5,6.41L10.59,12L5,17.59L6.41,19L12,13.41L17.59,19L19,17.59L13.41,12L19,6.41Z"></path>
     </svg>
 `;
+var DRAG_HANDLE_ICON = b2`
+    <svg viewBox="0 0 24 24">
+        <path d="M9,3H11V5H9V3M13,3H15V5H13V3M9,7H11V9H9V7M13,7H15V9H13V7M9,11H11V13H9V11M13,11H15V13H13V11M9,15H11V17H9V15M13,15H15V17H13V15M9,19H11V21H9V19M13,19H15V21H13V19Z"></path>
+    </svg>
+`;
 var DELETE_CONFIRM_WINDOW_MS = 3e3;
 function formatDue(item) {
   const raw = item.due_datetime ?? (item.due_date ? `${item.due_date}T00:00:00` : null);
@@ -2016,6 +2021,7 @@ var TodoTreeItem = class extends i4 {
     this.dragDisabled = false;
     this.collapsedIds = /* @__PURE__ */ new Set();
     this.dimmedByAncestorDrag = false;
+    this.reorderModeActive = false;
     this.dragEngaged = false;
     this.confirmingDelete = false;
     this.pointerDownAt = 0;
@@ -2025,6 +2031,22 @@ var TodoTreeItem = class extends i4 {
     // against, unlike touch, where a quick swipe must be left alone (see
     // onWindowPointerMove) so the page still scrolls normally.
     this.pointerIsMouse = false;
+    // Set only by handlePointerDown (the dedicated .drag-handle, touch's
+    // only path to a drag) - engages immediately on the first move past
+    // the jitter threshold, same as pointerIsMouse, since the handle has
+    // no "quick swipe = scroll" ambiguity to wait out in the first place.
+    this.initiatedFromHandle = false;
+    // .drag-handle's own pointerdown - stops propagation so the row's own
+    // pointerDown (bound on .row) doesn't ALSO fire for the same press
+    // (it would otherwise, since the handle is a child of .row). Runs the
+    // exact same setup as a normal press, then marks it as handle-
+    // initiated so onWindowPointerMove engages immediately instead of
+    // waiting out (or ever reaching) the hold threshold.
+    this.handlePointerDown = (e7) => {
+      e7.stopPropagation();
+      this.pointerDown(e7);
+      this.initiatedFromHandle = true;
+    };
     this.onWindowPointerMove = (e7) => {
       if (!this.pointerDownScreenPos || this.dragEngaged) {
         return;
@@ -2034,10 +2056,10 @@ var TodoTreeItem = class extends i4 {
       if (Math.hypot(dx, dy) <= MOVE_CANCEL_THRESHOLD_PX) {
         return;
       }
-      if (!this.dragDisabled && (this.pointerIsMouse || this.holdReady)) {
+      if (!this.dragDisabled && (this.pointerIsMouse || this.initiatedFromHandle)) {
         this.hasMoved = true;
         this.dragEngaged = true;
-        if (!this.pointerIsMouse) {
+        if (this.initiatedFromHandle) {
           e7.preventDefault();
         }
         const grabOffset = this.holdRippleOrigin ?? { x: 0, y: 0 };
@@ -2136,8 +2158,9 @@ var TodoTreeItem = class extends i4 {
     this.pointerDownScreenPos = { x: e7.clientX, y: e7.clientY };
     this.hasMoved = false;
     this.dragEngaged = false;
+    this.initiatedFromHandle = false;
     this.pointerIsMouse = e7.pointerType === "mouse";
-    const rect = e7.currentTarget.getBoundingClientRect();
+    const rect = this.shadowRoot?.querySelector(".row")?.getBoundingClientRect() ?? e7.currentTarget.getBoundingClientRect();
     this.holdRippleOrigin = { x: e7.clientX - rect.left, y: e7.clientY - rect.top };
     window.clearTimeout(this.holdTimer);
     this.holdTimer = window.setTimeout(() => {
@@ -2216,7 +2239,6 @@ var TodoTreeItem = class extends i4 {
       row: true,
       pressed: this.isPressed && !isBeingDragged,
       lifted: isBeingDragged,
-      holding: this.holdReady,
       dimmed: this.dimmedByAncestorDrag,
       "drop-inside": isDropTarget && this.hoverPlacement === "inside",
       "gap-before": isDropTarget && this.hoverPlacement === "before",
@@ -2286,19 +2308,27 @@ var TodoTreeItem = class extends i4 {
                                             ` : ""}
                                 </div>
 
-                                ${this.hasChildren ? "" : b2`
+                                ${this.reorderModeActive ? b2`
                                             <button
-                                                class=${e6({
+                                                class="drag-handle"
+                                                aria-label="Drag to reorder"
+                                                @pointerdown=${this.handlePointerDown}
+                                            >
+                                                ${DRAG_HANDLE_ICON}
+                                            </button>
+                                        ` : this.hasChildren ? "" : b2`
+                                                <button
+                                                    class=${e6({
       "delete-button": true,
       confirming: this.confirmingDelete
     })}
-                                                aria-label=${this.confirmingDelete ? "Confirm delete" : "Delete"}
-                                                @click=${this.onDeleteClick}
-                                                @pointerdown=${(e7) => e7.stopPropagation()}
-                                            >
-                                                ${CROSS_ICON}
-                                            </button>
-                                        `}
+                                                    aria-label=${this.confirmingDelete ? "Confirm delete" : "Delete"}
+                                                    @click=${this.onDeleteClick}
+                                                    @pointerdown=${(e7) => e7.stopPropagation()}
+                                                >
+                                                    ${CROSS_ICON}
+                                                </button>
+                                            `}
 
                                 ${this.holdRippleOrigin ? b2`
                                             <div
@@ -2327,6 +2357,7 @@ var TodoTreeItem = class extends i4 {
                                             .dragDisabled=${this.dragDisabled}
                                             .collapsedIds=${this.collapsedIds}
                                             .dimmedByAncestorDrag=${isBeingDragged || this.dimmedByAncestorDrag}
+                                            .reorderModeActive=${this.reorderModeActive}
                                         ></todo-overlay-tree-item>
                                     `
     )}
@@ -2390,23 +2421,6 @@ TodoTreeItem.styles = i`
            shifts position mid-drag. */
         .row.dimmed {
             opacity: 0.45;
-        }
-
-        /* Left unset at rest (defaults to allowing native scroll, so a
-           swipe over a row scrolls the list normally) - only restricted
-           once the hold-to-drag threshold is reached. Without this, the
-           browser's own touch-scroll gesture recognizer races the JS
-           hold-then-move logic below on every touch drag attempt, and
-           regularly wins: a held finger is never perfectly still, and
-           that jitter alone is enough for the browser to commit to a
-           native scroll before onWindowPointerMove's own threshold check
-           ever gets a say - the drag just silently never engages. Paired
-           with the pointermove preventDefault() calls below and in
-           todo-overlay-list.ts's onGlobalPointerMove, since mid-gesture
-           touch-action changes alone aren't reliably honored by every
-           mobile browser engine. */
-        .row.holding {
-            touch-action: none;
         }
 
         .row.drop-inside {
@@ -2664,6 +2678,39 @@ TodoTreeItem.styles = i`
             background: rgba(var(--rgb-error-color, 219, 68, 55), 0.15);
         }
 
+        /* Shown instead of the delete button (see the template) while
+           reorderModeActive, for every row regardless of hasChildren -
+           dragging needs to work on parents too, unlike delete.
+           touch-action: none is static here, never toggled - that's the
+           whole point: a dedicated element the browser knows from the
+           very first touchstart is drag-only means its gesture
+           recognition never has a native-scroll option to race against
+           in the first place, unlike trying to flip touch-action on the
+           row mid-gesture once a hold is judged "ready" (tried first,
+           doesn't reliably work - see the class docstring above). */
+        .drag-handle {
+            touch-action: none;
+            flex-shrink: 0;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            width: 24px;
+            height: 24px;
+            margin-inline-end: -4px;
+            border: none;
+            background: none;
+            padding: 0;
+            border-radius: 50%;
+            cursor: grab;
+            color: var(--secondary-text-color);
+        }
+
+        .drag-handle svg {
+            width: 18px;
+            height: 18px;
+            fill: currentColor;
+        }
+
         .hold-ripple {
             position: absolute;
             width: ${holdRippleSizePx};
@@ -2713,6 +2760,9 @@ __decorateClass([
   n4({ attribute: false })
 ], TodoTreeItem.prototype, "dimmedByAncestorDrag", 2);
 __decorateClass([
+  n4({ attribute: false })
+], TodoTreeItem.prototype, "reorderModeActive", 2);
+__decorateClass([
   r5()
 ], TodoTreeItem.prototype, "holdRippleOrigin", 2);
 __decorateClass([
@@ -2736,6 +2786,7 @@ var TodoTree = class extends i4 {
     this.confirmDelete = true;
     this.dragDisabled = false;
     this.collapsedIds = /* @__PURE__ */ new Set();
+    this.reorderModeActive = false;
   }
   render() {
     return b2`
@@ -2761,6 +2812,7 @@ var TodoTree = class extends i4 {
                                     .confirmDelete=${this.confirmDelete}
                                     .dragDisabled=${this.dragDisabled}
                                     .collapsedIds=${this.collapsedIds}
+                                    .reorderModeActive=${this.reorderModeActive}
                                 ></todo-overlay-tree-item>
                             `
     )}
@@ -2832,6 +2884,9 @@ __decorateClass([
 __decorateClass([
   n4({ attribute: false })
 ], TodoTree.prototype, "collapsedIds", 2);
+__decorateClass([
+  n4({ attribute: false })
+], TodoTree.prototype, "reorderModeActive", 2);
 TodoTree = __decorateClass([
   t3("todo-overlay-tree")
 ], TodoTree);
@@ -2868,6 +2923,11 @@ var CLEAR_COMPLETED_ICON = b2`
 var CLOSE_ICON = b2`
     <svg viewBox="0 0 24 24">
         <path d="M19,6.41L17.59,5L12,10.59L6.41,5L5,6.41L10.59,12L5,17.59L6.41,19L12,13.41L17.59,19L19,17.59L13.41,12L19,6.41Z"></path>
+    </svg>
+`;
+var REORDER_TOGGLE_ICON = b2`
+    <svg viewBox="0 0 24 24">
+        <path d="M9,3L5,6.99H8V14H10V6.99H13M16,17.01V10H14V17.01H11L15,21L19,17.01H16Z"></path>
     </svg>
 `;
 function collectAllRows(root, currentEntity) {
@@ -2984,10 +3044,15 @@ var TodoOverlayList = class extends i4 {
     this.showQuickAdd = true;
     this.confirmDelete = true;
     this.showFilterMenu = false;
+    this.showReorderToggle = true;
     this.moveCompletedItems = false;
     this.collapsedIds = /* @__PURE__ */ new Set();
     this.filterMode = "all";
     this.quickAddExpanded = false;
+    this.reorderModeActive = false;
+    this.onToggleReorderMode = () => {
+      this.reorderModeActive = !this.reorderModeActive;
+    };
     this.foreignDragActive = false;
     this.onForeignDragHover = (e7) => {
       const wasEmptyTarget = this.isEmptyDropTarget;
@@ -3491,6 +3556,7 @@ var TodoOverlayList = class extends i4 {
                     .confirmDelete=${this.confirmDelete}
                     .dragDisabled=${this.dragDisabled}
                     .collapsedIds=${this.collapsedIds}
+                    .reorderModeActive=${this.reorderModeActive}
 
                     @tree-pointer-down=${this.onPointerDown}
                     @tree-drag-start=${this.onDragStart}
@@ -3515,6 +3581,7 @@ var TodoOverlayList = class extends i4 {
                     .confirmDelete=${this.confirmDelete}
                     .dragDisabled=${this.dragDisabled}
                     .collapsedIds=${this.collapsedIds}
+                    .reorderModeActive=${this.reorderModeActive}
 
                     @tree-pointer-down=${this.onPointerDown}
                     @tree-drag-start=${this.onDragStart}
@@ -3539,6 +3606,7 @@ var TodoOverlayList = class extends i4 {
                             .confirmDelete=${this.confirmDelete}
                             .dragDisabled=${this.dragDisabled}
                             .collapsedIds=${this.collapsedIds}
+                    .reorderModeActive=${this.reorderModeActive}
 
                             @tree-pointer-down=${this.onPointerDown}
                             @tree-drag-start=${this.onDragStart}
@@ -3560,6 +3628,7 @@ var TodoOverlayList = class extends i4 {
                 .confirmDelete=${this.confirmDelete}
                 .dragDisabled=${this.dragDisabled}
                 .collapsedIds=${this.collapsedIds}
+                .reorderModeActive=${this.reorderModeActive}
 
                 @tree-pointer-down=${this.onPointerDown}
                 @tree-drag-start=${this.onDragStart}
@@ -3596,7 +3665,7 @@ var TodoOverlayList = class extends i4 {
         `;
   }
   render() {
-    const hasToolbar = this.showQuickAdd || this.showFilterMenu || this.showSaveLoadButtons || this.showClearButton;
+    const hasToolbar = this.showQuickAdd || this.showFilterMenu || this.showSaveLoadButtons || this.showClearButton || this.showReorderToggle;
     const hasHeaderRow = !!this.headerTitle || hasToolbar;
     return b2`
             ${hasHeaderRow ? b2`
@@ -3672,6 +3741,20 @@ var TodoOverlayList = class extends i4 {
                                                             @click=${this.onClearCompleted}
                                                         >
                                                             ${CLEAR_COMPLETED_ICON}
+                                                        </button>
+                                                    ` : ""}
+
+                                            ${this.showReorderToggle ? b2`
+                                                        <button
+                                                            class=${e6({
+      "toolbar-icon": true,
+      "reorder-toggle": true,
+      active: this.reorderModeActive
+    })}
+                                                            aria-label=${this.reorderModeActive ? "Done reordering" : "Reorder items"}
+                                                            @click=${this.onToggleReorderMode}
+                                                        >
+                                                            ${REORDER_TOGGLE_ICON}
                                                         </button>
                                                     ` : ""}
                                         </div>
@@ -3854,6 +3937,24 @@ TodoOverlayList.styles = i`
 
         .toolbar-icon.quick-add-toggle.expanded svg {
             transform: rotate(45deg);
+        }
+
+        /* Hidden by default (mouse/trackpad primary input) - hold-
+           anywhere-to-drag already works reliably for a mouse, so this
+           would just be clutter. (pointer: coarse) is the actual primary-
+           input-is-imprecise signal, not a viewport-width breakpoint - a
+           narrow desktop browser window shouldn't show it, and a tablet
+           in the HA Companion App should, regardless of its screen size.
+           See todo-tree-item.ts's .drag-handle for what this puts each
+           row into once active. */
+        .reorder-toggle {
+            display: none;
+        }
+
+        @media (pointer: coarse) {
+            .reorder-toggle {
+                display: flex;
+            }
         }
 
         .quick-add-panel {
@@ -4091,6 +4192,9 @@ __decorateClass([
 ], TodoOverlayList.prototype, "showFilterMenu", 2);
 __decorateClass([
   n4({ type: Boolean })
+], TodoOverlayList.prototype, "showReorderToggle", 2);
+__decorateClass([
+  n4({ type: Boolean })
 ], TodoOverlayList.prototype, "moveCompletedItems", 2);
 __decorateClass([
   r5()
@@ -4104,6 +4208,9 @@ __decorateClass([
 __decorateClass([
   r5()
 ], TodoOverlayList.prototype, "quickAddExpanded", 2);
+__decorateClass([
+  r5()
+], TodoOverlayList.prototype, "reorderModeActive", 2);
 __decorateClass([
   r5()
 ], TodoOverlayList.prototype, "error", 2);
@@ -4318,6 +4425,13 @@ var TodoOverlayCardEditor = class extends i4 {
                             @change=${this.onSwitchChanged("show_filter_menu", false)}
                         ></ha-switch>
                     </ha-formfield>
+
+                    <ha-formfield label="Reorder-mode toggle (touch devices only)">
+                        <ha-switch
+                            .checked=${this._config.show_reorder_toggle ?? true}
+                            @change=${this.onSwitchChanged("show_reorder_toggle", true)}
+                        ></ha-switch>
+                    </ha-formfield>
                 </div>
             </details>
         `;
@@ -4458,6 +4572,7 @@ var TodoOverlayCard = class extends i4 {
                             .showQuickAdd=${this.config.show_quick_add ?? true}
                             .confirmDelete=${this.config.confirm_delete ?? true}
                             .showFilterMenu=${this.config.show_filter_menu ?? false}
+                            .showReorderToggle=${this.config.show_reorder_toggle ?? true}
                             .moveCompletedItems=${this.config.move_completed_items ?? false}
                         ></todo-overlay-list>
                     </div>

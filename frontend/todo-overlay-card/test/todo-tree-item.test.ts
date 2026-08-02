@@ -225,87 +225,126 @@ describe("todo-overlay-tree-item", () => {
     });
 
     // Live-reported bug: drag-to-reorder didn't work at all on a real
-    // touchscreen (HA Companion App) - nothing anywhere called
-    // preventDefault() or restricted touch-action, so the browser's own
-    // scroll-gesture recognizer regularly won the race against the JS
-    // hold-then-move logic and just scrolled the page instead of ever
-    // engaging a drag. Mouse was never affected (pointerIsMouse skips the
-    // hold delay entirely - see onWindowPointerMove).
-    describe("touch drag engagement vs. native scroll", () => {
-        it("marks the row as holding (touch-action: none) once the hold threshold is reached", async () => {
-            const el = await renderItem(makeItem({id: "1"}));
-            const row = el.shadowRoot?.querySelector(".row") as HTMLElement;
+    // touchscreen (HA Companion App). First attempt (toggling
+    // touch-action on the row itself, plus preventDefault, once a
+    // whole-row hold reached its threshold) still didn't reliably work
+    // on a real device - browsers don't consistently honor a
+    // touch-action change made mid-gesture, only one set before the
+    // gesture starts. Replaced with a dedicated drag-handle, always
+    // touch-action: none from the very first touchstart, shown only in
+    // reorder mode (see todo-overlay-list.ts's toolbar toggle - CSS
+    // media-gated to touch/coarse-pointer devices, so mouse never sees
+    // any of this). Mouse itself was never affected either way -
+    // pointerIsMouse always skips the hold delay entirely.
+    describe("touch drag via the reorder-mode handle", () => {
+        it("renders no drag-handle when reorder mode is off", async () => {
+            const el = await renderItem(makeItem({id: "1"}), {reorderModeActive: false});
 
-            expect(row.classList.contains("holding")).toBe(false);
-
-            // Normally set by the parent todo-overlay-list in response to
-            // the bubbled tree-pointer-down event (see isPressed) - there's
-            // no parent here, so it's set directly.
-            el.draggedId = "1";
-
-            vi.useFakeTimers();
-
-            try {
-                row.dispatchEvent(
-                    new PointerEvent("pointerdown", {clientX: 0, clientY: 0, pointerType: "touch", bubbles: true}),
-                );
-                vi.advanceTimersByTime(LONG_PRESS_MS);
-                await el.updateComplete;
-
-                expect(row.classList.contains("holding")).toBe(true);
-            } finally {
-                window.dispatchEvent(new PointerEvent("pointerup", {clientX: 0, clientY: 0, pointerType: "touch"}));
-                vi.useRealTimers();
-            }
+            expect(el.shadowRoot?.querySelector(".drag-handle")).toBeNull();
         });
 
-        it("calls preventDefault on the touch move that engages a drag, past the hold threshold", async () => {
-            const el = await renderItem(makeItem({id: "1"}));
-            const row = el.shadowRoot?.querySelector(".row") as HTMLElement;
-            const draggable = el as unknown as {onWindowPointerMove: (e: PointerEvent) => void};
+        it("renders a drag-handle (in place of the delete button) once reorder mode is on", async () => {
+            const el = await renderItem(makeItem({id: "1"}), {reorderModeActive: true});
 
-            el.draggedId = "1";
-            vi.useFakeTimers();
-
-            try {
-                row.dispatchEvent(
-                    new PointerEvent("pointerdown", {clientX: 0, clientY: 0, pointerType: "touch", bubbles: true}),
-                );
-                vi.advanceTimersByTime(LONG_PRESS_MS);
-                await el.updateComplete;
-
-                const moveEvent = new PointerEvent("pointermove", {clientX: 0, clientY: 20, pointerType: "touch"});
-                const preventDefaultSpy = vi.spyOn(moveEvent, "preventDefault");
-
-                draggable.onWindowPointerMove(moveEvent);
-
-                expect(preventDefaultSpy).toHaveBeenCalled();
-            } finally {
-                window.dispatchEvent(new PointerEvent("pointerup", {clientX: 0, clientY: 0, pointerType: "touch"}));
-                vi.useRealTimers();
-            }
+            expect(el.shadowRoot?.querySelector(".drag-handle")).not.toBeNull();
+            expect(el.shadowRoot?.querySelector(".delete-button")).toBeNull();
         });
 
-        it("does not call preventDefault on a quick touch swipe before the hold threshold - it must still scroll normally", async () => {
-            const el = await renderItem(makeItem({id: "1"}));
-            const row = el.shadowRoot?.querySelector(".row") as HTMLElement;
-            const draggable = el as unknown as {onWindowPointerMove: (e: PointerEvent) => void};
+        it("renders a handle for a parent row too, unlike the (leaf-only) delete button", async () => {
+            const el = await renderItem(
+                makeItem({id: "parent", children: [makeItem({id: "child"})]}),
+                {reorderModeActive: true},
+            );
+
+            expect(el.shadowRoot?.querySelector(".drag-handle")).not.toBeNull();
+        });
+
+        it("engages a drag immediately on the handle, on touch, with no hold wait", async () => {
+            const el = document.createElement("todo-overlay-tree-item") as TodoTreeItem;
+            el.item = makeItem({id: "1"});
+            el.reorderModeActive = true;
+            document.body.appendChild(el);
+            await el.updateComplete;
 
             el.draggedId = "1";
-            row.dispatchEvent(
+
+            const handle = el.shadowRoot?.querySelector(".drag-handle") as HTMLElement;
+            handle.dispatchEvent(
                 new PointerEvent("pointerdown", {clientX: 0, clientY: 0, pointerType: "touch", bubbles: true}),
             );
 
-            // No time advanced - still well before LONG_PRESS_MS, so
-            // holdReady is false even though the row is pressed.
+            const draggable = el as unknown as {onWindowPointerMove: (e: PointerEvent) => void};
             const moveEvent = new PointerEvent("pointermove", {clientX: 0, clientY: 20, pointerType: "touch"});
             const preventDefaultSpy = vi.spyOn(moveEvent, "preventDefault");
 
+            let dragStarted = false;
+            el.addEventListener("tree-drag-start", () => {
+                dragStarted = true;
+            });
+
+            // No fake-timer advance at all - if this needed to wait out
+            // LONG_PRESS_MS like the old whole-row path did, this move
+            // (issued immediately) wouldn't have engaged anything yet.
             draggable.onWindowPointerMove(moveEvent);
 
-            expect(preventDefaultSpy).not.toHaveBeenCalled();
+            expect(dragStarted).toBe(true);
+            expect(preventDefaultSpy).toHaveBeenCalled();
 
             window.dispatchEvent(new PointerEvent("pointerup", {clientX: 0, clientY: 0, pointerType: "touch"}));
+        });
+
+        it("does not stop the row's own pointerdown from firing too - the handle stops propagation", async () => {
+            const el = document.createElement("todo-overlay-tree-item") as TodoTreeItem;
+            el.item = makeItem({id: "1"});
+            el.reorderModeActive = true;
+            document.body.appendChild(el);
+            await el.updateComplete;
+
+            let rowPointerDowns = 0;
+            el.addEventListener("tree-pointer-down", () => {
+                rowPointerDowns += 1;
+            });
+
+            const handle = el.shadowRoot?.querySelector(".drag-handle") as HTMLElement;
+            handle.dispatchEvent(
+                new PointerEvent("pointerdown", {clientX: 0, clientY: 0, pointerType: "touch", bubbles: true}),
+            );
+
+            // Exactly one - from handlePointerDown calling pointerDown()
+            // itself, not from the row's own listener also seeing the
+            // (unstopped) bubbled event.
+            expect(rowPointerDowns).toBe(1);
+
+            window.dispatchEvent(new PointerEvent("pointerup", {clientX: 0, clientY: 0, pointerType: "touch"}));
+        });
+
+        it("a touch hold-and-move on the row itself (not the handle) no longer engages a drag", async () => {
+            const el = await renderItem(makeItem({id: "1"}));
+            const row = el.shadowRoot?.querySelector(".row") as HTMLElement;
+            const draggable = el as unknown as {onWindowPointerMove: (e: PointerEvent) => void};
+
+            el.draggedId = "1";
+            vi.useFakeTimers();
+
+            try {
+                row.dispatchEvent(
+                    new PointerEvent("pointerdown", {clientX: 0, clientY: 0, pointerType: "touch", bubbles: true}),
+                );
+                vi.advanceTimersByTime(LONG_PRESS_MS);
+                await el.updateComplete;
+
+                let dragStarted = false;
+                el.addEventListener("tree-drag-start", () => {
+                    dragStarted = true;
+                });
+
+                draggable.onWindowPointerMove(new PointerEvent("pointermove", {clientX: 0, clientY: 20, pointerType: "touch"}));
+
+                expect(dragStarted).toBe(false);
+            } finally {
+                window.dispatchEvent(new PointerEvent("pointerup", {clientX: 0, clientY: 0, pointerType: "touch"}));
+                vi.useRealTimers();
+            }
         });
 
         it("does not call preventDefault for a mouse drag - no competing native gesture to suppress", async () => {

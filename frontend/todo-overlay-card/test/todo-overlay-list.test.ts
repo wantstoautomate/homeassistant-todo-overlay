@@ -235,7 +235,7 @@ describe("todo-overlay-list toolbar visibility", () => {
     it("shows no toolbar at all when every toolbar flag is off", async () => {
         const {el} = await renderList(
             {entity_id: ENTITY_ID, items: []},
-            {showQuickAdd: false, showFilterMenu: false, showSaveLoadButtons: false, showClearButton: false},
+            {showQuickAdd: false, showFilterMenu: false, showSaveLoadButtons: false, showClearButton: false, showReorderToggle: false},
         );
 
         expect(el.shadowRoot?.querySelector(".toolbar")).toBeNull();
@@ -292,6 +292,7 @@ describe("todo-overlay-list header row (title level with the toolbar)", () => {
                 showFilterMenu: false,
                 showSaveLoadButtons: false,
                 showClearButton: false,
+                showReorderToggle: false,
             },
         );
 
@@ -308,6 +309,7 @@ describe("todo-overlay-list header row (title level with the toolbar)", () => {
                 showFilterMenu: false,
                 showSaveLoadButtons: false,
                 showClearButton: false,
+                showReorderToggle: false,
             },
         );
 
