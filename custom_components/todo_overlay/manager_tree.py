@@ -199,6 +199,13 @@ class TreeMixin:
                 await self._adapter.remove_item(entity_id, duplicate.id)
                 removed_ids.append(duplicate.id)
 
+                # Previously silent - on a linked list, this specific
+                # combination (two same-titled items where at least one
+                # has a quantity) never propagated the removal to the
+                # peer at all, since nothing here ever fired an event
+                # for it.
+                self._fire_event(entity_id, duplicate.id, duplicate.title, "removed")
+
             if combined_quantity:
                 await self._metadata_store.set_quantity(entity_id, survivor.id, combined_quantity)
                 quantities[survivor.id] = combined_quantity

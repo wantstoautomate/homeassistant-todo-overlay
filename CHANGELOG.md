@@ -3,6 +3,16 @@
 All notable changes to this project are documented here. Versions follow the
 integration's `manifest.json`/card's `package.json` (kept in lockstep).
 
+## 1.0.1
+
+- Fixed the one known limitation flagged in 1.0.0: the duplicate-title-
+  merge reconciliation (`_merge_duplicate_titles` - combines two
+  same-titled items when at least one has a quantity, e.g. two "Milk"
+  entries) removed the losing duplicate silently, with no event fired -
+  on a linked list, that removal never propagated to the peer. Now
+  fires `"removed"` for the merged-away duplicate, same as every other
+  deletion path.
+
 ## 1.0.0
 
 Final audit pass before declaring this stable, prompted by being asked
