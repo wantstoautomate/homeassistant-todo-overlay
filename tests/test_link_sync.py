@@ -60,10 +60,17 @@ class FakeBus:
     """Just enough of hass.bus for LinkSyncManager's own EVENT_ITEM_CHANGED
     subscription (async_setup) - these tests drive async_handle_local_change
     directly rather than through a real fired event, so nothing here needs
-    to actually dispatch."""
+    to actually dispatch. async_fire is recorded (not dispatched either)
+    so _notify_local_refresh has somewhere to land without crashing."""
+
+    def __init__(self) -> None:
+        self.fired: list[tuple] = []
 
     def async_listen(self, event_type, handler):
         return lambda: None
+
+    def async_fire(self, event_type, data):
+        self.fired.append((event_type, data))
 
 
 class FakeHass:
@@ -189,10 +196,17 @@ async def test_incoming_create_does_not_trigger_a_runaway_echo_loop():
     republished it under a brand new sync_id. Each side then created
     another duplicate item in response to the other's republish,
     forever. Applying an incoming create must go through the adapter
-    directly so this can never fire an event at all - regression-tested
-    here with a real hass.bus.async_fire tracker, not the hass=None the
-    other tests in this file use (which would silently mask this
-    exact bug, since _fire_event no-ops when hass is None)."""
+    directly so it can never fire a TodoManager-style event for that
+    item - regression-tested here with a real hass.bus.async_fire
+    tracker, not the hass=None the other tests in this file use (which
+    would silently mask this exact bug, since _fire_event no-ops when
+    hass is None).
+
+    _apply_incoming does fire its own "synced" marker event afterwards
+    (see _notify_local_refresh) so open cards on this instance reload -
+    the assertion below is that this marker is the ONLY thing that
+    fires, and that _on_item_changed_event's guard against it stops it
+    from ever being treated as a new local change to publish."""
 
     fired_events: list[tuple] = []
 
@@ -240,7 +254,10 @@ async def test_incoming_create_does_not_trigger_a_runaway_echo_loop():
     await _flush(hass)
 
     assert any(item.title == "Bread" for item in await adapter.get_items(ENTITY_ID))
-    assert fired_events == []
+    assert len(fired_events) == 1
+    event_type, data = fired_events[0]
+    assert event_type == "todo_overlay_item_event"
+    assert data["action"] == "synced"
     assert transport.published == []
 
 
@@ -356,6 +373,98 @@ async def test_incoming_delete_removes_the_local_item_and_tombstones_it():
     assert await adapter.get_items(ENTITY_ID) == []
     states = await store.get_all_link_item_states(ENTITY_ID)
     assert states["sync-1"]["deleted_at"] is not None
+
+
+@pytest.mark.asyncio
+async def test_incoming_update_notifies_local_refresh_for_open_cards():
+    """The 0.16.3 live-sync feature relies on EVENT_ITEM_CHANGED to know
+    when an open card should reload. Applying an incoming update never
+    goes through TodoManager (see _apply_incoming), so without its own
+    explicit _notify_local_refresh() call, a card open on the receiving
+    instance would silently never refresh - live-reproduced bug: had to
+    manually reload the page to see a remotely-applied change."""
+
+    hass, adapter, store, manager, transport, sync = make_sync_manager(
+        items=[TodoItem(id="1", title="Milk", completed=False)],
+    )
+    await sync.async_setup()
+    await store.set_link(ENTITY_ID, LINK_ID)
+    await store.set_native_sync_mapping(ENTITY_ID, "1", "sync-1")
+    await sync.async_start_link(ENTITY_ID)
+    hass.bus.fired.clear()
+
+    transport.deliver(f"todo_overlay/link/{LINK_ID}/item/sync-1", {
+        "origin": "some-other-instance",
+        "sync_id": "sync-1",
+        "updated_at": "2026-01-01T00:00:00+00:00",
+        "deleted": False,
+        "fields": {"title": "Milk", "completed": True, "description": None,
+                    "due_date": None, "due_datetime": None, "quantity": None, "tags": []},
+    })
+    await _flush(hass)
+
+    assert len(hass.bus.fired) == 1
+    event_type, data = hass.bus.fired[0]
+    assert event_type == "todo_overlay_item_event"
+    assert data == {"entity_id": ENTITY_ID, "item_id": "1", "title": "Milk", "action": "synced"}
+
+
+@pytest.mark.asyncio
+async def test_incoming_delete_notifies_local_refresh_for_open_cards():
+    hass, adapter, store, manager, transport, sync = make_sync_manager(
+        items=[TodoItem(id="1", title="Milk", completed=False)],
+    )
+    await sync.async_setup()
+    await store.set_link(ENTITY_ID, LINK_ID)
+    await store.set_native_sync_mapping(ENTITY_ID, "1", "sync-1")
+    await sync.async_start_link(ENTITY_ID)
+    hass.bus.fired.clear()
+
+    transport.deliver(f"todo_overlay/link/{LINK_ID}/item/sync-1", {
+        "origin": "some-other-instance",
+        "sync_id": "sync-1",
+        "updated_at": "2026-01-01T00:00:00+00:00",
+        "deleted": True,
+        "fields": None,
+    })
+    await _flush(hass)
+
+    assert len(hass.bus.fired) == 1
+    event_type, data = hass.bus.fired[0]
+    assert event_type == "todo_overlay_item_event"
+    assert data == {"entity_id": ENTITY_ID, "item_id": "1", "title": "", "action": "synced"}
+
+
+@pytest.mark.asyncio
+async def test_stale_ignored_incoming_update_does_not_notify_local_refresh():
+    hass, adapter, store, manager, transport, sync = make_sync_manager(
+        items=[TodoItem(id="1", title="Milk", completed=False)],
+    )
+    await sync.async_setup()
+    await store.set_link(ENTITY_ID, LINK_ID)
+    await store.set_native_sync_mapping(ENTITY_ID, "1", "sync-1")
+    await store.set_link_item_state(
+        ENTITY_ID, "sync-1",
+        updated_at="2026-06-01T00:00:00+00:00", deleted_at=None,
+        fields={"title": "Milk", "completed": False, "description": None,
+                "due_date": None, "due_datetime": None, "quantity": None, "tags": []},
+    )
+    await sync.async_start_link(ENTITY_ID)
+    hass.bus.fired.clear()
+
+    # Timestamped BEFORE what's already recorded - _apply_incoming returns
+    # early via last-write-wins, so no refresh notification should fire.
+    transport.deliver(f"todo_overlay/link/{LINK_ID}/item/sync-1", {
+        "origin": "some-other-instance",
+        "sync_id": "sync-1",
+        "updated_at": "2026-01-01T00:00:00+00:00",
+        "deleted": False,
+        "fields": {"title": "Bread", "completed": False, "description": None,
+                    "due_date": None, "due_datetime": None, "quantity": None, "tags": []},
+    })
+    await _flush(hass)
+
+    assert hass.bus.fired == []
 
 
 @pytest.mark.asyncio

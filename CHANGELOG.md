@@ -3,6 +3,41 @@
 All notable changes to this project are documented here. Versions follow the
 integration's `manifest.json`/card's `package.json` (kept in lockstep).
 
+## 1.0.2
+
+Two more bugs found during real two-instance testing of 1.0.1, both in
+the same general area: what happens on the *receiving* side of a
+linked-list sync.
+
+- **Fixed: an open card on the receiving instance never refreshed after
+  an incoming linked change, until the page was manually reloaded.**
+  0.16.9's echo-loop fix correctly stopped `_apply_incoming` from ever
+  calling through `TodoManager` - but `TodoManager` was also the only
+  thing that fired `EVENT_ITEM_CHANGED`, which is what the frontend's
+  live-sync subscription (added in 0.16.3) listens for. So applying an
+  incoming create/update/delete now correctly avoids the echo loop, but
+  also silently stopped telling any already-open card to reload at all.
+  Fixed by firing the same event directly from `link_sync.py` after
+  each successful apply - tagged with a distinguishing `"synced"`
+  action so `link_sync`'s own listener ignores it rather than
+  reprocessing it as a new local change (which would reopen the door
+  to 0.16.9's bug).
+- **Fixed: editing an item (e.g. changing its quantity) before hitting
+  Save could silently revert to the original value while the dialog
+  was still open, unsaved.** The edit dialog's `.value` was recomputed
+  fresh and re-passed by the parent card on *every* re-render - not
+  just when the dialog first opened, but for any unrelated reactive
+  change (another item's edit elsewhere in the same list, an error
+  banner timing out, and now also the live-refresh fix above). Because
+  lit-html always recommits non-primitive property values regardless
+  of whether the reference actually changed, every one of those
+  re-renders silently reset the dialog's fields back to whatever they
+  were when it opened, discarding anything typed in the meantime. Fixed
+  by giving the dialog its own internal draft copy, seeded once from
+  the parent's value and never resynced afterwards - the same pattern
+  already used for the due-date/time segments, now covering the whole
+  form.
+
 ## 1.0.1
 
 - Fixed the one known limitation flagged in 1.0.0: the duplicate-title-
