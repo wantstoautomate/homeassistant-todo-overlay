@@ -3,6 +3,43 @@
 All notable changes to this project are documented here. Versions follow the
 integration's `manifest.json`/card's `package.json` (kept in lockstep).
 
+## 1.0.0
+
+Final audit pass before declaring this stable, prompted by being asked
+directly "do you believe this is stable" after the intense run of real
+two-instance bug-hunting in 0.16.5 through 0.16.9.
+
+- Re-audited every line of `_apply_incoming` (the code that applies a
+  remote change coming off the broker) to confirm the exact bug class
+  that caused 0.16.9's echo loop is fully closed: every single call in
+  both its create and update/delete branches now goes through
+  `self._adapter`/`self._metadata_store` directly, never
+  `self._manager` (`TodoManager`) - `self._manager` is no longer
+  called anywhere in that file at all, only referenced in explanatory
+  comments.
+- Full suite re-run clean: 240 backend tests, 176 frontend tests,
+  ruff, tsc, hassfest.
+- One known, narrow limitation worth documenting rather than blocking
+  on: the existing duplicate-title-merge reconciliation
+  (`_merge_duplicate_titles`, matches quantity-shopping-list items that
+  share a title) removes the losing duplicate silently, with no event
+  fired - on a linked list, that specific combination (two same-titled
+  items where at least one has a quantity) won't propagate its
+  removal to the peer. This is structurally the same class of gap as
+  0.16.9's bug, but far narrower - it requires that specific quantity-
+  merge condition, not every plain duplicate title, and it shares its
+  root cause with a separate, already-documented, pre-existing
+  limitation (items removed through paths this integration doesn't
+  control - the native card, voice assistants - were never fully
+  tracked for sync purposes either).
+
+Everything else added since 0.15.0 (linked lists, the open-items
+sensor, touch reorder mode, cross-viewer live-sync) has been through
+real two-instance/two-device testing, not just the test suite, and
+every mutation path in the card now correctly participates in the
+same event system linked lists, the sensor, and the trigger platform
+all depend on.
+
 ## 0.16.9
 
 - **Fixed a runaway echo loop in linked lists, live-reproduced during
