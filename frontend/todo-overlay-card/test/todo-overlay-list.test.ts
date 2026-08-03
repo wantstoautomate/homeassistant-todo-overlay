@@ -388,8 +388,13 @@ describe("todo-overlay-list quick add", () => {
         expect(el.shadowRoot?.querySelector(".quick-add-panel")).not.toBeNull();
     });
 
-    it("submitting quick add calls todo.add_item and reloads the list", async () => {
+    it("submitting quick add calls todo_overlay/create_item (not the native todo.add_item service) and reloads the list", async () => {
+        // Live-diagnosed bug: this used to call the native todo.add_item
+        // service directly, which never fires EVENT_ITEM_CHANGED (only
+        // TodoManager.create_item does) - an item added via quick-add
+        // could never sync to a linked list, with no error anywhere.
         const {el, hass} = await renderList({entity_id: ENTITY_ID, items: []}, {showQuickAdd: true});
+        hass.connection.responses["todo_overlay/create_item"] = {id: "new-id"};
 
         (el.shadowRoot?.querySelector("button[aria-label='Add item']") as HTMLElement).click();
         await el.updateComplete;
@@ -403,10 +408,12 @@ describe("todo-overlay-list quick add", () => {
         (el.shadowRoot?.querySelector(".quick-add-row button") as HTMLElement).click();
         await flushAsync();
 
-        expect(hass.serviceCalls).toContainEqual({
-            domain: "todo", service: "add_item",
-            data: {entity_id: ENTITY_ID, item: "New item"},
-        });
+        expect(hass.connection.sent).toContainEqual(expect.objectContaining({
+            type: "todo_overlay/create_item",
+            entity_id: ENTITY_ID,
+            title: "New item",
+        }));
+        expect(hass.serviceCalls).not.toContainEqual(expect.objectContaining({domain: "todo", service: "add_item"}));
         // Reloads afterwards - at least one more get_list call than before submitting.
         expect(hass.connection.sent.filter(m => m.type === "todo_overlay/get_list").length)
             .toBeGreaterThan(hass.connection.sent.slice(0, sentBefore)

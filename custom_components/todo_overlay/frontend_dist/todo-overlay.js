@@ -3568,10 +3568,7 @@ var TodoOverlayList = class extends i4 {
       return;
     }
     try {
-      await this.hass.callService("todo", "add_item", {
-        entity_id: this.entity,
-        item: title
-      });
+      await createItem(this.hass, this.entity, { title });
       this.quickAddValue = "";
       await this.load();
     } catch (err) {
