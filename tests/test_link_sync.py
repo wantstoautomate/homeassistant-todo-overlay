@@ -180,6 +180,71 @@ async def test_incoming_create_adds_a_local_item():
 
 
 @pytest.mark.asyncio
+async def test_incoming_create_does_not_trigger_a_runaway_echo_loop():
+    """Live-reproduced bug: applying an incoming create via
+    self._manager.create_item() (TodoManager) fired EVENT_ITEM_CHANGED,
+    which link_sync's own event listener picked right back up as a
+    LOCAL change - a brand new item_id has no sync mapping yet, so it
+    couldn't be recognized as the echo it actually was - and
+    republished it under a brand new sync_id. Each side then created
+    another duplicate item in response to the other's republish,
+    forever. Applying an incoming create must go through the adapter
+    directly so this can never fire an event at all - regression-tested
+    here with a real hass.bus.async_fire tracker, not the hass=None the
+    other tests in this file use (which would silently mask this
+    exact bug, since _fire_event no-ops when hass is None)."""
+
+    fired_events: list[tuple] = []
+
+    class EventTrackingBus:
+        @staticmethod
+        def async_fire(event, data):
+            fired_events.append((event, data))
+
+        @staticmethod
+        def async_listen(event_type, handler):
+            return lambda: None
+
+    class EventTrackingHass:
+        def __init__(self) -> None:
+            self.tasks: list[asyncio.Task] = []
+            self.bus = EventTrackingBus()
+
+        def async_create_task(self, coro):
+            task = asyncio.ensure_future(coro)
+            self.tasks.append(task)
+            return task
+
+    hass = EventTrackingHass()
+    adapter = FakeAdapter(items=[])
+    metadata_store = FakeMetadataStore()
+    manager = TodoManager(adapter, metadata_store, hass=hass)
+    transport = FakeTransport()
+    sync = LinkSyncManager(hass, manager, metadata_store, adapter, transport)
+
+    await sync.async_setup()
+    await metadata_store.set_link(ENTITY_ID, LINK_ID)
+    await sync.async_start_link(ENTITY_ID)
+    transport.published.clear()  # drop the initial (empty) snapshot publish
+
+    transport.deliver(f"todo_overlay/link/{LINK_ID}/item/sync-1", {
+        "origin": "some-other-instance",
+        "sync_id": "sync-1",
+        "updated_at": "2026-01-01T00:00:00+00:00",
+        "deleted": False,
+        "fields": {
+            "title": "Bread", "completed": False, "description": None,
+            "due_date": None, "due_datetime": None, "quantity": None, "tags": [],
+        },
+    })
+    await _flush(hass)
+
+    assert any(item.title == "Bread" for item in await adapter.get_items(ENTITY_ID))
+    assert fired_events == []
+    assert transport.published == []
+
+
+@pytest.mark.asyncio
 async def test_incoming_message_missing_a_title_is_ignored_without_crashing():
     """A link message is arbitrary JSON from the wire with no schema
     guarantee (a hostile/misbehaving peer, or a broker ACL misconfig
