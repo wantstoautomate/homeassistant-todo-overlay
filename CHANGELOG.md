@@ -3,6 +3,29 @@
 All notable changes to this project are documented here. Versions follow the
 integration's `manifest.json`/card's `package.json` (kept in lockstep).
 
+## 0.16.9
+
+- **Fixed a runaway echo loop in linked lists, live-reproduced during
+  real two-instance testing: creating an item could spiral into an
+  infinite chain of duplicate items on both sides.** Root cause:
+  applying an incoming "created" message called
+  `self._manager.create_item()` (the full `TodoManager` method) to
+  create the local item - but that method unconditionally fires
+  `EVENT_ITEM_CHANGED`, which `link_sync`'s own listener picks up as a
+  new LOCAL change. A brand-new item has no sync mapping yet, so it
+  couldn't be recognized as the echo it actually was, and got
+  republished under a new `sync_id` - which the other side then applied
+  the exact same way, creating another duplicate and republishing
+  again, forever. Fixed by applying an incoming create through the
+  adapter directly (`self._adapter.add_item()`), never through
+  `TodoManager` - mirroring how applying an incoming *update* already
+  correctly used `self._adapter.update_item()` for this exact reason;
+  only the create path had the gap.
+  **If you tested linked lists before this version, check both sides for
+  duplicate items and delete them manually - this integration only ever
+  creates/deletes items on request, so cleanup needs to happen through
+  the UI, not automatically.**
+
 ## 0.16.8
 
 Full audit of every item mutation in the card, prompted by the user

@@ -413,15 +413,37 @@ class LinkSyncManager:
             return
 
         if native_uid is None:
-            native_uid = await self._manager.create_item(
+            # Deliberately self._adapter.add_item(), not
+            # self._manager.create_item() - live-reproduced runaway echo
+            # loop: create_item() fires EVENT_ITEM_CHANGED("created"),
+            # which link_sync's own _on_item_changed_event listener picks
+            # right back up as a LOCAL change (a brand new item_id has no
+            # sync mapping yet, so it can't be recognized as the echo it
+            # actually is) and republishes it under a new sync_id - each
+            # side then creates another duplicate item in response to
+            # the other's republish, forever. The adapter-only call below
+            # mirrors what the update branch already does for the exact
+            # same reason (self._adapter.update_item(), never
+            # self._manager.update_item()).
+            native_uid = await self._adapter.add_item(
                 entity_id,
                 fields["title"],
                 description=fields.get("description"),
                 due_date=fields.get("due_date"),
                 due_datetime=fields.get("due_datetime"),
-                quantity=fields.get("quantity"),
-                tags=fields.get("tags"),
             )
+
+            quantity = fields.get("quantity")
+            if quantity:
+                await self._metadata_store.set_quantity(entity_id, native_uid, quantity)
+
+            tags = fields.get("tags")
+            if tags:
+                await self._metadata_store.set_tags(entity_id, native_uid, tags)
+
+            if fields.get("completed"):
+                await self._adapter.set_completed(entity_id, native_uid, True)
+
             await self._metadata_store.set_native_sync_mapping(entity_id, native_uid, sync_id)
         else:
             await self._adapter.update_item(
