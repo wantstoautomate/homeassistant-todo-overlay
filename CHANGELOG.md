@@ -3,6 +3,23 @@
 All notable changes to this project are documented here. Versions follow the
 integration's `manifest.json`/card's `package.json` (kept in lockstep).
 
+## 0.16.5
+
+- Fixed a blocking-call warning HA logged live during the first real
+  two-instance linked-list test ("Detected blocking call to
+  load_default_certs ... inside the event loop"): `tls_set()` loads the
+  system's default CA certs from disk, a genuinely blocking filesystem
+  operation that was running directly in `PahoMqttTransport.__init__`
+  (not async, with no way to hop to the executor on its own). Deferred
+  to `async_connect()` instead, alongside the executor job the actual
+  socket connect already uses.
+- Added debug logging throughout `link_sync.py`'s local-change handling
+  (`async_handle_local_change`, `_on_item_changed_event`) - added while
+  live-diagnosing a real two-instance link where an item added on one
+  side wasn't reaching the other at all, to see exactly which
+  no-op branch (if any) was being hit. Investigation ongoing as of this
+  release - see the next entry once resolved.
+
 ## 0.16.4
 
 - Fixed the drag highlight visually jumping onto the next row the

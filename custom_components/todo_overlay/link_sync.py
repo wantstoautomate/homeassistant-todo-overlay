@@ -148,6 +148,7 @@ class LinkSyncManager:
 
     async def _on_item_changed_event(self, event: Any) -> None:
         data = event.data
+        _LOGGER.debug("_on_item_changed_event received: %s", data)
         await self.async_handle_local_change(data["entity_id"], data["item_id"], data["action"])
 
     async def async_start_link(self, entity_id: str) -> None:
@@ -198,12 +199,19 @@ class LinkSyncManager:
         to what's already on record (an echo of our own applied remote
         change, or a genuine local no-op)."""
 
+        _LOGGER.debug(
+            "async_handle_local_change: entity_id=%s item_id=%s action=%s active_entities=%s",
+            entity_id, item_id, action, self._active_entities,
+        )
+
         if entity_id not in self._active_entities:
+            _LOGGER.debug("async_handle_local_change: %s is not an active link - ignoring", entity_id)
             return
 
         link = await self._metadata_store.get_link(entity_id)
 
         if link is None:
+            _LOGGER.debug("async_handle_local_change: no stored link for %s - ignoring", entity_id)
             return
 
         sync_id = link["native_to_sync"].get(item_id)
@@ -226,6 +234,10 @@ class LinkSyncManager:
         item = next((candidate for candidate in items if candidate.id == item_id), None)
 
         if item is None:
+            _LOGGER.debug(
+                "async_handle_local_change: item_id=%s not found among %d items on %s - ignoring",
+                item_id, len(items), entity_id,
+            )
             return
 
         quantities = await self._metadata_store.get_quantities(entity_id)
@@ -246,8 +258,15 @@ class LinkSyncManager:
             and current_state.get("deleted_at") is None
             and current_state.get("fields") == fields
         ):
+            _LOGGER.debug(
+                "async_handle_local_change: fields unchanged from last-synced state for sync_id=%s - ignoring",
+                sync_id,
+            )
             return
 
+        _LOGGER.debug(
+            "async_handle_local_change: publishing upsert for sync_id=%s fields=%s", sync_id, fields,
+        )
         await self._publish_upsert(entity_id, link["link_id"], sync_id, fields)
 
     async def _publish_upsert(
