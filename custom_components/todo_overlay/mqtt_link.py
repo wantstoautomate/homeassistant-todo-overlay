@@ -79,6 +79,7 @@ class PahoMqttTransport:
         self._hass = hass
         self._host = host
         self._port = port
+        self._use_tls = use_tls
         self._subscribed_filters: set[str] = set()
 
         self._client = mqtt.Client(
@@ -94,8 +95,13 @@ class PahoMqttTransport:
         if username:
             self._client.username_pw_set(username, password)
 
-        if use_tls:
-            self._client.tls_set(cert_reqs=ssl.CERT_REQUIRED)
+        # Deliberately NOT called here (see async_connect) - tls_set()
+        # loads the system's default CA certs from disk, a genuinely
+        # blocking filesystem operation HA's own blocking-call detector
+        # flags when it runs directly on the event loop (confirmed live:
+        # "Detected blocking call to load_default_certs ... inside the
+        # event loop"), since __init__ itself isn't async and can't hop
+        # to the executor on its own.
 
         self._client.on_connect = self._on_connect
         self._client.on_disconnect = self._on_disconnect
@@ -117,6 +123,11 @@ class PahoMqttTransport:
             _LOGGER.warning("MQTT link to %s:%s disconnected unexpectedly: %s", self._host, self._port, reason_code)
 
     async def async_connect(self) -> None:
+        if self._use_tls:
+            await self._hass.async_add_executor_job(
+                lambda: self._client.tls_set(cert_reqs=ssl.CERT_REQUIRED)
+            )
+
         await self._hass.async_add_executor_job(self._client.connect, self._host, self._port, 60)
         self._client.loop_start()
 
