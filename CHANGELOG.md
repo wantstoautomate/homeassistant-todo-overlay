@@ -3,6 +3,16 @@
 All notable changes to this project are documented here. Versions follow the
 integration's `manifest.json`/card's `package.json` (kept in lockstep).
 
+## 0.16.6
+
+- Added a debug log at the very entry of `manager.py`'s `_fire_event`
+  (before the `self._hass is None` guard), since 0.16.5's link_sync
+  logging showed nothing at all when adding a test item on a real linked
+  instance - not even the earliest possible point in the chain. This
+  will show definitively whether `_fire_event` is even being called and
+  whether `self._hass` is unexpectedly `None` on the shared manager
+  instance. Investigation ongoing.
+
 ## 0.16.5
 
 - Fixed a blocking-call warning HA logged live during the first real
