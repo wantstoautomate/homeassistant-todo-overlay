@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from collections.abc import Awaitable, Callable
 from typing import Any
 
@@ -13,6 +14,8 @@ from .manager_position import PositionMixin
 from .manager_snapshots import SnapshotMixin
 from .manager_tree import TreeMixin
 from .metadata_store import MetadataStore
+
+_LOGGER = logging.getLogger(__name__)
 
 
 class TodoManager(
@@ -90,6 +93,11 @@ class TodoManager(
         action: str,
         **extra: Any,
     ) -> None:
+        _LOGGER.debug(
+            "_fire_event: entity_id=%s item_id=%s action=%s hass_is_none=%s",
+            entity_id, item_id, action, self._hass is None,
+        )
+
         if self._hass is None:
             return
 
