@@ -7,6 +7,7 @@ import {
     type CompletionChange,
     clearCompleted,
     createItem,
+    deleteItem,
     deleteSavedList,
     getList,
     listSaved,
@@ -19,6 +20,7 @@ import {
     setTags,
     setTriggerOnDue,
     transferItem,
+    updateItem,
 } from "../api";
 import {loadCollapsedIds, saveCollapsedIds} from "../collapse-storage";
 import type {FilterMode} from "../filter";
@@ -1429,23 +1431,18 @@ export class TodoOverlayList extends LitElement {
 
         try {
             if (this.dialogMode === "edit" && this.dialogItem) {
-                const serviceData: Record<string, unknown> = {
-                    entity_id: this.entity,
-                    item: this.dialogItem.id,
-                    rename: value.title,
-                };
-
-                if (description !== undefined) {
-                    serviceData.description = description;
-                }
-
-                if (dueDatetime) {
-                    serviceData.due_datetime = dueDatetime;
-                } else if (dueDate) {
-                    serviceData.due_date = dueDate;
-                }
-
-                await this.hass.callService("todo", "update_item", serviceData);
+                // Must go through todo_overlay/update_item (TodoManager),
+                // not the native todo.update_item service directly -
+                // live-diagnosed bug: the native call never fired
+                // EVENT_ITEM_CHANGED, so a title/description/due-date
+                // edit here could never sync to a linked list or refresh
+                // another open card, with no error anywhere.
+                await updateItem(this.hass, this.entity, this.dialogItem.id, {
+                    title: value.title,
+                    description,
+                    dueDate,
+                    dueDatetime,
+                });
                 await setQuantity(this.hass, this.entity, this.dialogItem.id, quantity);
                 await setTags(this.hass, this.entity, this.dialogItem.id, tags);
                 await setTriggerOnDue(this.hass, this.entity, this.dialogItem.id, value.triggerOnDue);
@@ -1475,10 +1472,13 @@ export class TodoOverlayList extends LitElement {
         }
 
         try {
-            await this.hass.callService("todo", "remove_item", {
-                entity_id: this.entity,
-                item: this.dialogItem.id,
-            });
+            // Must go through todo_overlay/delete_item (TodoManager), not
+            // the native todo.remove_item service directly - live-
+            // diagnosed bug: the native call never fired
+            // EVENT_ITEM_CHANGED, so a deletion here could never
+            // propagate to a linked list at all, leaving a ghost item on
+            // the other side forever, with no error anywhere.
+            await deleteItem(this.hass, this.entity, this.dialogItem.id);
 
             await this.load();
         } catch (err) {
@@ -1491,13 +1491,10 @@ export class TodoOverlayList extends LitElement {
     // A row's own delete cross (see todo-tree-item.ts - leaf rows only,
     // already confirmed there before this ever fires) rather than the
     // edit dialog's Delete button - a separate, more direct path to the
-    // same native service call.
+    // same underlying delete.
     private async onDeleteItem(e: CustomEvent<{id: string}>) {
         try {
-            await this.hass.callService("todo", "remove_item", {
-                entity_id: this.entity,
-                item: e.detail.id,
-            });
+            await deleteItem(this.hass, this.entity, e.detail.id);
 
             await this.load();
         } catch (err) {

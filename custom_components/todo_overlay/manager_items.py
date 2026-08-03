@@ -60,6 +60,62 @@ class ItemMixin:
 
         return item_id
 
+    async def update_item(
+        self,
+        entity_id: str,
+        item_id: str,
+        title: str | None = None,
+        description: str | None = None,
+        due_date: str | None = None,
+        due_datetime: str | None = None,
+    ) -> None:
+        """Update an item's native fields (title/description/due) -
+        fires "updated" so linked lists, the open-items sensor, and any
+        other viewer see the change. Previously the frontend called the
+        native todo.update_item service directly for this, which never
+        fired any event at all - live-diagnosed: title/description/
+        due-date edits never propagated to a linked peer or refreshed
+        other open cards."""
+
+        async with self._lock_for(entity_id):
+            await self._adapter.update_item(
+                entity_id, item_id,
+                title=title, description=description,
+                due_date=due_date, due_datetime=due_datetime,
+            )
+
+        items = await self._adapter.get_items(entity_id)
+        item = next((candidate for candidate in items if candidate.id == item_id), None)
+
+        if item is not None:
+            self._fire_event(entity_id, item_id, item.title, "updated")
+
+    async def delete_item(
+        self,
+        entity_id: str,
+        item_id: str,
+    ) -> None:
+        """Delete a single item - fires "removed" so linked lists, the
+        open-items sensor, and the todo_overlay.removed automation
+        trigger all see it. Previously the frontend called the native
+        todo.remove_item service directly for this (both the edit
+        dialog's Delete button and each row's own delete cross), which
+        never fired any event at all - live-diagnosed: a deletion never
+        propagated to a linked peer, leaving a ghost item there forever.
+
+        Any now-orphaned metadata for this item (quantity/tags/
+        trigger_on_due) is cleaned up reactively by get_list()'s own
+        reconciliation pass, same as before this existed."""
+
+        items = await self._adapter.get_items(entity_id)
+        item = next((candidate for candidate in items if candidate.id == item_id), None)
+
+        async with self._lock_for(entity_id):
+            await self._adapter.remove_item(entity_id, item_id)
+
+        if item is not None:
+            self._fire_event(entity_id, item_id, item.title, "removed")
+
     async def set_quantity(
         self,
         entity_id: str,
@@ -114,6 +170,12 @@ class ItemMixin:
 
         async with self._lock_for(entity_id):
             await self._metadata_store.set_tags(entity_id, item_id, tags)
+
+        items = await self._adapter.get_items(entity_id)
+        item = next((candidate for candidate in items if candidate.id == item_id), None)
+
+        if item is not None:
+            self._fire_event(entity_id, item_id, item.title, "tags_replaced", tags=tags)
 
     async def add_tag(
         self,

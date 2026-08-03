@@ -235,6 +235,17 @@ class SnapshotMixin:
                     if created_item is not None and created_item.due_datetime:
                         await self._metadata_store.set_trigger_on_due(entity_id, target_id, True)
 
+                # Previously never fired at all for a loaded list - live-
+                # diagnosed alongside the same gap in create_item's own
+                # frontend call site: without this, none of a loaded
+                # template's new items would ever propagate to a linked
+                # peer, trigger todo_overlay.created automations, or
+                # refresh the open-items sensor for another viewer.
+                self._fire_event(
+                    entity_id, target_id, node["title"], "created",
+                    quantity=node.get("quantity"), tags=node.get("tags") or [],
+                )
+
             if node.get("children"):
                 await self._create_snapshot_nodes(
                     entity_id,

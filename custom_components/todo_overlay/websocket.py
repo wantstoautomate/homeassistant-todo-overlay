@@ -11,6 +11,7 @@ from .const import (
     WS_TYPE_ADD_TAG,
     WS_TYPE_CLEAR_COMPLETED,
     WS_TYPE_CREATE_ITEM,
+    WS_TYPE_DELETE_ITEM,
     WS_TYPE_DELETE_SAVED_LIST,
     WS_TYPE_GET_LIST,
     WS_TYPE_LIST_SAVED,
@@ -24,6 +25,7 @@ from .const import (
     WS_TYPE_SET_TAGS,
     WS_TYPE_SET_TRIGGER_ON_DUE,
     WS_TYPE_TRANSFER_ITEM,
+    WS_TYPE_UPDATE_ITEM,
 )
 from .errors import (
     CycleError,
@@ -408,6 +410,66 @@ async def websocket_create_item(
 
 @websocket_api.websocket_command(
     {
+        vol.Required("type"): WS_TYPE_UPDATE_ITEM,
+        vol.Required("entity_id"): cv.entity_id,
+        vol.Required("item_id"): str,
+        vol.Optional("title"): str,
+        vol.Optional("description"): str,
+        vol.Optional("due_date"): str,
+        vol.Optional("due_datetime"): str,
+    }
+)
+@websocket_api.async_response
+@_handle_manager_errors
+async def websocket_update_item(
+    hass: HomeAssistant,
+    connection: websocket_api.ActiveConnection,
+    msg,
+) -> None:
+    """Update an item's native fields (title/description/due)."""
+
+    manager = get_manager(hass)
+
+    await manager.update_item(
+        entity_id=msg["entity_id"],
+        item_id=msg["item_id"],
+        title=msg.get("title"),
+        description=msg.get("description"),
+        due_date=msg.get("due_date"),
+        due_datetime=msg.get("due_datetime"),
+    )
+
+    connection.send_result(msg["id"])
+
+
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): WS_TYPE_DELETE_ITEM,
+        vol.Required("entity_id"): cv.entity_id,
+        vol.Required("item_id"): str,
+    }
+)
+@websocket_api.async_response
+@_handle_manager_errors
+async def websocket_delete_item(
+    hass: HomeAssistant,
+    connection: websocket_api.ActiveConnection,
+    msg,
+) -> None:
+    """Delete a single item."""
+
+    manager = get_manager(hass)
+
+    await manager.delete_item(
+        entity_id=msg["entity_id"],
+        item_id=msg["item_id"],
+    )
+
+    connection.send_result(msg["id"])
+
+
+@websocket_api.websocket_command(
+    {
         vol.Required("type"): WS_TYPE_SET_QUANTITY,
         vol.Required("entity_id"): cv.entity_id,
         vol.Required("item_id"): str,
@@ -559,6 +621,8 @@ def async_register_websocket(hass: HomeAssistant) -> None:
         websocket_list_saved,
         websocket_delete_saved_list,
         websocket_create_item,
+        websocket_update_item,
+        websocket_delete_item,
         websocket_set_quantity,
         websocket_set_tags,
         websocket_add_tag,

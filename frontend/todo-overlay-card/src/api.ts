@@ -130,6 +130,46 @@ export async function createItem(
 
 }
 
+export interface UpdateItemFields {
+    title?: string;
+    description?: string;
+    dueDate?: string;
+    dueDatetime?: string;
+}
+
+export async function updateItem(
+    hass: HassLike,
+    entityId: string,
+    itemId: string,
+    fields: UpdateItemFields,
+): Promise<void> {
+
+    await hass.connection.sendMessagePromise<void>({
+        type: "todo_overlay/update_item",
+        entity_id: entityId,
+        item_id: itemId,
+        title: fields.title,
+        description: fields.description,
+        due_date: fields.dueDate,
+        due_datetime: fields.dueDatetime,
+    });
+
+}
+
+export async function deleteItem(
+    hass: HassLike,
+    entityId: string,
+    itemId: string,
+): Promise<void> {
+
+    await hass.connection.sendMessagePromise<void>({
+        type: "todo_overlay/delete_item",
+        entity_id: entityId,
+        item_id: itemId,
+    });
+
+}
+
 export async function setQuantity(
     hass: HassLike,
     entityId: string,

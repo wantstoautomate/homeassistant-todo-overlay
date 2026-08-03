@@ -1070,11 +1070,57 @@ describe("todo-overlay-list edit-dialog delete (diagnostic)", () => {
         confirmButton.click();
         await flushAsync();
 
-        expect(hass.serviceCalls).toContainEqual({
-            domain: "todo",
-            service: "remove_item",
-            data: {entity_id: ENTITY_ID, item: "1"},
+        // Must go through todo_overlay/delete_item (TodoManager), not the
+        // native todo.remove_item service directly - live-diagnosed bug:
+        // the native call never fired EVENT_ITEM_CHANGED, so a deletion
+        // here could never propagate to a linked list at all.
+        expect(hass.connection.sent).toContainEqual(expect.objectContaining({
+            type: "todo_overlay/delete_item",
+            entity_id: ENTITY_ID,
+            item_id: "1",
+        }));
+        expect(hass.serviceCalls).not.toContainEqual(expect.objectContaining({domain: "todo", service: "remove_item"}));
+    });
+
+    it("saving an edit goes through todo_overlay/update_item, not the native todo.update_item service", async () => {
+        const {el, hass} = await renderList({
+            entity_id: ENTITY_ID,
+            items: [makeItem({id: "1", title: "Milk"})],
         });
+
+        const treeItem = deepQueryAll(el.shadowRoot!, "todo-overlay-tree-item")[0];
+        treeItem.dispatchEvent(new CustomEvent("tree-pointer-down", {
+            detail: {id: "1"}, bubbles: true, composed: true,
+        }));
+        treeItem.dispatchEvent(new CustomEvent("tree-pointer-up", {
+            detail: {id: "1", pressDurationMs: 600, moved: false}, bubbles: true, composed: true,
+        }));
+        await el.updateComplete;
+
+        const dialog = el.shadowRoot?.querySelector("todo-overlay-item-dialog");
+        expect(dialog, "edit dialog should be open after a long press").not.toBeNull();
+
+        dialog!.dispatchEvent(new CustomEvent("dialog-save", {
+            detail: {
+                title: "Oat milk", quantity: "", tags: "", description: "",
+                dueDate: "", dueTime: "", triggerOnDue: false,
+            },
+            bubbles: true, composed: true,
+        }));
+        await flushAsync();
+
+        // Must go through todo_overlay/update_item (TodoManager), not the
+        // native todo.update_item service directly - live-diagnosed bug:
+        // the native call never fired EVENT_ITEM_CHANGED, so an edit
+        // here could never sync to a linked list or refresh another
+        // open card.
+        expect(hass.connection.sent).toContainEqual(expect.objectContaining({
+            type: "todo_overlay/update_item",
+            entity_id: ENTITY_ID,
+            item_id: "1",
+            title: "Oat milk",
+        }));
+        expect(hass.serviceCalls).not.toContainEqual(expect.objectContaining({domain: "todo", service: "update_item"}));
     });
 });
 
@@ -1093,11 +1139,12 @@ describe("todo-overlay-list row delete button", () => {
         }));
         await flushAsync();
 
-        expect(hass.serviceCalls).toContainEqual({
-            domain: "todo",
-            service: "remove_item",
-            data: {entity_id: ENTITY_ID, item: "1"},
-        });
+        expect(hass.connection.sent).toContainEqual(expect.objectContaining({
+            type: "todo_overlay/delete_item",
+            entity_id: ENTITY_ID,
+            item_id: "1",
+        }));
+        expect(hass.serviceCalls).not.toContainEqual(expect.objectContaining({domain: "todo", service: "remove_item"}));
         expect(hass.connection.sent.filter(m => m.type === "todo_overlay/get_list").length)
             .toBeGreaterThan(hass.connection.sent.slice(0, sentBefore)
                 .filter(m => m.type === "todo_overlay/get_list").length);
