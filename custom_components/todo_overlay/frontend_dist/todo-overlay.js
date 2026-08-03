@@ -956,7 +956,10 @@ var TodoItemDialog = class extends i4 {
   constructor() {
     super(...arguments);
     this.heading = "Item";
-    this.value = EMPTY_FORM_VALUE;
+    // What the parent last handed in - read ONLY by willUpdate() to seed
+    // draftValue exactly once (see below). Never read anywhere else.
+    this._seedValue = EMPTY_FORM_VALUE;
+    this.draftValue = EMPTY_FORM_VALUE;
     this.fieldSupport = {
       description: false,
       dueDate: false,
@@ -977,6 +980,12 @@ var TodoItemDialog = class extends i4 {
     this.datePickerOpen = false;
     this.datePickerViewYear = 0;
     this.datePickerViewMonth = 0;
+  }
+  set value(newValue) {
+    this._seedValue = newValue;
+  }
+  get value() {
+    return this.draftValue;
   }
   openDatePicker() {
     const now = /* @__PURE__ */ new Date();
@@ -1016,11 +1025,12 @@ var TodoItemDialog = class extends i4 {
       return;
     }
     this.dateTimePartsInitialized = true;
-    const [year, month, day] = this.value.dueDate ? this.value.dueDate.split("-") : ["", "", ""];
+    this.draftValue = this._seedValue;
+    const [year, month, day] = this._seedValue.dueDate ? this._seedValue.dueDate.split("-") : ["", "", ""];
     this.dueYear = year ?? "";
     this.dueMonth = month ?? "";
     this.dueDay = day ?? "";
-    const [hour24Str, minute] = this.value.dueTime ? this.value.dueTime.split(":") : ["", ""];
+    const [hour24Str, minute] = this._seedValue.dueTime ? this._seedValue.dueTime.split(":") : ["", ""];
     this.dueMinute = minute ?? "";
     if (hour24Str) {
       const hour24 = Number(hour24Str);
@@ -1043,7 +1053,7 @@ var TodoItemDialog = class extends i4 {
     }
     this.dispatchEvent(
       new CustomEvent("dialog-save", {
-        detail: this.value,
+        detail: this.draftValue,
         bubbles: true,
         composed: true
       })
@@ -1089,10 +1099,10 @@ var TodoItemDialog = class extends i4 {
   }
   onTriggerOnDueChanged(e7) {
     const checked = e7.target.checked;
-    this.value = { ...this.value, triggerOnDue: checked };
+    this.draftValue = { ...this.draftValue, triggerOnDue: checked };
   }
   updateField(field, fieldValue) {
-    this.value = { ...this.value, [field]: fieldValue };
+    this.draftValue = { ...this.draftValue, [field]: fieldValue };
   }
   // Combines the three segments into "YYYY-MM-DD" only once all three
   // are actually present - a day and month with no year yet (etc.)
@@ -1146,7 +1156,7 @@ var TodoItemDialog = class extends i4 {
   // blocking Save here gives immediate feedback instead of a
   // round-trip error.
   get triggerOnDueBlocked() {
-    return this.value.triggerOnDue && !(this.value.dueDate && this.value.dueTime);
+    return this.draftValue.triggerOnDue && !(this.draftValue.dueDate && this.draftValue.dueTime);
   }
   // Rendered inline, full-width, right below .due-row - not as an
   // absolutely-positioned floating popup. ha-dialog's own content area
@@ -1210,7 +1220,7 @@ var TodoItemDialog = class extends i4 {
                         <input
                             id="todo-item-title"
                             type="text"
-                            .value=${this.value.title}
+                            .value=${this.draftValue.title}
                             @input=${(e7) => this.updateField("title", e7.target.value)}
                         />
                     </div>
@@ -1221,7 +1231,7 @@ var TodoItemDialog = class extends i4 {
                             id="todo-item-quantity"
                             type="text"
                             placeholder="e.g. 150g"
-                            .value=${this.value.quantity}
+                            .value=${this.draftValue.quantity}
                             @input=${(e7) => this.updateField("quantity", e7.target.value)}
                         />
                     </div>
@@ -1242,7 +1252,7 @@ var TodoItemDialog = class extends i4 {
                                 <label for="todo-item-description">Description</label>
                                 <textarea
                                     id="todo-item-description"
-                                    .value=${this.value.description}
+                                    .value=${this.draftValue.description}
                                     @input=${(e7) => this.updateField(
       "description",
       e7.target.value
@@ -1257,7 +1267,7 @@ var TodoItemDialog = class extends i4 {
                         id="todo-item-tags"
                         type="text"
                         placeholder="e.g. urgent, weekend"
-                        .value=${this.value.tags}
+                        .value=${this.draftValue.tags}
                         @input=${(e7) => this.updateField("tags", e7.target.value)}
                     />
                 </div>
@@ -1354,7 +1364,7 @@ var TodoItemDialog = class extends i4 {
                             ${this.fieldSupport.dueDateTime ? b2`
                                         <div class="complete-toggle">
                                             <ha-checkbox
-                                                .checked=${this.value.triggerOnDue}
+                                                .checked=${this.draftValue.triggerOnDue}
                                                 @change=${this.onTriggerOnDueChanged}
                                             ></ha-checkbox>
                                             <span>Trigger automation when due</span>
@@ -1671,8 +1681,11 @@ __decorateClass([
   n4({ attribute: false })
 ], TodoItemDialog.prototype, "heading", 2);
 __decorateClass([
-  n4({ attribute: false })
-], TodoItemDialog.prototype, "value", 2);
+  r5()
+], TodoItemDialog.prototype, "draftValue", 2);
+__decorateClass([
+  n4({ attribute: false, hasChanged: () => true })
+], TodoItemDialog.prototype, "value", 1);
 __decorateClass([
   n4({ attribute: false })
 ], TodoItemDialog.prototype, "fieldSupport", 2);
@@ -3086,6 +3099,7 @@ var TodoOverlayList = class extends i4 {
     this.dragGhostOffset = { x: 0, y: 0 };
     this.rowSnapshot = [];
     this.dragStartPointerPos = { x: 0, y: 0 };
+    this.dialogFormValue = EMPTY_FORM_VALUE;
     this.quickAddValue = "";
     this.saveLoadValue = EMPTY_SAVE_LOAD_VALUE;
     this.savedNames = [];
@@ -3461,10 +3475,12 @@ var TodoOverlayList = class extends i4 {
   openEditDialog(item) {
     this.dialogMode = "edit";
     this.dialogItem = item;
+    this.dialogFormValue = this.toFormValue(item);
   }
   openCreateDialog() {
     this.dialogMode = "create";
     this.dialogItem = void 0;
+    this.dialogFormValue = EMPTY_FORM_VALUE;
   }
   closeDialog() {
     this.dialogMode = void 0;
@@ -3477,20 +3493,27 @@ var TodoOverlayList = class extends i4 {
     await this.toggleComplete(this.dialogItem);
     this.closeDialog();
   }
-  dialogValue() {
-    if (this.dialogMode === "edit" && this.dialogItem) {
-      const due = this.dialogItem.due_datetime ? splitDueDateTime(this.dialogItem.due_datetime) : { date: this.dialogItem.due_date ?? "", time: "" };
-      return {
-        title: this.dialogItem.title,
-        quantity: this.dialogItem.quantity ?? "",
-        tags: this.dialogItem.tags.join(", "),
-        description: this.dialogItem.description ?? "",
-        dueDate: due.date,
-        dueTime: due.time,
-        triggerOnDue: this.dialogItem.trigger_on_due
-      };
-    }
-    return EMPTY_FORM_VALUE;
+  // Seeded ONCE into dialogFormValue when the dialog opens (see
+  // openEditDialog/openCreateDialog), never recomputed from here again
+  // while it's open. Live-reproduced bug: this used to be called fresh
+  // from render() on every parent re-render (an error banner timing
+  // out, another item elsewhere in the same list changing, a linked
+  // list's incoming sync notification - anything reactive), which
+  // handed the child dialog a brand-new .value prop built from this
+  // frozen dialogItem snapshot - silently overwriting whatever the
+  // user had already typed into title/quantity/tags/description back
+  // to the value the dialog opened with, before Save was ever pressed.
+  toFormValue(item) {
+    const due = item.due_datetime ? splitDueDateTime(item.due_datetime) : { date: item.due_date ?? "", time: "" };
+    return {
+      title: item.title,
+      quantity: item.quantity ?? "",
+      tags: item.tags.join(", "),
+      description: item.description ?? "",
+      dueDate: due.date,
+      dueTime: due.time,
+      triggerOnDue: item.trigger_on_due
+    };
   }
   async onDialogSave(e7) {
     const value = e7.detail;
@@ -3853,7 +3876,7 @@ var TodoOverlayList = class extends i4 {
             ${this.dialogMode ? b2`
                         <todo-overlay-item-dialog
                             .heading=${this.dialogMode === "edit" ? "Edit item" : "Add item"}
-                            .value=${this.dialogValue()}
+                            .value=${this.dialogFormValue}
                             .fieldSupport=${this.fieldSupport}
                             ?showDelete=${this.dialogMode === "edit"}
                             ?confirmDelete=${this.confirmDelete}
@@ -4274,6 +4297,9 @@ __decorateClass([
 __decorateClass([
   r5()
 ], TodoOverlayList.prototype, "dialogItem", 2);
+__decorateClass([
+  r5()
+], TodoOverlayList.prototype, "dialogFormValue", 2);
 __decorateClass([
   r5()
 ], TodoOverlayList.prototype, "quickAddValue", 2);

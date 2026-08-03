@@ -343,8 +343,52 @@ export class TodoItemDialog extends LitElement {
     @property({attribute: false})
     heading = "Item";
 
-    @property({attribute: false})
-    value: TodoItemFormValue = EMPTY_FORM_VALUE;
+    // What the parent last handed in - read ONLY by willUpdate() to seed
+    // draftValue exactly once (see below). Never read anywhere else.
+    private _seedValue: TodoItemFormValue = EMPTY_FORM_VALUE;
+
+    // The dialog's own live working copy - seeded exactly once from
+    // whatever `value` was set to (see willUpdate(), same gate as the
+    // date/time segments below) and never resynced from it afterwards.
+    // Every input in this dialog reads from and writes to this, not the
+    // incoming `value` assignment directly.
+    //
+    // Without this, the parent (todo-overlay-list.ts) re-renders for all
+    // sorts of reasons that have nothing to do with this dialog (another
+    // item elsewhere in the list changing, a linked list's incoming sync
+    // notification, an error banner timing out) - and since lit-html
+    // always recommits a non-primitive property value regardless of
+    // whether its reference actually changed (see PropertyPart._$setValue
+    // - only primitives are dirty-checked), every single one of those
+    // re-renders reassigned `value` right back to the object the parent
+    // was holding, clobbering whatever the user had already typed but
+    // not yet saved. Live-reproduced: editing a quantity, then having it
+    // silently revert before Save was ever pressed.
+    //
+    // `value` itself stays a real settable/readable property (rather
+    // than being renamed) purely so external code - the parent's initial
+    // seed on dialog-open, and this component's own tests - keeps reading
+    // and writing the same name it always has; the getter transparently
+    // returns the live draft instead of the frozen seed.
+    @state()
+    private draftValue: TodoItemFormValue = EMPTY_FORM_VALUE;
+
+    // hasChanged forced to always-true: Lit's default wrapping of a custom
+    // accessor pair compares the OLD value via this getter (i.e. against
+    // draftValue) - which hasn't been touched by a fresh assignment yet,
+    // so the default reference-equality check would see no change and
+    // never register 'value' in willUpdate()'s changed map at all. Since
+    // this setter only ever runs when the parent hands in a genuinely new
+    // seed (once, at dialog-open - see openEditDialog/openCreateDialog in
+    // todo-overlay-list.ts), always treating it as changed is correct.
+    @property({attribute: false, hasChanged: () => true})
+    set value(newValue: TodoItemFormValue) {
+        this._seedValue = newValue;
+    }
+
+    get value(): TodoItemFormValue {
+        return this.draftValue;
+    }
 
     @property({attribute: false})
     fieldSupport: TodoItemDialogFieldSupport = {
@@ -477,13 +521,14 @@ export class TodoItemDialog extends LitElement {
         }
 
         this.dateTimePartsInitialized = true;
+        this.draftValue = this._seedValue;
 
-        const [year, month, day] = this.value.dueDate ? this.value.dueDate.split("-") : ["", "", ""];
+        const [year, month, day] = this._seedValue.dueDate ? this._seedValue.dueDate.split("-") : ["", "", ""];
         this.dueYear = year ?? "";
         this.dueMonth = month ?? "";
         this.dueDay = day ?? "";
 
-        const [hour24Str, minute] = this.value.dueTime ? this.value.dueTime.split(":") : ["", ""];
+        const [hour24Str, minute] = this._seedValue.dueTime ? this._seedValue.dueTime.split(":") : ["", ""];
         this.dueMinute = minute ?? "";
 
         if (hour24Str) {
@@ -510,7 +555,7 @@ export class TodoItemDialog extends LitElement {
 
         this.dispatchEvent(
             new CustomEvent("dialog-save", {
-                detail: this.value,
+                detail: this.draftValue,
                 bubbles: true,
                 composed: true,
             }),
@@ -563,11 +608,11 @@ export class TodoItemDialog extends LitElement {
 
     private onTriggerOnDueChanged(e: Event) {
         const checked = (e.target as unknown as {checked: boolean}).checked;
-        this.value = {...this.value, triggerOnDue: checked};
+        this.draftValue = {...this.draftValue, triggerOnDue: checked};
     }
 
     private updateField(field: keyof Omit<TodoItemFormValue, "triggerOnDue">, fieldValue: string) {
-        this.value = {...this.value, [field]: fieldValue};
+        this.draftValue = {...this.draftValue, [field]: fieldValue};
     }
 
     // Combines the three segments into "YYYY-MM-DD" only once all three
@@ -630,7 +675,7 @@ export class TodoItemDialog extends LitElement {
     // blocking Save here gives immediate feedback instead of a
     // round-trip error.
     private get triggerOnDueBlocked(): boolean {
-        return this.value.triggerOnDue && !(this.value.dueDate && this.value.dueTime);
+        return this.draftValue.triggerOnDue && !(this.draftValue.dueDate && this.draftValue.dueTime);
     }
 
     // Rendered inline, full-width, right below .due-row - not as an
@@ -701,7 +746,7 @@ export class TodoItemDialog extends LitElement {
                         <input
                             id="todo-item-title"
                             type="text"
-                            .value=${this.value.title}
+                            .value=${this.draftValue.title}
                             @input=${(e: InputEvent) =>
                                 this.updateField("title", (e.target as HTMLInputElement).value)}
                         />
@@ -713,7 +758,7 @@ export class TodoItemDialog extends LitElement {
                             id="todo-item-quantity"
                             type="text"
                             placeholder="e.g. 150g"
-                            .value=${this.value.quantity}
+                            .value=${this.draftValue.quantity}
                             @input=${(e: InputEvent) =>
                                 this.updateField("quantity", (e.target as HTMLInputElement).value)}
                         />
@@ -741,7 +786,7 @@ export class TodoItemDialog extends LitElement {
                                 <label for="todo-item-description">Description</label>
                                 <textarea
                                     id="todo-item-description"
-                                    .value=${this.value.description}
+                                    .value=${this.draftValue.description}
                                     @input=${(e: InputEvent) =>
                                         this.updateField(
                                             "description",
@@ -759,7 +804,7 @@ export class TodoItemDialog extends LitElement {
                         id="todo-item-tags"
                         type="text"
                         placeholder="e.g. urgent, weekend"
-                        .value=${this.value.tags}
+                        .value=${this.draftValue.tags}
                         @input=${(e: InputEvent) =>
                             this.updateField("tags", (e.target as HTMLInputElement).value)}
                     />
@@ -871,7 +916,7 @@ export class TodoItemDialog extends LitElement {
                                     ? html`
                                         <div class="complete-toggle">
                                             <ha-checkbox
-                                                .checked=${this.value.triggerOnDue}
+                                                .checked=${this.draftValue.triggerOnDue}
                                                 @change=${this.onTriggerOnDueChanged}
                                             ></ha-checkbox>
                                             <span>Trigger automation when due</span>

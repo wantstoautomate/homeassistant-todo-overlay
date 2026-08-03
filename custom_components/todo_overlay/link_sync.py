@@ -50,6 +50,20 @@ _LOGGER = logging.getLogger(__name__)
 
 _SYNCED_FIELDS = ("title", "completed", "description", "due_date", "due_datetime", "quantity", "tags")
 
+# Fired directly on this instance's own event bus after successfully
+# applying an incoming remote change - bypassing TodoManager entirely,
+# unlike every other _fire_event call site in this codebase, and for
+# the same reason _apply_incoming itself never calls TodoManager (see
+# its own comment): open cards on THIS instance still need to know to
+# reload (see todo-overlay-list.ts's own subscription to
+# EVENT_ITEM_CHANGED - live-reproduced bug: without this, applying an
+# incoming quantity/tag/title change updated the backend correctly but
+# never refreshed an already-open card on the receiving side at all,
+# a direct side effect of fixing the echo loop). _on_item_changed_event
+# explicitly ignores this action so it's never mistaken for a new
+# local change to publish right back out.
+_SYNC_APPLIED_ACTION = "synced"
+
 # Caps on incoming remote fields before they're ever applied to a real
 # todo.* entity - a link message is otherwise arbitrary JSON from the
 # wire with no schema guarantee (a hostile or misbehaving peer, or a
@@ -149,7 +163,29 @@ class LinkSyncManager:
     async def _on_item_changed_event(self, event: Any) -> None:
         data = event.data
         _LOGGER.debug("_on_item_changed_event received: %s", data)
+
+        if data.get("action") == _SYNC_APPLIED_ACTION:
+            # Our own _notify_local_refresh() echoing back through this
+            # same listener - not a new local change to publish.
+            return
+
         await self.async_handle_local_change(data["entity_id"], data["item_id"], data["action"])
+
+    def _notify_local_refresh(self, entity_id: str, item_id: str, title: str) -> None:
+        """Tell any open card on THIS instance to reload after applying an
+        incoming remote change - fired directly on the event bus, never
+        through TodoManager (see _apply_incoming and the module docstring
+        for why)."""
+
+        self._hass.bus.async_fire(
+            EVENT_ITEM_CHANGED,
+            {
+                "entity_id": entity_id,
+                "item_id": item_id,
+                "title": title,
+                "action": _SYNC_APPLIED_ACTION,
+            },
+        )
 
     async def async_start_link(self, entity_id: str) -> None:
         """Begin syncing entity_id under its stored link_id - subscribes
@@ -397,6 +433,7 @@ class LinkSyncManager:
             if native_uid is not None:
                 await self._adapter.remove_item(entity_id, native_uid)
                 await self._metadata_store.remove_native_sync_mapping(entity_id, sync_id=sync_id)
+                self._notify_local_refresh(entity_id, native_uid, "")
 
             await self._metadata_store.set_link_item_state(
                 entity_id, sync_id, updated_at=updated_at, deleted_at=updated_at, fields=None,
@@ -460,6 +497,7 @@ class LinkSyncManager:
         await self._metadata_store.set_link_item_state(
             entity_id, sync_id, updated_at=updated_at, deleted_at=None, fields=fields,
         )
+        self._notify_local_refresh(entity_id, native_uid, fields.get("title", ""))
 
 
 def _parse_payload(payload: bytes) -> dict[str, Any] | None:

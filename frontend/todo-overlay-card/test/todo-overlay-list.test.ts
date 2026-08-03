@@ -1122,6 +1122,53 @@ describe("todo-overlay-list edit-dialog delete (diagnostic)", () => {
         }));
         expect(hass.serviceCalls).not.toContainEqual(expect.objectContaining({domain: "todo", service: "update_item"}));
     });
+
+    it("does not clobber an in-progress unsaved edit when a live-sync reload fires while the dialog is open", async () => {
+        // Live-reproduced bug: dialogValue() used to be recomputed fresh
+        // from the frozen dialogItem snapshot on every parent re-render,
+        // so a reload triggered by ANY reactive change while the dialog
+        // was open (here, a todo_overlay_item_event for this same
+        // entity - exactly what a linked list's incoming sync fires
+        // after this session's live-refresh fix) silently reset whatever
+        // the user had already typed back to the value the dialog opened
+        // with.
+        const {el, hass} = await renderList({
+            entity_id: ENTITY_ID,
+            items: [makeItem({id: "1", title: "Milk", quantity: "2L"})],
+        });
+
+        const treeItem = deepQueryAll(el.shadowRoot!, "todo-overlay-tree-item")[0];
+        treeItem.dispatchEvent(new CustomEvent("tree-pointer-down", {
+            detail: {id: "1"}, bubbles: true, composed: true,
+        }));
+        treeItem.dispatchEvent(new CustomEvent("tree-pointer-up", {
+            detail: {id: "1", pressDurationMs: 600, moved: false}, bubbles: true, composed: true,
+        }));
+        await el.updateComplete;
+
+        const dialog = el.shadowRoot?.querySelector("todo-overlay-item-dialog");
+        expect(dialog, "edit dialog should be open after a long press").not.toBeNull();
+
+        const quantityInput = dialog?.shadowRoot?.querySelector("#todo-item-quantity") as HTMLInputElement;
+        quantityInput.value = "5L";
+        quantityInput.dispatchEvent(new InputEvent("input", {bubbles: true, composed: true}));
+        await (dialog as unknown as {updateComplete: Promise<unknown>}).updateComplete;
+
+        expect(quantityInput.value).toBe("5L");
+
+        // A reload for this same entity arrives (e.g. an incoming linked
+        // change to some other item, or any other reactive re-render)
+        // while the dialog is still open, unsaved.
+        hass.connection.responses["todo_overlay/get_list"] = {
+            entity_id: ENTITY_ID,
+            items: [makeItem({id: "1", title: "Milk", quantity: "2L"})],
+        };
+        hass.connection.fireEvent("todo_overlay_item_event", {entity_id: ENTITY_ID, action: "synced"});
+        await settle(el);
+        await (dialog as unknown as {updateComplete: Promise<unknown>}).updateComplete;
+
+        expect(quantityInput.value).toBe("5L");
+    });
 });
 
 describe("todo-overlay-list row delete button", () => {

@@ -815,6 +815,9 @@ export class TodoOverlayList extends LitElement {
     private dialogItem?: TodoItem;
 
     @state()
+    private dialogFormValue: TodoItemFormValue = EMPTY_FORM_VALUE;
+
+    @state()
     private quickAddValue = "";
 
     @state()
@@ -1362,11 +1365,13 @@ export class TodoOverlayList extends LitElement {
     private openEditDialog(item: TodoItem) {
         this.dialogMode = "edit";
         this.dialogItem = item;
+        this.dialogFormValue = this.toFormValue(item);
     }
 
     private openCreateDialog() {
         this.dialogMode = "create";
         this.dialogItem = undefined;
+        this.dialogFormValue = EMPTY_FORM_VALUE;
     }
 
     private closeDialog() {
@@ -1388,24 +1393,30 @@ export class TodoOverlayList extends LitElement {
         this.closeDialog();
     }
 
-    private dialogValue(): TodoItemFormValue {
-        if (this.dialogMode === "edit" && this.dialogItem) {
-            const due = this.dialogItem.due_datetime
-                ? splitDueDateTime(this.dialogItem.due_datetime)
-                : {date: this.dialogItem.due_date ?? "", time: ""};
+    // Seeded ONCE into dialogFormValue when the dialog opens (see
+    // openEditDialog/openCreateDialog), never recomputed from here again
+    // while it's open. Live-reproduced bug: this used to be called fresh
+    // from render() on every parent re-render (an error banner timing
+    // out, another item elsewhere in the same list changing, a linked
+    // list's incoming sync notification - anything reactive), which
+    // handed the child dialog a brand-new .value prop built from this
+    // frozen dialogItem snapshot - silently overwriting whatever the
+    // user had already typed into title/quantity/tags/description back
+    // to the value the dialog opened with, before Save was ever pressed.
+    private toFormValue(item: TodoItem): TodoItemFormValue {
+        const due = item.due_datetime
+            ? splitDueDateTime(item.due_datetime)
+            : {date: item.due_date ?? "", time: ""};
 
-            return {
-                title: this.dialogItem.title,
-                quantity: this.dialogItem.quantity ?? "",
-                tags: this.dialogItem.tags.join(", "),
-                description: this.dialogItem.description ?? "",
-                dueDate: due.date,
-                dueTime: due.time,
-                triggerOnDue: this.dialogItem.trigger_on_due,
-            };
-        }
-
-        return EMPTY_FORM_VALUE;
+        return {
+            title: item.title,
+            quantity: item.quantity ?? "",
+            tags: item.tags.join(", "),
+            description: item.description ?? "",
+            dueDate: due.date,
+            dueTime: due.time,
+            triggerOnDue: item.trigger_on_due,
+        };
     }
 
     private async onDialogSave(e: CustomEvent<TodoItemFormValue>) {
@@ -1905,7 +1916,7 @@ export class TodoOverlayList extends LitElement {
                     ? html`
                         <todo-overlay-item-dialog
                             .heading=${this.dialogMode === "edit" ? "Edit item" : "Add item"}
-                            .value=${this.dialogValue()}
+                            .value=${this.dialogFormValue}
                             .fieldSupport=${this.fieldSupport}
                             ?showDelete=${this.dialogMode === "edit"}
                             ?confirmDelete=${this.confirmDelete}
