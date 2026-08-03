@@ -1525,10 +1525,14 @@ export class TodoOverlayList extends LitElement {
         }
 
         try {
-            await this.hass.callService("todo", "add_item", {
-                entity_id: this.entity,
-                item: title,
-            });
+            // Must go through todo_overlay/create_item (TodoManager),
+            // not the native todo.add_item service directly - live-
+            // diagnosed bug: quick-add used to call add_item straight,
+            // which silently never fires EVENT_ITEM_CHANGED (only
+            // TodoManager.create_item does), so an item added via
+            // quick-add could never sync to a linked list - no error,
+            // no log, it just never reached any of that code at all.
+            await createItem(this.hass, this.entity, {title});
 
             this.quickAddValue = "";
 

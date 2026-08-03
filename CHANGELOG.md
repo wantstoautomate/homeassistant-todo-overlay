@@ -3,6 +3,23 @@
 All notable changes to this project are documented here. Versions follow the
 integration's `manifest.json`/card's `package.json` (kept in lockstep).
 
+## 0.16.7
+
+- Found and fixed the actual bug behind linked lists not syncing,
+  root-caused via the debug logging added in 0.16.5/0.16.6 across a
+  real two-instance live test: the card's quick-add bar (the fast
+  "+" → type → Enter path) called the native `todo.add_item` service
+  directly, completely bypassing `TodoManager.create_item()` - the
+  only thing that fires `EVENT_ITEM_CHANGED`, which linked lists (and
+  the open-items sensor, and the `todo_overlay` trigger platform) all
+  depend on entirely. An item added via quick-add never reached any of
+  that code, silently - no error, nothing to log, since the bypass
+  happened one level up from everything we'd instrumented. The item
+  dialog's own "add" already went through the correct path; only the
+  quick-add bar had this gap. Now calls `todo_overlay/create_item`
+  (`TodoManager.create_item()`) like every other creation path in the
+  card.
+
 ## 0.16.6
 
 - Added a debug log at the very entry of `manager.py`'s `_fire_event`
