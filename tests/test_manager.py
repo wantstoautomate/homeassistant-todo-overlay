@@ -1101,6 +1101,34 @@ async def test_manager_get_list_merges_duplicate_titles_with_quantities():
 
 
 @pytest.mark.asyncio
+async def test_manager_get_list_merge_fires_a_removed_event_for_the_losing_duplicate():
+    # Previously silent - on a linked list, this specific combination
+    # (two same-titled items where at least one has a quantity) never
+    # propagated the removal to the peer at all, since nothing here
+    # ever fired an event for it.
+    hass = _FakeEventHass()
+    adapter = FakeAdapter(items=[
+        TodoItem(id="1", title="Salami", completed=False),
+        TodoItem(id="2", title="Salami", completed=False),
+    ])
+    metadata_store = FakeMetadataStore({
+        "1": ItemPosition(parent_id=None, order=0),
+        "2": ItemPosition(parent_id=None, order=1),
+    })
+    metadata_store._quantities = {"1": "150g", "2": "200g"}
+    manager = TodoManager(adapter=adapter, metadata_store=metadata_store, hass=hass)
+
+    await manager.get_list("todo.shopping")
+
+    assert len(hass.calls) == 1
+    event, data = hass.calls[0]
+    assert event == EVENT_ITEM_CHANGED
+    assert data == {
+        "entity_id": "todo.shopping", "item_id": "2", "title": "Salami", "action": "removed",
+    }
+
+
+@pytest.mark.asyncio
 async def test_manager_get_list_leaves_plain_duplicate_titles_alone():
 
     # Neither has a quantity - nothing to combine, and no shopping-list
