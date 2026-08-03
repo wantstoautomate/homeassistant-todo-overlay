@@ -194,6 +194,137 @@ async def test_manager_move_item_fires_a_moved_event():
     assert data["action"] == "moved"
 
 
+class _FakeEventHass:
+    """Shared minimal FakeHass for the event-firing tests below - see
+    test_manager_move_item_fires_a_moved_event's own inline version,
+    factored out since several tests below need the identical shape."""
+
+    def __init__(self) -> None:
+        self.calls: list[tuple] = []
+
+        outer = self
+
+        class bus:
+            @staticmethod
+            def async_fire(event, data):
+                outer.calls.append((event, data))
+
+        self.bus = bus
+
+
+@pytest.mark.asyncio
+async def test_manager_update_item_fires_updated_event_and_updates_native_fields():
+    # Previously the frontend called the native todo.update_item service
+    # directly for this, which never fired any event at all -
+    # live-diagnosed: title/description/due-date edits never propagated
+    # to a linked peer or refreshed other open cards.
+    hass = _FakeEventHass()
+    adapter = FakeAdapter(items=[TodoItem(id="1", title="Milk", completed=False)])
+    manager = TodoManager(adapter=adapter, metadata_store=FakeMetadataStore(), hass=hass)
+
+    await manager.update_item(entity_id="todo.shopping", item_id="1", title="Oat milk")
+
+    todo_list = await manager.get_list("todo.shopping")
+    assert todo_list.items[0].title == "Oat milk"
+
+    assert len(hass.calls) == 1
+    event, data = hass.calls[0]
+    assert event == EVENT_ITEM_CHANGED
+    assert data == {
+        "entity_id": "todo.shopping", "item_id": "1", "title": "Oat milk", "action": "updated",
+    }
+
+
+@pytest.mark.asyncio
+async def test_manager_delete_item_fires_removed_event_and_removes_item():
+    # Previously the frontend called the native todo.remove_item service
+    # directly for this (both the edit dialog's Delete button and each
+    # row's own delete cross) - live-diagnosed: a deletion never
+    # propagated to a linked peer, leaving a ghost item there forever.
+    hass = _FakeEventHass()
+    adapter = FakeAdapter(items=[TodoItem(id="1", title="Milk", completed=False)])
+    manager = TodoManager(adapter=adapter, metadata_store=FakeMetadataStore(), hass=hass)
+
+    await manager.delete_item(entity_id="todo.shopping", item_id="1")
+
+    todo_list = await manager.get_list("todo.shopping")
+    assert todo_list.items == []
+
+    assert len(hass.calls) == 1
+    event, data = hass.calls[0]
+    assert event == EVENT_ITEM_CHANGED
+    assert data == {
+        "entity_id": "todo.shopping", "item_id": "1", "title": "Milk", "action": "removed",
+    }
+
+
+@pytest.mark.asyncio
+async def test_manager_set_tags_fires_tags_replaced_event():
+    # set_tags is called correctly by the frontend (via
+    # todo_overlay/set_tags), but the method itself never fired any
+    # event at all - a different flavor of the same underlying gap:
+    # editing tags via the dialog never propagated to a linked peer.
+    hass = _FakeEventHass()
+    adapter = FakeAdapter(items=[TodoItem(id="1", title="Milk", completed=False)])
+    manager = TodoManager(adapter=adapter, metadata_store=FakeMetadataStore(), hass=hass)
+
+    await manager.set_tags(entity_id="todo.shopping", item_id="1", tags=["urgent", "dairy"])
+
+    assert len(hass.calls) == 1
+    event, data = hass.calls[0]
+    assert event == EVENT_ITEM_CHANGED
+    assert data == {
+        "entity_id": "todo.shopping", "item_id": "1", "title": "Milk",
+        "action": "tags_replaced", "tags": ["urgent", "dairy"],
+    }
+
+
+@pytest.mark.asyncio
+async def test_manager_restore_completed_fires_events_for_each_restored_item():
+    hass = _FakeEventHass()
+    adapter = FakeAdapter(items=[
+        TodoItem(id="1", title="Milk", completed=True),
+        TodoItem(id="2", title="Eggs", completed=False),
+    ])
+    manager = TodoManager(adapter=adapter, metadata_store=FakeMetadataStore(), hass=hass)
+
+    await manager.restore_completed("todo.shopping", [
+        {"id": "1", "completed": False},
+        {"id": "2", "completed": True},
+    ])
+
+    actions = {(data["item_id"], data["action"]) for _event, data in hass.calls}
+    assert actions == {("1", "uncompleted"), ("2", "completed")}
+
+
+@pytest.mark.asyncio
+async def test_manager_load_list_fires_created_event_for_new_items():
+    # _create_snapshot_nodes previously never fired any event for newly
+    # created items at all - none of a loaded template's items would
+    # ever propagate to a linked peer, trigger todo_overlay.created
+    # automations, or refresh the open-items sensor for another viewer.
+    hass = _FakeEventHass()
+    adapter = FakeAdapter(items=[])
+    metadata_store = FakeMetadataStore()
+    manager = TodoManager(adapter=adapter, metadata_store=metadata_store, hass=hass)
+
+    await metadata_store.save_snapshot("Weekly shop", [
+        {
+            "title": "Milk", "description": None, "due_date": None, "due_datetime": None,
+            "quantity": "2L", "tags": ["dairy"], "trigger_on_due": False, "completed": False,
+            "children": [],
+        },
+    ])
+
+    await manager.load_list(entity_id="todo.shopping", name="Weekly shop", mode="merge")
+
+    created = [data for _event, data in hass.calls if data["action"] == "created"]
+    assert len(created) == 1
+    assert created[0]["title"] == "Milk"
+    assert created[0]["quantity"] == "2L"
+    assert created[0]["tags"] == ["dairy"]
+
+
 @pytest.mark.asyncio
 async def test_manager_move_item_before_reorders_siblings():
 

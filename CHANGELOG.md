@@ -3,6 +3,46 @@
 All notable changes to this project are documented here. Versions follow the
 integration's `manifest.json`/card's `package.json` (kept in lockstep).
 
+## 0.16.8
+
+Full audit of every item mutation in the card, prompted by the user
+asking "does this work for delete/reorder/load too?" before testing
+0.16.7 further - a good instinct, since it turned up several more
+instances of the same underlying problem: an action correctly reaching
+`TodoManager` isn't automatically enough, since `EVENT_ITEM_CHANGED`
+still has to actually be fired for linked lists (and the open-items
+sensor, and the automation trigger platform) to see it at all.
+
+- **Delete** (both the edit dialog's Delete button and each row's own
+  delete cross) called the native `todo.remove_item` service directly,
+  same bypass as 0.16.7's quick-add bug - a deletion could never
+  propagate to a linked peer, leaving a ghost item there forever.
+  There was no `todo_overlay`-level delete at all to route through
+  instead - added `TodoManager.delete_item()` and
+  `todo_overlay/delete_item`, firing `"removed"`.
+- **Editing an existing item's title/description/due date** (the edit
+  dialog's Save) also called the native `todo.update_item` service
+  directly, for the same reason - added `TodoManager.update_item()` and
+  `todo_overlay/update_item`, firing `"updated"` (new action - doesn't
+  match any of the 8 defined automation triggers, which is intentional;
+  it exists for sync/the sensor, not as a new trigger type).
+- **Replacing an item's tag list** (the dialog's tag field) already
+  went through the correct `todo_overlay/set_tags` call - but
+  `TodoManager.set_tags()` itself never fired any event at all. Now
+  fires `"tags_replaced"`.
+- **Loading a saved list** never fired `"created"` for any of the new
+  items it creates - fixed in `_create_snapshot_nodes`.
+- **Undoing a completion cascade** (`restore_completed`) never fired
+  `"completed"`/`"uncompleted"` for the restored items - fixed.
+
+Confirmed already correct and unaffected: creating an item (dialog and,
+as of 0.16.7, quick-add), quantity changes, adding/removing individual
+tags, completing/uncompleting, reordering (0.16.3), and cross-entity
+drag-and-drop.
+
+Full suites pass: 239 backend (7 new), 176 frontend (1 new, 2 rewritten
+to assert the correct websocket command); tsc clean, hassfest clean.
+
 ## 0.16.7
 
 - Found and fixed the actual bug behind linked lists not syncing,

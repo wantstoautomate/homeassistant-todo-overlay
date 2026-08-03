@@ -194,11 +194,23 @@ class CompletionMixin:
         """Write back exact prior completion states, e.g. to undo a cascade."""
 
         async with self._lock_for(entity_id):
+            items = await self._adapter.get_items(entity_id)
+            item_lookup = {item.id: item for item in items}
+
             for change in changes:
                 await self._adapter.set_completed(
                     entity_id,
                     change["id"],
                     change["completed"],
+                )
+
+        for change in changes:
+            item = item_lookup.get(change["id"])
+
+            if item is not None:
+                self._fire_event(
+                    entity_id, change["id"], item.title,
+                    "completed" if change["completed"] else "uncompleted",
                 )
 
     async def clear_completed(

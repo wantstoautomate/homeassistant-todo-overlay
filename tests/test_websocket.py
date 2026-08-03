@@ -312,6 +312,41 @@ async def test_websocket_create_item_returns_new_id():
 
 
 @pytest.mark.asyncio
+async def test_websocket_update_item_updates_native_fields():
+    manager = make_manager(items=[TodoItem(id="1", title="Milk", completed=False)])
+
+    connection = await call_handler(
+        websocket.websocket_update_item, manager,
+        {"entity_id": ENTITY_ID, "item_id": "1", "title": "Oat milk"},
+    )
+
+    assert connection.results == [(1, None)]
+
+    list_connection = await call_handler(
+        websocket.websocket_get_list, manager, {"entity_id": ENTITY_ID, "group_completed": False},
+    )
+    items = list_connection.results[0][1]["items"]
+    assert items[0]["title"] == "Oat milk"
+
+
+@pytest.mark.asyncio
+async def test_websocket_delete_item_removes_it():
+    manager = make_manager(items=[TodoItem(id="1", title="Milk", completed=False)])
+
+    connection = await call_handler(
+        websocket.websocket_delete_item, manager,
+        {"entity_id": ENTITY_ID, "item_id": "1"},
+    )
+
+    assert connection.results == [(1, None)]
+
+    list_connection = await call_handler(
+        websocket.websocket_get_list, manager, {"entity_id": ENTITY_ID, "group_completed": False},
+    )
+    assert list_connection.results[0][1]["items"] == []
+
+
+@pytest.mark.asyncio
 async def test_websocket_set_quantity_success():
     manager = make_manager()
 
@@ -468,6 +503,8 @@ def test_async_register_websocket_registers_every_handler():
         "todo_overlay/list_saved",
         "todo_overlay/delete_saved_list",
         "todo_overlay/create_item",
+        "todo_overlay/update_item",
+        "todo_overlay/delete_item",
         "todo_overlay/set_quantity",
         "todo_overlay/set_tags",
         "todo_overlay/add_tag",

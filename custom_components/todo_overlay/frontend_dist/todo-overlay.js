@@ -733,6 +733,24 @@ async function createItem(hass, entityId, fields) {
   });
   return result.id;
 }
+async function updateItem(hass, entityId, itemId, fields) {
+  await hass.connection.sendMessagePromise({
+    type: "todo_overlay/update_item",
+    entity_id: entityId,
+    item_id: itemId,
+    title: fields.title,
+    description: fields.description,
+    due_date: fields.dueDate,
+    due_datetime: fields.dueDatetime
+  });
+}
+async function deleteItem(hass, entityId, itemId) {
+  await hass.connection.sendMessagePromise({
+    type: "todo_overlay/delete_item",
+    entity_id: entityId,
+    item_id: itemId
+  });
+}
 async function setQuantity(hass, entityId, itemId, quantity) {
   await hass.connection.sendMessagePromise({
     type: "todo_overlay/set_quantity",
@@ -3489,20 +3507,12 @@ var TodoOverlayList = class extends i4 {
     const tags = value.tags.split(",").map((tag) => tag.trim()).filter((tag) => tag.length > 0);
     try {
       if (this.dialogMode === "edit" && this.dialogItem) {
-        const serviceData = {
-          entity_id: this.entity,
-          item: this.dialogItem.id,
-          rename: value.title
-        };
-        if (description !== void 0) {
-          serviceData.description = description;
-        }
-        if (dueDatetime) {
-          serviceData.due_datetime = dueDatetime;
-        } else if (dueDate) {
-          serviceData.due_date = dueDate;
-        }
-        await this.hass.callService("todo", "update_item", serviceData);
+        await updateItem(this.hass, this.entity, this.dialogItem.id, {
+          title: value.title,
+          description,
+          dueDate,
+          dueDatetime
+        });
         await setQuantity(this.hass, this.entity, this.dialogItem.id, quantity);
         await setTags(this.hass, this.entity, this.dialogItem.id, tags);
         await setTriggerOnDue(this.hass, this.entity, this.dialogItem.id, value.triggerOnDue);
@@ -3528,10 +3538,7 @@ var TodoOverlayList = class extends i4 {
       return;
     }
     try {
-      await this.hass.callService("todo", "remove_item", {
-        entity_id: this.entity,
-        item: this.dialogItem.id
-      });
+      await deleteItem(this.hass, this.entity, this.dialogItem.id);
       await this.load();
     } catch (err) {
       this.reportError("deleting the item", err);
@@ -3541,13 +3548,10 @@ var TodoOverlayList = class extends i4 {
   // A row's own delete cross (see todo-tree-item.ts - leaf rows only,
   // already confirmed there before this ever fires) rather than the
   // edit dialog's Delete button - a separate, more direct path to the
-  // same native service call.
+  // same underlying delete.
   async onDeleteItem(e7) {
     try {
-      await this.hass.callService("todo", "remove_item", {
-        entity_id: this.entity,
-        item: e7.detail.id
-      });
+      await deleteItem(this.hass, this.entity, e7.detail.id);
       await this.load();
     } catch (err) {
       this.reportError("deleting the item", err);
