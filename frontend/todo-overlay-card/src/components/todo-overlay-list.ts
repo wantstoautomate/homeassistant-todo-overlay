@@ -1190,17 +1190,40 @@ export class TodoOverlayList extends LitElement {
         // hovered", only hoverEntityId can (see onGlobalPointerUp).
         this.hoverEntityId = valid ? hit.entityId : undefined;
 
+        const targetChanged = this.hoverId !== previousHoverId || this.hoverPlacement !== previousHoverPlacement;
+
         // A light haptic tick whenever the actual target changes - mobile
         // physical confirmation that doesn't depend on catching a visual
         // highlight mid-gesture (see the collapsed-parent fix earlier in
         // this file for exactly how easy that visual catch is to miss).
         // Silently does nothing wherever unsupported (desktop, iOS
         // Safari) - navigator.vibrate simply isn't defined there.
-        if (
-            e.pointerType !== "mouse"
-            && (this.hoverId !== previousHoverId || this.hoverPlacement !== previousHoverPlacement)
-        ) {
+        if (e.pointerType !== "mouse" && targetChanged) {
             navigator.vibrate?.(10);
+        }
+
+        if (targetChanged) {
+            // The gap-before/gap-after/drop-inside class this target
+            // change just applied (or removed) opens/closes a real
+            // margin on some row, reflowing everything below it - but
+            // rowSnapshot is a frozen snapshot (see findDropTarget's own
+            // comment for why), so it goes stale for the rest of the
+            // drag the moment that happens. Left uncorrected, every row
+            // below the open gap keeps testing against a rect that no
+            // longer matches where it actually sits - live-reported: the
+            // orange drop-target highlight's effective hit-zone drifted
+            // upward relative to the row it's visually drawn on, out of
+            // sync with the browser's own (always-accurate) :hover.
+            // Re-snapshotting after the CSS margin transition (150ms -
+            // matches .row's own `transition: ... margin 150ms ease`)
+            // has settled brings it back in sync - matching the same
+            // snapshot-after-reflow idiom onDragStart already uses for
+            // the initial lift.
+            setTimeout(() => {
+                if (this.draggedId !== undefined) {
+                    this.snapshotRows();
+                }
+            }, 150);
         }
 
         this.broadcastDragHover();

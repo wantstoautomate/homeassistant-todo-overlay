@@ -719,6 +719,68 @@ describe("todo-overlay-list zone hysteresis", () => {
     });
 });
 
+// Live-reported: "the orange hitbox should be the same as the grey hit
+// box [the browser's own :hover] - the orange hitbox seems fractionally
+// high." Root cause: rowSnapshot is a deliberately frozen snapshot (see
+// findDropTarget's own comment on why), but the gap-before/gap-after/
+// drop-inside classes a target change applies open a REAL CSS margin
+// that reflows every row below it - so the frozen rect for any row
+// below an open gap silently goes stale (reports a position higher
+// than where the row actually now sits) for the rest of the drag. A
+// re-snapshot after the CSS margin transition settles brings hit-testing
+// back in sync with what :hover (and the user's eyes) are seeing.
+describe("todo-overlay-list re-snapshots after a gap opens, to stay in sync with :hover", () => {
+    it("re-snapshots 150ms after a target change, correcting for the reflow that change's own gap caused", async () => {
+        const {el} = await renderList({
+            entity_id: ENTITY_ID,
+            items: [makeItem({id: "1", title: "Only"}), makeItem({id: "2", title: "Dragged"})],
+        });
+
+        const rows = deepQueryAll(el.shadowRoot!, "todo-overlay-tree-item") as (Element & {shadowRoot: ShadowRoot})[];
+        const rowOneEl = rows[0].shadowRoot.querySelector(".row")!;
+        mockRect(rowOneEl, {top: 0, bottom: 40, height: 40});
+
+        const draggable = el as unknown as DraggableList & {hoverId?: string; hoverPlacement?: string};
+
+        vi.useFakeTimers({shouldAdvanceTime: true});
+
+        try {
+            draggable.draggedId = "2";
+            draggable.onDragStart(new CustomEvent("tree-drag-start", {
+                detail: {rect: undefined, pointerX: 20, pointerY: 100, grabOffsetX: 0, grabOffsetY: 0},
+            }));
+
+            // Top zone of row "1" - "before 1", opening a gap-before on
+            // it (a real target change, so a re-snapshot is now pending).
+            draggable.onGlobalPointerMove(new PointerEvent("pointermove", {clientX: 20, clientY: 5}));
+            expect(draggable.hoverId).toBe("1");
+            expect(draggable.hoverPlacement).toBe("before");
+
+            // Simulate the live reflow that gap-before's margin-top:52px
+            // actually causes - row "1" now visually sits at 52-92, not
+            // its original 0-40. rowSnapshot doesn't know this yet.
+            mockRect(rowOneEl, {top: 52, bottom: 92, height: 40});
+
+            // Squarely "inside" row 1's real, current position (52-92) -
+            // but against the still-stale snapshot (0-40), this is miles
+            // past the bottom, resolving to "after" instead.
+            draggable.onGlobalPointerMove(new PointerEvent("pointermove", {clientX: 20, clientY: 72}));
+            expect(draggable.hoverPlacement, "should still be using the stale, pre-reflow snapshot").toBe("after");
+
+            // Let the pending re-snapshot(s) fire.
+            await vi.advanceTimersByTimeAsync(200);
+
+            // Same physical cursor position as before - now resolves
+            // correctly against row 1's actual, current position.
+            draggable.onGlobalPointerMove(new PointerEvent("pointermove", {clientX: 20, clientY: 73}));
+            expect(draggable.hoverId).toBe("1");
+            expect(draggable.hoverPlacement, "should now be using the refreshed, post-reflow snapshot").toBe("inside");
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+});
+
 // Reported alongside the intuitiveness feedback above: a physical
 // confirmation that doesn't depend on catching a visual highlight
 // mid-gesture - particularly useful on mobile, where the finger itself

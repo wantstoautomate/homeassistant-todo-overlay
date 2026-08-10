@@ -3229,8 +3229,16 @@ var TodoOverlayList = class extends i4 {
       this.hoverPlacement = valid ? hit.placement : void 0;
       this.hoverDepth = valid ? hit.depth : 0;
       this.hoverEntityId = valid ? hit.entityId : void 0;
-      if (e7.pointerType !== "mouse" && (this.hoverId !== previousHoverId || this.hoverPlacement !== previousHoverPlacement)) {
+      const targetChanged = this.hoverId !== previousHoverId || this.hoverPlacement !== previousHoverPlacement;
+      if (e7.pointerType !== "mouse" && targetChanged) {
         navigator.vibrate?.(10);
+      }
+      if (targetChanged) {
+        setTimeout(() => {
+          if (this.draggedId !== void 0) {
+            this.snapshotRows();
+          }
+        }, 150);
       }
       this.broadcastDragHover();
     };
