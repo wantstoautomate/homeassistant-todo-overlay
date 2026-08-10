@@ -56,6 +56,11 @@ export class TodoTree extends LitElement {
     @property({attribute: false})
     hoverPlacement?: Placement;
 
+    // How deep the CURRENT target sits - see todo-overlay-list.ts's own
+    // hoverDepth for what drives this.
+    @property({attribute: false})
+    hoverDepth = 0;
+
     // True while a drag is hovering this (empty) list as its drop
     // target - see todo-overlay-list.ts's isEmptyDropTarget getter, the
     // only place this is ever set true.
@@ -102,6 +107,7 @@ export class TodoTree extends LitElement {
                                     .draggedId=${this.draggedId}
                                     .hoverId=${this.hoverId}
                                     .hoverPlacement=${this.hoverPlacement}
+                                    .hoverDepth=${this.hoverDepth}
                                     .hideCompleteForParents=${this.hideCompleteForParents}
                                     .showCheckboxes=${this.showCheckboxes}
                                     .confirmDelete=${this.confirmDelete}

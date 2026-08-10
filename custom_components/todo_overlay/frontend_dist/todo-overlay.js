@@ -2003,6 +2003,10 @@ TodoSaveLoadDialog = __decorateClass([
 
 // src/components/todo-tree-item.ts
 var BEFORE_AFTER_ZONE = 0.3;
+var ROW_INDENT_PX = 20;
+var rowIndentPx = r(`${ROW_INDENT_PX}px`);
+var DROP_GAP_PX = 52;
+var dropGapPx = r(`${DROP_GAP_PX}px`);
 var MOVE_CANCEL_THRESHOLD_PX = 6;
 var HOLD_RIPPLE_SIZE = 72;
 var holdRippleSizePx = r(`${HOLD_RIPPLE_SIZE}px`);
@@ -2069,6 +2073,7 @@ function formatDue(item) {
 var TodoTreeItem = class extends i4 {
   constructor() {
     super(...arguments);
+    this.hoverDepth = 0;
     this.hideCompleteForParents = false;
     this.showCheckboxes = false;
     this.confirmDelete = true;
@@ -2297,7 +2302,10 @@ var TodoTreeItem = class extends i4 {
       "drop-inside": isDropTarget && this.hoverPlacement === "inside",
       "gap-before": isDropTarget && this.hoverPlacement === "before",
       "gap-after": isDropTarget && this.hoverPlacement === "after",
-      completed: this.item.completed
+      completed: this.item.completed,
+      // Any drag from THIS list being active, not just this row's
+      // own - see .row:not(.drag-active):hover's own comment.
+      "drag-active": this.draggedId !== void 0
     };
     const due = formatDue(this.item);
     const hasMeta = due || this.item.description || this.item.tags.length > 0;
@@ -2310,6 +2318,21 @@ var TodoTreeItem = class extends i4 {
 
                     @pointerdown=${this.pointerDown}
                 >
+                    ${// Reordering (before/after) shows the shadow box in
+    // the gap it just opened; becoming a child ("inside")
+    // shows no shadow box at all - the bounding-box
+    // outline on THIS row (see rowClasses' drop-inside)
+    // is the whole highlight for that case.
+    isDropTarget && this.hoverPlacement !== "inside" ? b2`
+                                <div
+                                    class=${e6({
+      "drop-shadow-box": true,
+      above: this.hoverPlacement === "before",
+      below: this.hoverPlacement === "after"
+    })}
+                                    style=${o6({ left: `${this.hoverDepth * ROW_INDENT_PX}px` })}
+                                ></div>
+                            ` : ""}
                     ${isBeingDragged ? "" : b2`
                                 ${this.hasChildren ? b2`
                                             <button
@@ -2405,6 +2428,7 @@ var TodoTreeItem = class extends i4 {
                                             .draggedId=${this.draggedId}
                                             .hoverId=${this.hoverId}
                                             .hoverPlacement=${this.hoverPlacement}
+                                            .hoverDepth=${this.hoverDepth}
                                             .hideCompleteForParents=${this.hideCompleteForParents}
                                             .showCheckboxes=${this.showCheckboxes}
                                             .confirmDelete=${this.confirmDelete}
@@ -2430,7 +2454,7 @@ TodoTreeItem.styles = i`
         ul {
             list-style: none;
             margin: 0;
-            padding-inline-start: 20px;
+            padding-inline-start: ${rowIndentPx};
         }
 
         .row {
@@ -2448,7 +2472,15 @@ TodoTreeItem.styles = i`
             transition: background-color 0.15s ease, outline-color 0.15s ease, margin 150ms ease;
         }
 
-        .row:hover {
+        /* Suppressed while a drag is active (see rowClasses' drag-active) -
+           :hover tracks the literal cursor position, which is a
+           genuinely different (and, once hysteresis/gap-correction are
+           involved, not always identical) thing from the actual resolved
+           drop target the orange/gap highlighting already shows. Live-
+           reported as confusing to have both visible and drifting apart
+           at once - the drop-target highlight is the only "where is this
+           going" signal needed once a drag is underway. */
+        .row:not(.drag-active):hover {
             background: rgba(var(--rgb-primary-text-color, 0, 0, 0), 0.06);
         }
 
@@ -2477,6 +2509,14 @@ TodoTreeItem.styles = i`
             opacity: 0.45;
         }
 
+        /* "inside" (becoming this row's child) draws a bounding box
+           around the row itself, rather than opening a gap - dragging
+           OVER an existing parent to nest under it is a fundamentally
+           different gesture from reordering past a sibling, and reads
+           more clearly as "drop into this container" when the container
+           itself is outlined, the same way a file manager highlights a
+           folder you're dragging onto rather than showing a shadow copy
+           of the file inside it. */
         .row.drop-inside {
             outline-color: var(--accent-color, var(--primary-color));
             background: rgba(var(--rgb-accent-color, 255, 152, 0), 0.08);
@@ -2485,13 +2525,43 @@ TodoTreeItem.styles = i`
         /* Instead of a static line, the sibling next to the drop point
            opens a live gap (matching the space a lifted row leaves
            behind), so the list visibly reflows to show where the item
-           would land rather than just marking the spot. */
+           would land rather than just marking the spot. Reordering only -
+           see .row.drop-inside above for why becoming a child looks
+           different. */
         .row.gap-before {
-            margin-top: 52px;
+            margin-top: ${dropGapPx};
         }
 
         .row.gap-after {
-            margin-bottom: 52px;
+            margin-bottom: ${dropGapPx};
+        }
+
+        /* The actual "it'll go here" preview for a reorder (before/after
+           only - see .row.drop-inside above), rendered into whichever
+           gap the row above just opened - a dashed placeholder the size
+           of a real row, indented to match the target's own depth.
+           Absolutely positioned against the row (which has its own
+           position:relative) so it overlays the margin gap without
+           adding any height of its own - the margin is what actually
+           reflows the list; this just fills the space it opened. */
+        .drop-shadow-box {
+            position: absolute;
+            left: 0;
+            right: 8px;
+            height: 44px;
+            border: 2px dashed var(--accent-color, var(--primary-color));
+            border-radius: 4px;
+            background: rgba(var(--rgb-accent-color, 255, 152, 0), 0.08);
+            transition: left 100ms ease;
+            pointer-events: none;
+        }
+
+        .drop-shadow-box.above {
+            top: -48px;
+        }
+
+        .drop-shadow-box.below {
+            bottom: -48px;
         }
 
         .content {
@@ -2797,6 +2867,9 @@ __decorateClass([
 ], TodoTreeItem.prototype, "hoverPlacement", 2);
 __decorateClass([
   n4({ attribute: false })
+], TodoTreeItem.prototype, "hoverDepth", 2);
+__decorateClass([
+  n4({ attribute: false })
 ], TodoTreeItem.prototype, "hideCompleteForParents", 2);
 __decorateClass([
   n4({ attribute: false })
@@ -2834,6 +2907,7 @@ var TodoTree = class extends i4 {
   constructor() {
     super(...arguments);
     this.items = [];
+    this.hoverDepth = 0;
     this.emptyDropHighlight = false;
     this.hideCompleteForParents = false;
     this.showCheckboxes = false;
@@ -2861,6 +2935,7 @@ var TodoTree = class extends i4 {
                                     .draggedId=${this.draggedId}
                                     .hoverId=${this.hoverId}
                                     .hoverPlacement=${this.hoverPlacement}
+                                    .hoverDepth=${this.hoverDepth}
                                     .hideCompleteForParents=${this.hideCompleteForParents}
                                     .showCheckboxes=${this.showCheckboxes}
                                     .confirmDelete=${this.confirmDelete}
@@ -2920,6 +2995,9 @@ __decorateClass([
 __decorateClass([
   n4({ attribute: false })
 ], TodoTree.prototype, "hoverPlacement", 2);
+__decorateClass([
+  n4({ attribute: false })
+], TodoTree.prototype, "hoverDepth", 2);
 __decorateClass([
   n4({ attribute: false })
 ], TodoTree.prototype, "emptyDropHighlight", 2);
@@ -2986,11 +3064,12 @@ var REORDER_TOGGLE_ICON = b2`
 `;
 var ITEM_CHANGED_EVENT = "todo_overlay_item_event";
 var HOVER_DEAD_ZONE_PX = 12;
-function collectAllRows(root, currentEntity) {
+function collectAllRows(root, currentEntity, currentDepth = 0) {
   const rows = [];
   for (const el of Array.from(root.querySelectorAll("*"))) {
     const itemEl = el;
-    if (el.localName === "todo-overlay-tree-item" && itemEl.item && currentEntity) {
+    const isTreeItem = el.localName === "todo-overlay-tree-item" && Boolean(itemEl.item);
+    if (isTreeItem && currentEntity) {
       const rowEl = itemEl.shadowRoot?.querySelector(".row");
       if (rowEl) {
         const hasVisibleChildren = itemEl.shadowRoot?.querySelector("ul") != null;
@@ -2998,7 +3077,8 @@ function collectAllRows(root, currentEntity) {
           id: itemEl.item.id,
           entityId: currentEntity,
           children: hasVisibleChildren ? itemEl.item.children : [],
-          rect: rowEl.getBoundingClientRect()
+          rect: rowEl.getBoundingClientRect(),
+          depth: currentDepth
         });
       }
     }
@@ -3009,33 +3089,68 @@ function collectAllRows(root, currentEntity) {
           id: void 0,
           entityId: currentEntity,
           children: [],
-          rect: emptyZone.getBoundingClientRect()
+          rect: emptyZone.getBoundingClientRect(),
+          depth: 0
         });
       }
     }
     if (el.shadowRoot) {
-      const nextEntity = el.localName === "todo-overlay-list" ? el.entity : currentEntity;
-      rows.push(...collectAllRows(el.shadowRoot, nextEntity));
+      const isList = el.localName === "todo-overlay-list";
+      const nextEntity = isList ? el.entity : currentEntity;
+      const nextDepth = isList ? 0 : isTreeItem ? currentDepth + 1 : currentDepth;
+      rows.push(...collectAllRows(el.shadowRoot, nextEntity, nextDepth));
     }
   }
   return rows;
 }
-function resolvePlacement(rowId, rowChildren, relativeY) {
+var ZONE_HYSTERESIS = 0.05;
+function resolvePlacement(rowId, rowChildren, relativeY, sticky) {
   if (rowChildren.length > 0) {
     if (relativeY < BEFORE_AFTER_ZONE) {
       return { id: rowId, placement: "before" };
     }
     return { id: rowChildren[0].id, placement: "before" };
   }
-  if (relativeY < BEFORE_AFTER_ZONE) {
+  const beforeBoundary = sticky?.id === rowId && sticky.placement === "before" ? BEFORE_AFTER_ZONE + ZONE_HYSTERESIS : BEFORE_AFTER_ZONE - ZONE_HYSTERESIS;
+  const afterBoundary = sticky?.id === rowId && sticky.placement === "after" ? 1 - BEFORE_AFTER_ZONE - ZONE_HYSTERESIS : 1 - BEFORE_AFTER_ZONE + ZONE_HYSTERESIS;
+  if (relativeY < beforeBoundary) {
     return { id: rowId, placement: "before" };
   }
-  if (relativeY > 1 - BEFORE_AFTER_ZONE) {
+  if (relativeY > afterBoundary) {
     return { id: rowId, placement: "after" };
   }
   return { id: rowId, placement: "inside" };
 }
-function findDropTarget(y3, rows) {
+function shiftRectDown(rect, amount) {
+  return {
+    top: rect.top + amount,
+    bottom: rect.bottom + amount,
+    left: rect.left,
+    right: rect.right,
+    width: rect.width,
+    height: rect.height,
+    x: rect.x,
+    y: rect.y + amount,
+    toJSON: rect.toJSON
+  };
+}
+function applyGapCorrection(rows, sticky) {
+  if (!sticky || sticky.placement === "inside") {
+    return rows;
+  }
+  const sortedByTop = [...rows].sort((a3, b3) => a3.rect.top - b3.rect.top);
+  const targetIndex = sortedByTop.findIndex((r6) => r6.id === sticky.id);
+  if (targetIndex === -1) {
+    return rows;
+  }
+  const shiftFromIndex = sticky.placement === "before" ? targetIndex : targetIndex + 1;
+  const shiftedIds = new Set(sortedByTop.slice(shiftFromIndex).map((r6) => r6.id));
+  if (shiftedIds.size === 0) {
+    return rows;
+  }
+  return rows.map((row) => shiftedIds.has(row.id) ? { ...row, rect: shiftRectDown(row.rect, DROP_GAP_PX) } : row);
+}
+function findDropTarget(y3, rows, sticky) {
   if (rows.length === 0) {
     return void 0;
   }
@@ -3049,10 +3164,16 @@ function findDropTarget(y3, rows) {
     }
   }
   if (nearest.id === void 0) {
-    return { id: void 0, entityId: nearest.entityId, placement: "inside" };
+    return { id: void 0, entityId: nearest.entityId, placement: "inside", depth: 0 };
   }
   const relativeY = (y3 - nearest.rect.top) / nearest.rect.height;
-  return { ...resolvePlacement(nearest.id, nearest.children, relativeY), entityId: nearest.entityId };
+  const resolved = {
+    ...resolvePlacement(nearest.id, nearest.children, relativeY, sticky),
+    entityId: nearest.entityId
+  };
+  const resolvedRow = rows.find((r6) => r6.id === resolved.id) ?? nearest;
+  const depth = resolvedRow.depth + (resolved.placement === "inside" ? 1 : 0);
+  return { ...resolved, depth };
 }
 function findItem(items, id) {
   for (const item of items) {
@@ -3110,6 +3231,7 @@ var TodoOverlayList = class extends i4 {
     this.onToggleReorderMode = () => {
       this.reorderModeActive = !this.reorderModeActive;
     };
+    this.hoverDepth = 0;
     this.foreignDragActive = false;
     this.onForeignDragHover = (e7) => {
       const wasEmptyTarget = this.isEmptyDropTarget;
@@ -3140,11 +3262,19 @@ var TodoOverlayList = class extends i4 {
       if (distanceFromStart < HOVER_DEAD_ZONE_PX) {
         return;
       }
-      const hit = findDropTarget(e7.clientY, this.rowSnapshot);
+      const sticky = this.hoverId !== void 0 && this.hoverPlacement !== void 0 ? { id: this.hoverId, placement: this.hoverPlacement } : void 0;
+      const hit = findDropTarget(e7.clientY, applyGapCorrection(this.rowSnapshot, sticky), sticky);
       const valid = hit && hit.id !== this.draggedId;
+      const previousHoverId = this.hoverId;
+      const previousHoverPlacement = this.hoverPlacement;
       this.hoverId = valid ? hit.id : void 0;
       this.hoverPlacement = valid ? hit.placement : void 0;
+      this.hoverDepth = valid ? hit.depth : 0;
       this.hoverEntityId = valid ? hit.entityId : void 0;
+      const targetChanged = this.hoverId !== previousHoverId || this.hoverPlacement !== previousHoverPlacement;
+      if (e7.pointerType !== "mouse" && targetChanged) {
+        navigator.vibrate?.(10);
+      }
       this.broadcastDragHover();
     };
     this.onGlobalPointerUp = async () => {
@@ -3159,6 +3289,7 @@ var TodoOverlayList = class extends i4 {
       this.draggedId = void 0;
       this.hoverId = void 0;
       this.hoverPlacement = void 0;
+      this.hoverDepth = 0;
       this.hoverEntityId = void 0;
       this.rowSnapshot = [];
       this.broadcastDragHover();
@@ -3312,7 +3443,7 @@ var TodoOverlayList = class extends i4 {
         collectDescendantIds(dragged, excluded);
       }
     }
-    this.rowSnapshot = collectAllRows(document).filter((row) => row.id === void 0 || !excluded.has(row.id));
+    this.rowSnapshot = collectAllRows(document).filter((row) => row.id === void 0 || !excluded.has(row.id)).map((row) => excluded.size > 0 && row.children.some((child) => excluded.has(child.id)) ? { ...row, children: row.children.filter((child) => !excluded.has(child.id)) } : row);
   }
   onDragStart(e7) {
     const { rect, pointerX, pointerY, grabOffsetX, grabOffsetY } = e7.detail;
@@ -3636,6 +3767,7 @@ var TodoOverlayList = class extends i4 {
                     .draggedId=${this.draggedId}
                     .hoverId=${this.hoverId}
                     .hoverPlacement=${this.hoverPlacement}
+                    .hoverDepth=${this.hoverDepth}
                     .emptyDropHighlight=${this.isEmptyDropTarget}
                     .hideCompleteForParents=${this.hideCompleteForParents}
                     .showCheckboxes=${this.showCheckboxes}
@@ -3661,6 +3793,7 @@ var TodoOverlayList = class extends i4 {
                     .draggedId=${this.draggedId}
                     .hoverId=${this.hoverId}
                     .hoverPlacement=${this.hoverPlacement}
+                    .hoverDepth=${this.hoverDepth}
                     .emptyDropHighlight=${this.isEmptyDropTarget}
                     .hideCompleteForParents=${this.hideCompleteForParents}
                     .showCheckboxes=${this.showCheckboxes}
@@ -3687,6 +3820,7 @@ var TodoOverlayList = class extends i4 {
                             .draggedId=${this.draggedId}
                             .hoverId=${this.hoverId}
                             .hoverPlacement=${this.hoverPlacement}
+                            .hoverDepth=${this.hoverDepth}
                             .hideCompleteForParents=${this.hideCompleteForParents}
                             .showCheckboxes=${this.showCheckboxes}
                             .confirmDelete=${this.confirmDelete}
@@ -3709,6 +3843,7 @@ var TodoOverlayList = class extends i4 {
                 .draggedId=${this.draggedId}
                 .hoverId=${this.hoverId}
                 .hoverPlacement=${this.hoverPlacement}
+                .hoverDepth=${this.hoverDepth}
                 .hideCompleteForParents=${this.hideCompleteForParents}
                 .showCheckboxes=${this.showCheckboxes}
                 .confirmDelete=${this.confirmDelete}
@@ -4309,6 +4444,9 @@ __decorateClass([
 __decorateClass([
   r5()
 ], TodoOverlayList.prototype, "hoverPlacement", 2);
+__decorateClass([
+  r5()
+], TodoOverlayList.prototype, "hoverDepth", 2);
 __decorateClass([
   r5()
 ], TodoOverlayList.prototype, "foreignDragActive", 2);

@@ -586,10 +586,13 @@ describe("todo-overlay-list dragging onto a collapsed parent", () => {
 
         draggable.draggedId = "2";
         draggable.onDragStart(new CustomEvent("tree-drag-start", {
-            detail: {rect: undefined, pointerX: 40, pointerY: 60, grabOffsetX: 0, grabOffsetY: 0},
+            detail: {rect: undefined, pointerX: 20, pointerY: 60, grabOffsetX: 0, grabOffsetY: 0},
         }));
 
-        // Squarely in the middle 40% of the collapsed parent's own row.
+        // Squarely in the middle 40% of the collapsed parent's own row -
+        // clientX held equal to the drag's own start X so horizontal
+        // drag-to-nest (see applyHorizontalNesting) has nothing to adjust
+        // here; that's covered by its own dedicated tests below.
         draggable.onGlobalPointerMove(new PointerEvent("pointermove", {clientX: 20, clientY: 20}));
 
         expect(draggable.hoverId).toBe("1");
@@ -608,6 +611,334 @@ describe("todo-overlay-list dragging onto a collapsed parent", () => {
             reference_id: "1",
             placement: "inside",
         }));
+    });
+});
+
+// Live-reported: dragging a child that's directly below its own parent
+// - i.e. the parent's own first VISIBLE child - up toward roughly its
+// original position glitched a lot, and hovering the parent's own row
+// showed no orange box at all (harmless in itself, since dropping a
+// child back onto its own parent is a no-op, but the glitchiness
+// between there and the position just below it was not). Root cause:
+// snapshotRows() excludes the dragged item as a standalone ROW, but
+// never scrubbed it from other rows' own `children` field - so a
+// parent whose dragged item is its first visible child kept "offering"
+// that item as resolvePlacement's before-target, which then gets
+// invalidated right back out (hit.id === draggedId), leaving no
+// fallback target at all right in that ambiguous zone.
+describe("todo-overlay-list dragging a child that's its own parent's first visible sibling", () => {
+    it("still resolves a valid 'inside' target on the parent when the dragged child was its only one", async () => {
+        const {el, hass} = await renderList({
+            entity_id: ENTITY_ID,
+            items: [
+                makeItem({id: "parent", title: "Parent", children: [makeItem({id: "child", title: "Child"})]}),
+            ],
+        });
+
+        const rows = deepQueryAll(el.shadowRoot!, "todo-overlay-tree-item") as (Element & {shadowRoot: ShadowRoot})[];
+        mockRect(rows[0].shadowRoot.querySelector(".row")!, {top: 0, bottom: 40, height: 40});
+
+        const draggable = el as unknown as DraggableList & {hoverId?: string; hoverPlacement?: string};
+
+        draggable.draggedId = "child";
+        draggable.onDragStart(new CustomEvent("tree-drag-start", {
+            detail: {rect: undefined, pointerX: 20, pointerY: 100, grabOffsetX: 0, grabOffsetY: 0},
+        }));
+
+        // Middle of the parent's row - with "child" correctly scrubbed
+        // from the parent's own children list, this resolves the same
+        // way it would for any genuinely childless row: "inside parent".
+        draggable.onGlobalPointerMove(new PointerEvent("pointermove", {clientX: 20, clientY: 20}));
+
+        expect(draggable.hoverId).toBe("parent");
+        expect(draggable.hoverPlacement).toBe("inside");
+
+        await draggable.onGlobalPointerUp();
+
+        expect(hass.connection.sent).toContainEqual(expect.objectContaining({
+            type: "todo_overlay/move_item",
+            child_id: "child",
+            reference_id: "parent",
+            placement: "inside",
+        }));
+    });
+
+    it("targets the next real sibling, not the dragged child, when the parent has more than one", async () => {
+        const {el, hass} = await renderList({
+            entity_id: ENTITY_ID,
+            items: [
+                makeItem({
+                    id: "parent", title: "Parent",
+                    children: [makeItem({id: "dragged-child", title: "First"}), makeItem({id: "other-child", title: "Second"})],
+                }),
+            ],
+        });
+
+        const rows = deepQueryAll(el.shadowRoot!, "todo-overlay-tree-item") as (Element & {shadowRoot: ShadowRoot})[];
+        mockRect(rows[0].shadowRoot.querySelector(".row")!, {top: 0, bottom: 40, height: 40});
+
+        const draggable = el as unknown as DraggableList & {hoverId?: string; hoverPlacement?: string};
+
+        draggable.draggedId = "dragged-child";
+        draggable.onDragStart(new CustomEvent("tree-drag-start", {
+            detail: {rect: undefined, pointerX: 20, pointerY: 100, grabOffsetX: 0, grabOffsetY: 0},
+        }));
+
+        // Bottom 70% of the parent's row - with "dragged-child" scrubbed
+        // from the parent's children list, "other-child" is correctly
+        // offered as the real first (surviving) child instead.
+        draggable.onGlobalPointerMove(new PointerEvent("pointermove", {clientX: 20, clientY: 30}));
+
+        expect(draggable.hoverId).toBe("other-child");
+        expect(draggable.hoverPlacement).toBe("before");
+    });
+});
+
+// Reported: horizontal drag-to-nest (an earlier iteration on the
+// reorder-intuitiveness feedback) was cumbersome in practice - removed.
+// Becoming a child is back to "drag the item onto the parent's own
+// row" the way it always worked; the visual distinction is what
+// changed - see the two describe blocks below.
+describe("todo-overlay-list drop visuals: reorder vs. become-a-child", () => {
+    it("reordering (before/after) shows a shadow box in the gap the list opens, not a bounding box", async () => {
+        const {el} = await renderList({
+            entity_id: ENTITY_ID,
+            items: [makeItem({id: "1", title: "First"}), makeItem({id: "2", title: "Second"})],
+        });
+
+        const rows = deepQueryAll(el.shadowRoot!, "todo-overlay-tree-item") as (Element & {shadowRoot: ShadowRoot})[];
+        mockRect(rows[0].shadowRoot.querySelector(".row")!, {top: 0, bottom: 40, height: 40});
+        mockRect(rows[1].shadowRoot.querySelector(".row")!, {top: 40, bottom: 80, height: 40});
+
+        const draggable = el as unknown as DraggableList;
+
+        draggable.draggedId = "2";
+        draggable.onDragStart(new CustomEvent("tree-drag-start", {
+            detail: {rect: undefined, pointerX: 20, pointerY: 100, grabOffsetX: 0, grabOffsetY: 0},
+        }));
+
+        // Top 30% of row "1" - "before 1".
+        draggable.onGlobalPointerMove(new PointerEvent("pointermove", {clientY: 5}));
+        await settle(el);
+
+        const row = rows[0].shadowRoot.querySelector(".row")!;
+        expect(row.classList.contains("gap-before"), "the list should reflow (margin push) around the drop point").toBe(true);
+        expect(row.classList.contains("drop-inside")).toBe(false);
+
+        const shadowBox = rows[0].shadowRoot.querySelector(".drop-shadow-box") as HTMLElement;
+        expect(shadowBox, "row 1 should show the shadow box").not.toBeNull();
+        expect(shadowBox.classList.contains("above")).toBe(true);
+    });
+
+    it("becoming a child ('inside') draws a bounding box around the parent's own row, with no shadow box and no reflow", async () => {
+        const {el} = await renderList({
+            entity_id: ENTITY_ID,
+            items: [makeItem({id: "1", title: "First"}), makeItem({id: "2", title: "Second"})],
+        });
+
+        const rows = deepQueryAll(el.shadowRoot!, "todo-overlay-tree-item") as (Element & {shadowRoot: ShadowRoot})[];
+        mockRect(rows[0].shadowRoot.querySelector(".row")!, {top: 0, bottom: 40, height: 40});
+        mockRect(rows[1].shadowRoot.querySelector(".row")!, {top: 40, bottom: 80, height: 40});
+
+        const draggable = el as unknown as DraggableList & {hoverId?: string; hoverPlacement?: string};
+
+        draggable.draggedId = "2";
+        draggable.onDragStart(new CustomEvent("tree-drag-start", {
+            detail: {rect: undefined, pointerX: 20, pointerY: 100, grabOffsetX: 0, grabOffsetY: 0},
+        }));
+
+        // Squarely in the middle 40% of row "1" - "inside 1".
+        draggable.onGlobalPointerMove(new PointerEvent("pointermove", {clientY: 20}));
+        expect(draggable.hoverId).toBe("1");
+        expect(draggable.hoverPlacement).toBe("inside");
+        await settle(el);
+
+        const row = rows[0].shadowRoot.querySelector(".row")!;
+        expect(row.classList.contains("drop-inside"), "the parent row itself should be outlined").toBe(true);
+        expect(row.classList.contains("gap-before")).toBe(false);
+        expect(row.classList.contains("gap-after")).toBe(false);
+
+        expect(rows[0].shadowRoot.querySelector(".drop-shadow-box")).toBeNull();
+    });
+});
+
+// Reported alongside the intuitiveness feedback above: a boundary
+// sitting right under a slightly jittery finger could flip the target
+// back and forth. The currently-resolved zone is now "sticky" - it
+// takes a bit more movement to LEAVE a zone than it took to enter it.
+describe("todo-overlay-list zone hysteresis", () => {
+    it("keeps the 'inside' target once resolved, even after crossing back over the default 30% boundary", async () => {
+        const {el} = await renderList({
+            entity_id: ENTITY_ID,
+            items: [makeItem({id: "1", title: "Only"}), makeItem({id: "2", title: "Other"})],
+        });
+
+        const rows = deepQueryAll(el.shadowRoot!, "todo-overlay-tree-item") as (Element & {shadowRoot: ShadowRoot})[];
+        mockRect(rows[0].shadowRoot.querySelector(".row")!, {top: 0, bottom: 40, height: 40});
+        mockRect(rows[1].shadowRoot.querySelector(".row")!, {top: 40, bottom: 80, height: 40});
+
+        const draggable = el as unknown as DraggableList & {hoverId?: string; hoverPlacement?: string};
+
+        draggable.draggedId = "2";
+        draggable.onDragStart(new CustomEvent("tree-drag-start", {
+            detail: {rect: undefined, pointerX: 20, pointerY: 60, grabOffsetX: 0, grabOffsetY: 0},
+        }));
+
+        // relativeY = 0.5 - squarely "inside".
+        draggable.onGlobalPointerMove(new PointerEvent("pointermove", {clientX: 20, clientY: 20}));
+        expect(draggable.hoverPlacement).toBe("inside");
+
+        // relativeY = 0.32 - past the UN-hysteresised 0.3 boundary, but
+        // within the widened sticky one (0.25) - stays "inside".
+        draggable.onGlobalPointerMove(new PointerEvent("pointermove", {clientX: 20, clientY: 12.8}));
+        expect(draggable.hoverPlacement).toBe("inside");
+
+        // relativeY = 0.20 - now past even the widened boundary.
+        draggable.onGlobalPointerMove(new PointerEvent("pointermove", {clientX: 20, clientY: 8}));
+        expect(draggable.hoverPlacement).toBe("before");
+    });
+});
+
+// Live-reported: "the orange hitbox should be the same as the grey hit
+// box [the browser's own :hover] - the orange hitbox seems fractionally
+// high", and separately: moving only slightly further into what still
+// looked like the same drop-shadow-box could flip the target again.
+// Root cause: rowSnapshot is a deliberately frozen snapshot (see
+// findDropTarget's own comment on why), but a reorder's gap-before/
+// gap-after opens a REAL CSS margin that reflows every row at or after
+// the target - so the frozen rect for any such row silently goes stale
+// (reports a position higher than where it actually now sits) for the
+// rest of the drag. applyGapCorrection corrects for this analytically -
+// instantly, with no re-measurement or timing dependency at all - since
+// the gap's exact size (DROP_GAP_PX) and which row has it open (the
+// previous frame's own resolved target) are both already known.
+describe("todo-overlay-list gap correction keeps hit-testing in sync with the open gap", () => {
+    it("resolves correctly against a row's post-gap position without any re-measurement or delay", async () => {
+        const {el} = await renderList({
+            entity_id: ENTITY_ID,
+            items: [makeItem({id: "1", title: "Only"}), makeItem({id: "2", title: "Dragged"})],
+        });
+
+        const rows = deepQueryAll(el.shadowRoot!, "todo-overlay-tree-item") as (Element & {shadowRoot: ShadowRoot})[];
+        mockRect(rows[0].shadowRoot.querySelector(".row")!, {top: 0, bottom: 40, height: 40});
+
+        const draggable = el as unknown as DraggableList & {hoverId?: string; hoverPlacement?: string};
+
+        draggable.draggedId = "2";
+        draggable.onDragStart(new CustomEvent("tree-drag-start", {
+            detail: {rect: undefined, pointerX: 20, pointerY: 100, grabOffsetX: 0, grabOffsetY: 0},
+        }));
+
+        // Top zone of row "1"'s ORIGINAL position (0-40) - "before 1",
+        // opening a gap-before on it. No correction needed yet - this is
+        // the very first resolution, nothing was open before it.
+        draggable.onGlobalPointerMove(new PointerEvent("pointermove", {clientX: 20, clientY: 5}));
+        expect(draggable.hoverId).toBe("1");
+        expect(draggable.hoverPlacement).toBe("before");
+
+        // Row "1"'s mocked rect is deliberately left untouched at 0-40 -
+        // the point of this test is that the correction is computed
+        // (shifting it to an effective 52-92 for hit-testing purposes),
+        // not re-measured from a DOM that, in this test, never actually
+        // moves. y=72 is squarely "inside" that corrected 52-92 range.
+        draggable.onGlobalPointerMove(new PointerEvent("pointermove", {clientX: 20, clientY: 72}));
+        expect(draggable.hoverId).toBe("1");
+        expect(draggable.hoverPlacement).toBe("inside");
+    });
+
+    it("does not apply any correction for 'inside', which opens no gap at all", async () => {
+        const {el} = await renderList({
+            entity_id: ENTITY_ID,
+            items: [
+                makeItem({id: "1", title: "First"}),
+                makeItem({id: "2", title: "Second"}),
+                makeItem({id: "3", title: "Dragged"}),
+            ],
+        });
+
+        const rows = deepQueryAll(el.shadowRoot!, "todo-overlay-tree-item") as (Element & {shadowRoot: ShadowRoot})[];
+        mockRect(rows[0].shadowRoot.querySelector(".row")!, {top: 0, bottom: 40, height: 40});
+        mockRect(rows[1].shadowRoot.querySelector(".row")!, {top: 40, bottom: 80, height: 40});
+
+        const draggable = el as unknown as DraggableList & {hoverId?: string; hoverPlacement?: string};
+
+        draggable.draggedId = "3";
+        draggable.onDragStart(new CustomEvent("tree-drag-start", {
+            detail: {rect: undefined, pointerX: 20, pointerY: 200, grabOffsetX: 0, grabOffsetY: 0},
+        }));
+
+        // Middle of row "1" - "inside 1", which opens no gap.
+        draggable.onGlobalPointerMove(new PointerEvent("pointermove", {clientX: 20, clientY: 20}));
+        expect(draggable.hoverId).toBe("1");
+        expect(draggable.hoverPlacement).toBe("inside");
+
+        // Row "2" is exactly where it always was (40-80) - no correction
+        // should have been applied on its account. Middle of row "2".
+        draggable.onGlobalPointerMove(new PointerEvent("pointermove", {clientX: 20, clientY: 60}));
+        expect(draggable.hoverId).toBe("2");
+        expect(draggable.hoverPlacement).toBe("inside");
+    });
+});
+
+// Reported alongside the intuitiveness feedback above: a physical
+// confirmation that doesn't depend on catching a visual highlight
+// mid-gesture - particularly useful on mobile, where the finger itself
+// obscures the row being hovered.
+describe("todo-overlay-list haptic feedback on target change", () => {
+    it("vibrates when the resolved target changes during a touch drag", async () => {
+        const {el} = await renderList({
+            entity_id: ENTITY_ID,
+            items: [makeItem({id: "1", title: "First"}), makeItem({id: "2", title: "Second"})],
+        });
+
+        const rows = deepQueryAll(el.shadowRoot!, "todo-overlay-tree-item") as (Element & {shadowRoot: ShadowRoot})[];
+        mockRect(rows[0].shadowRoot.querySelector(".row")!, {top: 0, bottom: 40, height: 40});
+        mockRect(rows[1].shadowRoot.querySelector(".row")!, {top: 40, bottom: 80, height: 40});
+
+        const vibrate = vi.fn();
+        Object.assign(navigator, {vibrate});
+
+        const draggable = el as unknown as DraggableList;
+
+        draggable.draggedId = "2";
+        draggable.onDragStart(new CustomEvent("tree-drag-start", {
+            detail: {rect: undefined, pointerX: 20, pointerY: 20, grabOffsetX: 0, grabOffsetY: 0},
+        }));
+
+        // Well past the dead zone (see HOVER_DEAD_ZONE_PX), squarely
+        // "inside" row "2" - a genuinely new target, so this ticks once.
+        draggable.onGlobalPointerMove(new PointerEvent("pointermove", {clientX: 20, clientY: 60, pointerType: "touch"}));
+        expect(vibrate).toHaveBeenCalledTimes(1);
+
+        // A tiny move that resolves to the exact same target - no new
+        // tick for a no-op move.
+        draggable.onGlobalPointerMove(new PointerEvent("pointermove", {clientX: 20, clientY: 61, pointerType: "touch"}));
+        expect(vibrate).toHaveBeenCalledTimes(1);
+    });
+
+    it("does not vibrate for a mouse drag", async () => {
+        const {el} = await renderList({
+            entity_id: ENTITY_ID,
+            items: [makeItem({id: "1", title: "First"}), makeItem({id: "2", title: "Second"})],
+        });
+
+        const rows = deepQueryAll(el.shadowRoot!, "todo-overlay-tree-item") as (Element & {shadowRoot: ShadowRoot})[];
+        mockRect(rows[0].shadowRoot.querySelector(".row")!, {top: 0, bottom: 40, height: 40});
+        mockRect(rows[1].shadowRoot.querySelector(".row")!, {top: 40, bottom: 80, height: 40});
+
+        const vibrate = vi.fn();
+        Object.assign(navigator, {vibrate});
+
+        const draggable = el as unknown as DraggableList;
+
+        draggable.draggedId = "2";
+        draggable.onDragStart(new CustomEvent("tree-drag-start", {
+            detail: {rect: undefined, pointerX: 20, pointerY: 20, grabOffsetX: 0, grabOffsetY: 0},
+        }));
+
+        draggable.onGlobalPointerMove(new PointerEvent("pointermove", {clientX: 20, clientY: 60, pointerType: "mouse"}));
+
+        expect(vibrate).not.toHaveBeenCalled();
     });
 });
 

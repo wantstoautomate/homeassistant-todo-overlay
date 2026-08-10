@@ -11,6 +11,24 @@ import {LONG_PRESS_MS, type Placement, type TodoItem, isOverdue} from "../models
 // the module docstring below) computes placement the same way.
 export const BEFORE_AFTER_ZONE = 0.3;
 
+// One nesting level's worth of visual indent (matches the ul rule
+// below). Exported so the drop-shadow-box preview's own indent (see
+// render()) lines up with real row indentation instead of an
+// independently-guessed pixel value that could drift out of sync
+// with it.
+export const ROW_INDENT_PX = 20;
+const rowIndentPx = unsafeCSS(`${ROW_INDENT_PX}px`);
+
+// How much space a reorder's gap-before/gap-after opens (see their own
+// CSS rule below). Exported so the card's own hit-testing can correct
+// for it analytically the instant a gap opens/closes, rather than
+// re-measuring the (transitioning) DOM after the fact - see
+// todo-overlay-list.ts's applyGapCorrection for why that matters: the
+// frozen rowSnapshot a drag hit-tests against doesn't know a gap opened
+// at all until told, and this is the one number needed to tell it.
+export const DROP_GAP_PX = 52;
+const dropGapPx = unsafeCSS(`${DROP_GAP_PX}px`);
+
 // Pointer movement beyond this many pixels, while still under the hold
 // threshold, cancels the hold-to-edit gesture - a small allowance for
 // natural hand/touch jitter rather than a strict zero-tolerance check.
@@ -145,7 +163,7 @@ export class TodoTreeItem extends LitElement {
         ul {
             list-style: none;
             margin: 0;
-            padding-inline-start: 20px;
+            padding-inline-start: ${rowIndentPx};
         }
 
         .row {
@@ -163,7 +181,15 @@ export class TodoTreeItem extends LitElement {
             transition: background-color 0.15s ease, outline-color 0.15s ease, margin 150ms ease;
         }
 
-        .row:hover {
+        /* Suppressed while a drag is active (see rowClasses' drag-active) -
+           :hover tracks the literal cursor position, which is a
+           genuinely different (and, once hysteresis/gap-correction are
+           involved, not always identical) thing from the actual resolved
+           drop target the orange/gap highlighting already shows. Live-
+           reported as confusing to have both visible and drifting apart
+           at once - the drop-target highlight is the only "where is this
+           going" signal needed once a drag is underway. */
+        .row:not(.drag-active):hover {
             background: rgba(var(--rgb-primary-text-color, 0, 0, 0), 0.06);
         }
 
@@ -192,6 +218,14 @@ export class TodoTreeItem extends LitElement {
             opacity: 0.45;
         }
 
+        /* "inside" (becoming this row's child) draws a bounding box
+           around the row itself, rather than opening a gap - dragging
+           OVER an existing parent to nest under it is a fundamentally
+           different gesture from reordering past a sibling, and reads
+           more clearly as "drop into this container" when the container
+           itself is outlined, the same way a file manager highlights a
+           folder you're dragging onto rather than showing a shadow copy
+           of the file inside it. */
         .row.drop-inside {
             outline-color: var(--accent-color, var(--primary-color));
             background: rgba(var(--rgb-accent-color, 255, 152, 0), 0.08);
@@ -200,13 +234,43 @@ export class TodoTreeItem extends LitElement {
         /* Instead of a static line, the sibling next to the drop point
            opens a live gap (matching the space a lifted row leaves
            behind), so the list visibly reflows to show where the item
-           would land rather than just marking the spot. */
+           would land rather than just marking the spot. Reordering only -
+           see .row.drop-inside above for why becoming a child looks
+           different. */
         .row.gap-before {
-            margin-top: 52px;
+            margin-top: ${dropGapPx};
         }
 
         .row.gap-after {
-            margin-bottom: 52px;
+            margin-bottom: ${dropGapPx};
+        }
+
+        /* The actual "it'll go here" preview for a reorder (before/after
+           only - see .row.drop-inside above), rendered into whichever
+           gap the row above just opened - a dashed placeholder the size
+           of a real row, indented to match the target's own depth.
+           Absolutely positioned against the row (which has its own
+           position:relative) so it overlays the margin gap without
+           adding any height of its own - the margin is what actually
+           reflows the list; this just fills the space it opened. */
+        .drop-shadow-box {
+            position: absolute;
+            left: 0;
+            right: 8px;
+            height: 44px;
+            border: 2px dashed var(--accent-color, var(--primary-color));
+            border-radius: 4px;
+            background: rgba(var(--rgb-accent-color, 255, 152, 0), 0.08);
+            transition: left 100ms ease;
+            pointer-events: none;
+        }
+
+        .drop-shadow-box.above {
+            top: -48px;
+        }
+
+        .drop-shadow-box.below {
+            bottom: -48px;
         }
 
         .content {
@@ -510,6 +574,14 @@ export class TodoTreeItem extends LitElement {
 
     @property({attribute: false})
     hoverPlacement?: Placement;
+
+    // How deep the CURRENT target sits (root = 0) - see
+    // todo-overlay-list.ts's own hoverDepth for what drives this. Only
+    // used for a before/after reorder's drop-shadow-box, to inset it to
+    // match the target's own nesting level - "inside" (becoming a
+    // child) shows no shadow box at all, see rowClasses/render() below.
+    @property({attribute: false})
+    hoverDepth = 0;
 
     @property({attribute: false})
     hideCompleteForParents = false;
@@ -897,6 +969,9 @@ export class TodoTreeItem extends LitElement {
             "gap-before": isDropTarget && this.hoverPlacement === "before",
             "gap-after": isDropTarget && this.hoverPlacement === "after",
             completed: this.item.completed,
+            // Any drag from THIS list being active, not just this row's
+            // own - see .row:not(.drag-active):hover's own comment.
+            "drag-active": this.draggedId !== undefined,
         };
 
         const due = formatDue(this.item);
@@ -911,6 +986,25 @@ export class TodoTreeItem extends LitElement {
 
                     @pointerdown=${this.pointerDown}
                 >
+                    ${
+                        // Reordering (before/after) shows the shadow box in
+                        // the gap it just opened; becoming a child ("inside")
+                        // shows no shadow box at all - the bounding-box
+                        // outline on THIS row (see rowClasses' drop-inside)
+                        // is the whole highlight for that case.
+                        isDropTarget && this.hoverPlacement !== "inside"
+                            ? html`
+                                <div
+                                    class=${classMap({
+                                        "drop-shadow-box": true,
+                                        above: this.hoverPlacement === "before",
+                                        below: this.hoverPlacement === "after",
+                                    })}
+                                    style=${styleMap({left: `${this.hoverDepth * ROW_INDENT_PX}px`})}
+                                ></div>
+                            `
+                            : ""
+                    }
                     ${
                         isBeingDragged
                             ? ""
@@ -1050,6 +1144,7 @@ export class TodoTreeItem extends LitElement {
                                             .draggedId=${this.draggedId}
                                             .hoverId=${this.hoverId}
                                             .hoverPlacement=${this.hoverPlacement}
+                                            .hoverDepth=${this.hoverDepth}
                                             .hideCompleteForParents=${this.hideCompleteForParents}
                                             .showCheckboxes=${this.showCheckboxes}
                                             .confirmDelete=${this.confirmDelete}

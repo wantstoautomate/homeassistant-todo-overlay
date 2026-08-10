@@ -40,7 +40,7 @@ import type {TodoItemDialogFieldSupport, TodoItemFormValue} from "./todo-item-di
 import {EMPTY_FORM_VALUE} from "./todo-item-dialog";
 import type {SaveLoadFormValue} from "./todo-save-load-dialog";
 import {EMPTY_SAVE_LOAD_VALUE} from "./todo-save-load-dialog";
-import {BEFORE_AFTER_ZONE} from "./todo-tree-item";
+import {BEFORE_AFTER_ZONE, DROP_GAP_PX} from "./todo-tree-item";
 
 import "./todo-tree";
 import "./todo-item-dialog";
@@ -131,7 +131,18 @@ interface TodoListElement extends Element {
 // element) - there's no existing item there to position relative to, so
 // dropping onto it can only ever mean "become this entity's first root
 // item" (see findDropTarget/onGlobalPointerUp's own handling of this).
-type RowSnapshot = {id: string | undefined; entityId: string; children: TodoItem[]; rect: DOMRect};
+//
+// depth exists purely to indent the drop-shadow-box preview to match
+// how deep the target actually sits (see todo-tree-item.ts's
+// hoverDepth) - 0 for a root item, and for the empty-list placeholder,
+// which has no ancestry to speak of.
+type RowSnapshot = {
+    id: string | undefined;
+    entityId: string;
+    children: TodoItem[];
+    rect: DOMRect;
+    depth: number;
+};
 
 // Recursively collects every rendered row across all nested shadow roots,
 // across every todo-overlay-list on the page (not just this one) - a drop
@@ -148,13 +159,18 @@ type RowSnapshot = {id: string | undefined; entityId: string; children: TodoItem
 // todo-overlay-tree) that don't themselves match the selector - so this has
 // to walk every element's shadow root, not just the ones that happen to
 // match.
-function collectAllRows(root: ParentNode, currentEntity?: string): RowSnapshot[] {
+function collectAllRows(
+    root: ParentNode,
+    currentEntity?: string,
+    currentDepth = 0,
+): RowSnapshot[] {
     const rows: RowSnapshot[] = [];
 
     for (const el of Array.from(root.querySelectorAll("*"))) {
         const itemEl = el as TreeItemElement;
+        const isTreeItem = el.localName === "todo-overlay-tree-item" && Boolean(itemEl.item);
 
-        if (el.localName === "todo-overlay-tree-item" && itemEl.item && currentEntity) {
+        if (isTreeItem && currentEntity) {
             const rowEl = itemEl.shadowRoot?.querySelector(".row");
 
             if (rowEl) {
@@ -178,10 +194,11 @@ function collectAllRows(root: ParentNode, currentEntity?: string): RowSnapshot[]
                 const hasVisibleChildren = itemEl.shadowRoot?.querySelector("ul") != null;
 
                 rows.push({
-                    id: itemEl.item.id,
+                    id: itemEl.item!.id,
                     entityId: currentEntity,
-                    children: hasVisibleChildren ? itemEl.item.children : [],
+                    children: hasVisibleChildren ? itemEl.item!.children : [],
                     rect: rowEl.getBoundingClientRect(),
+                    depth: currentDepth,
                 });
             }
         }
@@ -195,16 +212,22 @@ function collectAllRows(root: ParentNode, currentEntity?: string): RowSnapshot[]
                     entityId: currentEntity,
                     children: [],
                     rect: emptyZone.getBoundingClientRect(),
+                    depth: 0,
                 });
             }
         }
 
         if (el.shadowRoot) {
-            const nextEntity = el.localName === "todo-overlay-list"
-                ? (el as TodoListElement).entity
-                : currentEntity;
+            const isList = el.localName === "todo-overlay-list";
+            const nextEntity = isList ? (el as TodoListElement).entity : currentEntity;
+            // Crossing into a fresh todo-overlay-list starts a brand new
+            // tree, unrelated to whatever ancestor chain got us here -
+            // depth resets right along with entity. Crossing into a
+            // tree-item's own shadow root (where its children render -
+            // see todo-tree-item.ts) descends one level into ITS subtree.
+            const nextDepth = isList ? 0 : isTreeItem ? currentDepth + 1 : currentDepth;
 
-            rows.push(...collectAllRows(el.shadowRoot, nextEntity));
+            rows.push(...collectAllRows(el.shadowRoot, nextEntity, nextDepth));
         }
     }
 
@@ -233,10 +256,21 @@ function collectAllRows(root: ParentNode, currentEntity?: string): RowSnapshot[]
 // that could ever land there anyway - hovering anywhere below the "before"
 // zone on such a row can only sensibly mean "become its new first child",
 // so that's the one placement offered for the whole rest of the row.
+// Widens whichever zone the pointer is ALREADY resolving to for this row,
+// so a boundary sitting right under a slightly jittery finger doesn't
+// flip the target back and forth every other pointermove - the resolved
+// zone only changes once the pointer has moved convincingly past the
+// boundary, not the instant it touches it. `sticky` is the previous
+// frame's own resolved target (see findDropTarget's caller), so this is
+// a no-op the very first time a row is hovered - there's nothing to be
+// sticky about yet.
+const ZONE_HYSTERESIS = 0.05;
+
 function resolvePlacement(
     rowId: string,
     rowChildren: TodoItem[],
     relativeY: number,
+    sticky?: {id: string; placement: Placement},
 ): {id: string; placement: Placement} {
     if (rowChildren.length > 0) {
         if (relativeY < BEFORE_AFTER_ZONE) {
@@ -246,15 +280,92 @@ function resolvePlacement(
         return {id: rowChildren[0].id, placement: "before"};
     }
 
-    if (relativeY < BEFORE_AFTER_ZONE) {
+    const beforeBoundary = sticky?.id === rowId && sticky.placement === "before"
+        ? BEFORE_AFTER_ZONE + ZONE_HYSTERESIS
+        : BEFORE_AFTER_ZONE - ZONE_HYSTERESIS;
+
+    const afterBoundary = sticky?.id === rowId && sticky.placement === "after"
+        ? (1 - BEFORE_AFTER_ZONE) - ZONE_HYSTERESIS
+        : (1 - BEFORE_AFTER_ZONE) + ZONE_HYSTERESIS;
+
+    if (relativeY < beforeBoundary) {
         return {id: rowId, placement: "before"};
     }
 
-    if (relativeY > 1 - BEFORE_AFTER_ZONE) {
+    if (relativeY > afterBoundary) {
         return {id: rowId, placement: "after"};
     }
 
     return {id: rowId, placement: "inside"};
+}
+
+// Shifts a DOMRect down by `amount` - deliberately NOT {...rect, top:
+// rect.top + amount}, since a real (non-mocked) DOMRect's fields are
+// inherited getters, not own properties, so a plain spread silently
+// produces an empty object. Only the fields findDropTarget actually
+// reads (top/bottom/height) need to be correct; the rest just need to
+// satisfy the type.
+function shiftRectDown(rect: DOMRect, amount: number): DOMRect {
+    return {
+        top: rect.top + amount,
+        bottom: rect.bottom + amount,
+        left: rect.left,
+        right: rect.right,
+        width: rect.width,
+        height: rect.height,
+        x: rect.x,
+        y: rect.y + amount,
+        toJSON: rect.toJSON,
+    } as DOMRect;
+}
+
+// The frozen rowSnapshot below doesn't know about the one reflow a drag
+// can cause on its own: the gap-before/gap-after margin the CURRENT
+// target itself opens (see todo-tree-item.ts's own CSS - "inside" opens
+// no gap at all, only before/after do). Re-measuring the DOM to find
+// out would either reintroduce the live-position oscillation
+// findDropTarget's own comment describes, or lag behind by however long
+// the CSS transition takes to settle - live-reported: the orange
+// highlight's hit-zone felt "fractionally high" relative to the
+// browser's own (always-accurate) :hover, and could flip unexpectedly
+// on a small move that still looked like it was inside the shown
+// drop-shadow-box.
+//
+// Since the SIZE of that one gap is a known constant (DROP_GAP_PX) and
+// WHICH row currently has it open is exactly `sticky` (the previous
+// frame's own resolved target), the correction is computed directly
+// instead of re-measured: every row that sits at or after the gap, in
+// the snapshot's own frozen (pre-gap) top-to-bottom order, shifts down
+// by that amount before hit-testing runs - analytically exact, with no
+// re-measurement and no timing dependency at all.
+function applyGapCorrection(
+    rows: RowSnapshot[],
+    sticky?: {id: string; placement: Placement},
+): RowSnapshot[] {
+    if (!sticky || sticky.placement === "inside") {
+        return rows;
+    }
+
+    const sortedByTop = [...rows].sort((a, b) => a.rect.top - b.rect.top);
+    const targetIndex = sortedByTop.findIndex(r => r.id === sticky.id);
+
+    if (targetIndex === -1) {
+        return rows;
+    }
+
+    // gap-before opens ABOVE the target row - it and everything below
+    // it (in the original, pre-gap order) shifts down. gap-after opens
+    // BELOW it - only rows strictly after it shift.
+    const shiftFromIndex = sticky.placement === "before" ? targetIndex : targetIndex + 1;
+    const shiftedIds = new Set(sortedByTop.slice(shiftFromIndex).map(r => r.id));
+
+    if (shiftedIds.size === 0) {
+        return rows;
+    }
+
+    return rows.map(row => (
+        shiftedIds.has(row.id) ? {...row, rect: shiftRectDown(row.rect, DROP_GAP_PX)} : row
+    ));
 }
 
 // Hit-testing against LIVE row positions creates a feedback loop: hovering
@@ -265,13 +376,16 @@ function resolvePlacement(
 // Snapshotting every row's rect once when the drag engages, and hit-testing
 // against that frozen snapshot for the rest of the gesture, breaks the loop:
 // the coordinates being tested against never move in response to their own
-// output. Distance-to-nearest-row (rather than requiring the pointer land
-// inside a row's rect) also naturally covers dragging above the first item
-// or below the last, where a direct hit would otherwise find nothing.
+// output (see applyGapCorrection above for the one exception - the
+// current target's own gap - that's corrected for analytically instead).
+// Distance-to-nearest-row (rather than requiring the pointer land inside a
+// row's rect) also naturally covers dragging above the first item or below
+// the last, where a direct hit would otherwise find nothing.
 function findDropTarget(
     y: number,
     rows: RowSnapshot[],
-): {id: string | undefined; entityId: string; placement: Placement} | undefined {
+    sticky?: {id: string; placement: Placement},
+): {id: string | undefined; entityId: string; placement: Placement; depth: number} | undefined {
     if (rows.length === 0) {
         return undefined;
     }
@@ -297,7 +411,7 @@ function findDropTarget(
     // (and only) root item" (see onGlobalPointerUp's transferItem call,
     // which sends no reference_id at all for this case).
     if (nearest.id === undefined) {
-        return {id: undefined, entityId: nearest.entityId, placement: "inside"};
+        return {id: undefined, entityId: nearest.entityId, placement: "inside", depth: 0};
     }
 
     const relativeY = (y - nearest.rect.top) / nearest.rect.height;
@@ -305,7 +419,21 @@ function findDropTarget(
     // resolvePlacement may pick a different id (nearest's own, or its
     // first child's) depending on placement, but never a different
     // entity - a row's children always live on the same entity it does.
-    return {...resolvePlacement(nearest.id, nearest.children, relativeY), entityId: nearest.entityId};
+    const resolved = {
+        ...resolvePlacement(nearest.id, nearest.children, relativeY, sticky),
+        entityId: nearest.entityId,
+    };
+
+    // depth is purely informational (drives the shadow box's own indent -
+    // see todo-tree-item.ts's hoverDepth). resolvePlacement may have
+    // named a different row than `nearest` (its first VISIBLE child, for
+    // a row with some already showing - see resolvePlacement's own
+    // comment), so this re-looks-up whichever row `resolved.id` actually
+    // names rather than assuming it's still `nearest`.
+    const resolvedRow = rows.find(r => r.id === resolved.id) ?? nearest;
+    const depth = resolvedRow.depth + (resolved.placement === "inside" ? 1 : 0);
+
+    return {...resolved, depth};
 }
 
 function findItem(items: TodoItem[], id: string): TodoItem | undefined {
@@ -780,6 +908,14 @@ export class TodoOverlayList extends LitElement {
     @state()
     private hoverPlacement?: Placement;
 
+    // How deep the CURRENT target sits (root = 0) - purely cosmetic,
+    // drives a reorder's (before/after) drop-shadow-box indent so it
+    // visually lines up with the target's actual nesting level.
+    // "inside" (becoming a child) doesn't use this at all - see
+    // todo-tree-item.ts's render().
+    @state()
+    private hoverDepth = 0;
+
     // Which entity hoverId's row belongs to - may differ from this.entity
     // when hovering over a row from another entity's section (same
     // multi-entity card, or an entirely different card) - see
@@ -1019,7 +1155,26 @@ export class TodoOverlayList extends LitElement {
             }
         }
 
-        this.rowSnapshot = collectAllRows(document).filter(row => row.id === undefined || !excluded.has(row.id));
+        // Excludes the dragged item (and its own descendants) as a
+        // standalone ROW below, but a row's own `children` field (used
+        // by resolvePlacement to decide before-vs-inside) is read
+        // straight from the item tree's data and needs the same
+        // scrubbing - otherwise a parent whose dragged item happens to
+        // be its own first VISIBLE child keeps "offering" that item as
+        // resolvePlacement's before-target, which then gets invalidated
+        // right back out (see onGlobalPointerMove's own hit.id !==
+        // draggedId check) with no fallback at all. Live-reported: no
+        // orange box at all when hovering that parent, and glitchy
+        // flicker right around where the dragged row used to sit, since
+        // that's exactly the boundary between "still offering the
+        // now-invalid target" and whatever comes next.
+        this.rowSnapshot = collectAllRows(document)
+            .filter(row => row.id === undefined || !excluded.has(row.id))
+            .map(row => (
+                excluded.size > 0 && row.children.some(child => excluded.has(child.id))
+                    ? {...row, children: row.children.filter(child => !excluded.has(child.id))}
+                    : row
+            ));
     }
 
     private onDragStart(e: CustomEvent) {
@@ -1102,16 +1257,42 @@ export class TodoOverlayList extends LitElement {
             return;
         }
 
-        const hit = findDropTarget(e.clientY, this.rowSnapshot);
+        // The previous frame's own resolved target - fed into resolvePlacement
+        // as the hysteresis anchor (see ZONE_HYSTERESIS), so a still-jittery
+        // finger sitting right on a zone boundary doesn't flip the target
+        // back and forth every pointermove, AND into applyGapCorrection,
+        // which knows from this alone exactly which row's own gap (if any)
+        // the frozen snapshot below needs correcting for.
+        const sticky = this.hoverId !== undefined && this.hoverPlacement !== undefined
+            ? {id: this.hoverId, placement: this.hoverPlacement}
+            : undefined;
+
+        const hit = findDropTarget(e.clientY, applyGapCorrection(this.rowSnapshot, sticky), sticky);
         const valid = hit && hit.id !== this.draggedId;
+
+        const previousHoverId = this.hoverId;
+        const previousHoverPlacement = this.hoverPlacement;
 
         this.hoverId = valid ? hit.id : undefined;
         this.hoverPlacement = valid ? hit.placement : undefined;
+        this.hoverDepth = valid ? hit.depth : 0;
         // hit.id being undefined (the empty-list placeholder) is itself a
         // VALID target, so entity has to be tracked independently of
         // hoverId - hoverId alone can no longer answer "is anything being
         // hovered", only hoverEntityId can (see onGlobalPointerUp).
         this.hoverEntityId = valid ? hit.entityId : undefined;
+
+        const targetChanged = this.hoverId !== previousHoverId || this.hoverPlacement !== previousHoverPlacement;
+
+        // A light haptic tick whenever the actual target changes - mobile
+        // physical confirmation that doesn't depend on catching a visual
+        // highlight mid-gesture (see the collapsed-parent fix earlier in
+        // this file for exactly how easy that visual catch is to miss).
+        // Silently does nothing wherever unsupported (desktop, iOS
+        // Safari) - navigator.vibrate simply isn't defined there.
+        if (e.pointerType !== "mouse" && targetChanged) {
+            navigator.vibrate?.(10);
+        }
 
         this.broadcastDragHover();
     };
@@ -1130,6 +1311,7 @@ export class TodoOverlayList extends LitElement {
         this.draggedId = undefined;
         this.hoverId = undefined;
         this.hoverPlacement = undefined;
+        this.hoverDepth = 0;
         this.hoverEntityId = undefined;
         this.rowSnapshot = [];
 
@@ -1594,6 +1776,7 @@ export class TodoOverlayList extends LitElement {
                     .draggedId=${this.draggedId}
                     .hoverId=${this.hoverId}
                     .hoverPlacement=${this.hoverPlacement}
+                    .hoverDepth=${this.hoverDepth}
                     .emptyDropHighlight=${this.isEmptyDropTarget}
                     .hideCompleteForParents=${this.hideCompleteForParents}
                     .showCheckboxes=${this.showCheckboxes}
@@ -1621,6 +1804,7 @@ export class TodoOverlayList extends LitElement {
                     .draggedId=${this.draggedId}
                     .hoverId=${this.hoverId}
                     .hoverPlacement=${this.hoverPlacement}
+                    .hoverDepth=${this.hoverDepth}
                     .emptyDropHighlight=${this.isEmptyDropTarget}
                     .hideCompleteForParents=${this.hideCompleteForParents}
                     .showCheckboxes=${this.showCheckboxes}
@@ -1651,6 +1835,7 @@ export class TodoOverlayList extends LitElement {
                             .draggedId=${this.draggedId}
                             .hoverId=${this.hoverId}
                             .hoverPlacement=${this.hoverPlacement}
+                            .hoverDepth=${this.hoverDepth}
                             .hideCompleteForParents=${this.hideCompleteForParents}
                             .showCheckboxes=${this.showCheckboxes}
                             .confirmDelete=${this.confirmDelete}
@@ -1675,6 +1860,7 @@ export class TodoOverlayList extends LitElement {
                 .draggedId=${this.draggedId}
                 .hoverId=${this.hoverId}
                 .hoverPlacement=${this.hoverPlacement}
+                .hoverDepth=${this.hoverDepth}
                 .hideCompleteForParents=${this.hideCompleteForParents}
                 .showCheckboxes=${this.showCheckboxes}
                 .confirmDelete=${this.confirmDelete}

@@ -3,6 +3,55 @@
 All notable changes to this project are documented here. Versions follow the
 integration's `manifest.json`/card's `package.json` (kept in lockstep).
 
+## 1.0.5
+
+A round of drag-and-drop reorder refinements, driven entirely by real
+back-and-forth testing on desktop against a local sandbox. Several
+approaches were tried and discarded along the way (a horizontal-drag-
+to-nest gesture, a thin depth-indicator rail) before landing on what's
+below - only the final, kept behavior is described here.
+
+- **Becoming a child vs. reordering now look and behave differently,
+  on purpose.** Dragging an item onto an existing row to nest it as a
+  child draws a bounding-box outline around that row - no reflow,
+  since dropping *into* a container is a different gesture from
+  reordering past a sibling. Dragging between two rows to reorder
+  still opens a real gap (the row you're moving past visibly slides
+  out of the way) with a dashed shadow box shown in the space that
+  opened - showing exactly where the item will land.
+- **Fixed: the drop-target highlight could drift out of sync with the
+  cursor once any gap was open.** The hit-test snapshot is deliberately
+  frozen for the duration of a drag (re-measuring live would reintroduce
+  an old oscillation bug), but a reorder's own gap wasn't being
+  accounted for - so the frozen rects silently went stale the moment
+  a gap opened. Fixed with an exact, instant correction (the gap's
+  size and which row has it open are both already known) rather than
+  a delayed re-measurement - no timing window where it can be wrong.
+- **Fixed: dragging a child that sits directly below its own parent
+  (i.e. that parent's own first visible child) could glitch and/or
+  show no highlight at all** when hovering near where it started.
+  The dragged item was correctly excluded as its own drop target, but
+  not scrubbed from its parent's own list of children used to decide
+  placement - so the parent kept offering the dragged item itself as
+  the target, which then got invalidated with no fallback. Now
+  correctly falls back to treating the parent as childless (or offers
+  the next real sibling, if there is one).
+- **Zone boundaries (before/becoming-a-child/after) are now sticky** -
+  once resolved, leaving a zone takes a bit more movement than it took
+  to enter it, so a boundary sitting under a jittery cursor doesn't
+  flip the target back and forth.
+- **A light haptic tick (mobile)** fires whenever the resolved drop
+  target actually changes - physical confirmation that doesn't depend
+  on catching a visual highlight mid-gesture.
+- **The browser's own hover highlight is suppressed for the whole list
+  while a drag is active**, leaving only the drop-target highlighting
+  visible - having both on screen at once, occasionally disagreeing
+  now that zones are sticky, read as confusing rather than helpful.
+
+Not yet tested on mobile/touch - worth a real pass there before
+treating this as fully settled, though nothing here is touch-specific
+in a way that should regress it.
+
 ## 1.0.4
 
 Reported as: "there's an orange kind of highlight when you are about
