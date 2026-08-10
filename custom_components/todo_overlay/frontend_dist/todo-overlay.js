@@ -2993,10 +2993,11 @@ function collectAllRows(root, currentEntity) {
     if (el.localName === "todo-overlay-tree-item" && itemEl.item && currentEntity) {
       const rowEl = itemEl.shadowRoot?.querySelector(".row");
       if (rowEl) {
+        const hasVisibleChildren = itemEl.shadowRoot?.querySelector("ul") != null;
         rows.push({
           id: itemEl.item.id,
           entityId: currentEntity,
-          children: itemEl.item.children,
+          children: hasVisibleChildren ? itemEl.item.children : [],
           rect: rowEl.getBoundingClientRect()
         });
       }
