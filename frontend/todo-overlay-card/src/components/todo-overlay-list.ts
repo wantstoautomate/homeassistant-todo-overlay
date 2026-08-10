@@ -40,7 +40,7 @@ import type {TodoItemDialogFieldSupport, TodoItemFormValue} from "./todo-item-di
 import {EMPTY_FORM_VALUE} from "./todo-item-dialog";
 import type {SaveLoadFormValue} from "./todo-save-load-dialog";
 import {EMPTY_SAVE_LOAD_VALUE} from "./todo-save-load-dialog";
-import {BEFORE_AFTER_ZONE} from "./todo-tree-item";
+import {BEFORE_AFTER_ZONE, ROW_INDENT_PX} from "./todo-tree-item";
 
 import "./todo-tree";
 import "./todo-item-dialog";
@@ -131,7 +131,19 @@ interface TodoListElement extends Element {
 // element) - there's no existing item there to position relative to, so
 // dropping onto it can only ever mean "become this entity's first root
 // item" (see findDropTarget/onGlobalPointerUp's own handling of this).
-type RowSnapshot = {id: string | undefined; entityId: string; children: TodoItem[]; rect: DOMRect};
+//
+// depth/parentId exist purely for horizontal drag-to-nest (see
+// applyHorizontalNesting) - depth 0 is a root item, parentId is the
+// enclosing row's own id (undefined at the root). Both are undefined/0
+// for the empty-list placeholder, which has no ancestry to speak of.
+type RowSnapshot = {
+    id: string | undefined;
+    entityId: string;
+    children: TodoItem[];
+    rect: DOMRect;
+    depth: number;
+    parentId: string | undefined;
+};
 
 // Recursively collects every rendered row across all nested shadow roots,
 // across every todo-overlay-list on the page (not just this one) - a drop
@@ -148,13 +160,19 @@ type RowSnapshot = {id: string | undefined; entityId: string; children: TodoItem
 // todo-overlay-tree) that don't themselves match the selector - so this has
 // to walk every element's shadow root, not just the ones that happen to
 // match.
-function collectAllRows(root: ParentNode, currentEntity?: string): RowSnapshot[] {
+function collectAllRows(
+    root: ParentNode,
+    currentEntity?: string,
+    currentDepth = 0,
+    currentParentId?: string,
+): RowSnapshot[] {
     const rows: RowSnapshot[] = [];
 
     for (const el of Array.from(root.querySelectorAll("*"))) {
         const itemEl = el as TreeItemElement;
+        const isTreeItem = el.localName === "todo-overlay-tree-item" && Boolean(itemEl.item);
 
-        if (el.localName === "todo-overlay-tree-item" && itemEl.item && currentEntity) {
+        if (isTreeItem && currentEntity) {
             const rowEl = itemEl.shadowRoot?.querySelector(".row");
 
             if (rowEl) {
@@ -178,10 +196,12 @@ function collectAllRows(root: ParentNode, currentEntity?: string): RowSnapshot[]
                 const hasVisibleChildren = itemEl.shadowRoot?.querySelector("ul") != null;
 
                 rows.push({
-                    id: itemEl.item.id,
+                    id: itemEl.item!.id,
                     entityId: currentEntity,
-                    children: hasVisibleChildren ? itemEl.item.children : [],
+                    children: hasVisibleChildren ? itemEl.item!.children : [],
                     rect: rowEl.getBoundingClientRect(),
+                    depth: currentDepth,
+                    parentId: currentParentId,
                 });
             }
         }
@@ -195,16 +215,24 @@ function collectAllRows(root: ParentNode, currentEntity?: string): RowSnapshot[]
                     entityId: currentEntity,
                     children: [],
                     rect: emptyZone.getBoundingClientRect(),
+                    depth: 0,
+                    parentId: undefined,
                 });
             }
         }
 
         if (el.shadowRoot) {
-            const nextEntity = el.localName === "todo-overlay-list"
-                ? (el as TodoListElement).entity
-                : currentEntity;
+            const isList = el.localName === "todo-overlay-list";
+            const nextEntity = isList ? (el as TodoListElement).entity : currentEntity;
+            // Crossing into a fresh todo-overlay-list starts a brand new
+            // tree, unrelated to whatever ancestor chain got us here -
+            // depth/parentId reset right along with entity. Crossing into
+            // a tree-item's own shadow root (where its children render -
+            // see todo-tree-item.ts) descends one level into ITS subtree.
+            const nextDepth = isList ? 0 : isTreeItem ? currentDepth + 1 : currentDepth;
+            const nextParentId = isList ? undefined : isTreeItem ? itemEl.item!.id : currentParentId;
 
-            rows.push(...collectAllRows(el.shadowRoot, nextEntity));
+            rows.push(...collectAllRows(el.shadowRoot, nextEntity, nextDepth, nextParentId));
         }
     }
 
@@ -233,10 +261,21 @@ function collectAllRows(root: ParentNode, currentEntity?: string): RowSnapshot[]
 // that could ever land there anyway - hovering anywhere below the "before"
 // zone on such a row can only sensibly mean "become its new first child",
 // so that's the one placement offered for the whole rest of the row.
+// Widens whichever zone the pointer is ALREADY resolving to for this row,
+// so a boundary sitting right under a slightly jittery finger doesn't
+// flip the target back and forth every other pointermove - the resolved
+// zone only changes once the pointer has moved convincingly past the
+// boundary, not the instant it touches it. `sticky` is the previous
+// frame's own resolved target (see findDropTarget's caller), so this is
+// a no-op the very first time a row is hovered - there's nothing to be
+// sticky about yet.
+const ZONE_HYSTERESIS = 0.05;
+
 function resolvePlacement(
     rowId: string,
     rowChildren: TodoItem[],
     relativeY: number,
+    sticky?: {id: string; placement: Placement},
 ): {id: string; placement: Placement} {
     if (rowChildren.length > 0) {
         if (relativeY < BEFORE_AFTER_ZONE) {
@@ -246,15 +285,104 @@ function resolvePlacement(
         return {id: rowChildren[0].id, placement: "before"};
     }
 
-    if (relativeY < BEFORE_AFTER_ZONE) {
+    const beforeBoundary = sticky?.id === rowId && sticky.placement === "before"
+        ? BEFORE_AFTER_ZONE + ZONE_HYSTERESIS
+        : BEFORE_AFTER_ZONE - ZONE_HYSTERESIS;
+
+    const afterBoundary = sticky?.id === rowId && sticky.placement === "after"
+        ? (1 - BEFORE_AFTER_ZONE) - ZONE_HYSTERESIS
+        : (1 - BEFORE_AFTER_ZONE) + ZONE_HYSTERESIS;
+
+    if (relativeY < beforeBoundary) {
         return {id: rowId, placement: "before"};
     }
 
-    if (relativeY > 1 - BEFORE_AFTER_ZONE) {
+    if (relativeY > afterBoundary) {
         return {id: rowId, placement: "after"};
     }
 
     return {id: rowId, placement: "inside"};
+}
+
+// Lets the pointer's horizontal position adjust the vertical target's
+// depth - drag right to nest one level deeper than the vertical position
+// alone would give, drag left to unnest one level shallower - the same
+// two-axis control most tree/outliner UIs use (VSCode's explorer, Notion,
+// Trello), and a much more direct way to say "no, as a CHILD of that one"
+// than hoping a narrow vertical band lines up with a specific spot.
+//
+// horizontalSteps > 0 walks progressively deeper by repeatedly re-anchoring
+// on "whatever row is rendered immediately above the current insertion
+// point" (or, once already "inside" a row, its own last visible child, if
+// it has one - there's nothing deeper to offer if it doesn't, so that's
+// where escalating stops). horizontalSteps < 0 walks back up the parentId
+// chain the same number of times, each step landing right after whichever
+// row it un-nested out of. Both directions are self-terminating against
+// the actual snapshot (nothing above to nest under; no parent left to
+// escape to), so an exaggerated drag just clamps at the shallowest/deepest
+// position the current layout can actually support, never an invalid one.
+function applyHorizontalNesting(
+    target: {id: string | undefined; entityId: string; placement: Placement},
+    rows: RowSnapshot[],
+    horizontalSteps: number,
+): {id: string | undefined; entityId: string; placement: Placement} {
+    // The empty-list placeholder has no ancestry to walk in either
+    // direction - dropping there can only ever mean "first root item".
+    if (horizontalSteps === 0 || target.id === undefined) {
+        return target;
+    }
+
+    const sortedByTop = [...rows].sort((a, b) => a.rect.top - b.rect.top);
+    let current: {id: string; entityId: string; placement: Placement} = {
+        id: target.id, entityId: target.entityId, placement: target.placement,
+    };
+    let steps = horizontalSteps;
+
+    while (steps > 0) {
+        let precedingId: string | undefined;
+
+        if (current.placement === "inside") {
+            const children = rows
+                .filter(r => r.parentId === current.id)
+                .sort((a, b) => a.rect.top - b.rect.top);
+
+            precedingId = children.at(-1)?.id;
+        } else if (current.placement === "after") {
+            precedingId = current.id;
+        } else {
+            const idx = sortedByTop.findIndex(r => r.id === current.id);
+
+            precedingId = idx > 0 ? sortedByTop[idx - 1].id : undefined;
+        }
+
+        if (precedingId === undefined) {
+            break;
+        }
+
+        current = {id: precedingId, entityId: current.entityId, placement: "inside"};
+        steps -= 1;
+    }
+
+    while (steps < 0) {
+        if (current.placement === "inside") {
+            // Cancel the nesting - land as this row's own next sibling
+            // rather than its child. No parent lookup needed for this
+            // first un-nest step; it's already right there.
+            current = {id: current.id, entityId: current.entityId, placement: "after"};
+        } else {
+            const owner = rows.find(r => r.id === current.id);
+
+            if (owner?.parentId === undefined) {
+                break;
+            }
+
+            current = {id: owner.parentId, entityId: current.entityId, placement: "after"};
+        }
+
+        steps += 1;
+    }
+
+    return current;
 }
 
 // Hit-testing against LIVE row positions creates a feedback loop: hovering
@@ -270,8 +398,11 @@ function resolvePlacement(
 // or below the last, where a direct hit would otherwise find nothing.
 function findDropTarget(
     y: number,
+    x: number,
+    dragStartX: number,
     rows: RowSnapshot[],
-): {id: string | undefined; entityId: string; placement: Placement} | undefined {
+    sticky?: {id: string; placement: Placement},
+): {id: string | undefined; entityId: string; placement: Placement; depth: number} | undefined {
     if (rows.length === 0) {
         return undefined;
     }
@@ -297,7 +428,7 @@ function findDropTarget(
     // (and only) root item" (see onGlobalPointerUp's transferItem call,
     // which sends no reference_id at all for this case).
     if (nearest.id === undefined) {
-        return {id: undefined, entityId: nearest.entityId, placement: "inside"};
+        return {id: undefined, entityId: nearest.entityId, placement: "inside", depth: 0};
     }
 
     const relativeY = (y - nearest.rect.top) / nearest.rect.height;
@@ -305,7 +436,22 @@ function findDropTarget(
     // resolvePlacement may pick a different id (nearest's own, or its
     // first child's) depending on placement, but never a different
     // entity - a row's children always live on the same entity it does.
-    return {...resolvePlacement(nearest.id, nearest.children, relativeY), entityId: nearest.entityId};
+    const vertical = {
+        ...resolvePlacement(nearest.id, nearest.children, relativeY, sticky),
+        entityId: nearest.entityId,
+    };
+
+    const horizontalSteps = Math.round((x - dragStartX) / ROW_INDENT_PX);
+    const resolved = applyHorizontalNesting(vertical, rows, horizontalSteps);
+
+    // depth is purely informational (drives the highlight's own indent -
+    // see todo-tree-item.ts's hoverDepth) - re-derived from whatever row
+    // resolved.id ended up naming, since horizontal nesting may have
+    // retargeted it away from `nearest` entirely.
+    const resolvedRow = rows.find(r => r.id === resolved.id);
+    const depth = resolvedRow ? resolvedRow.depth + (resolved.placement === "inside" ? 1 : 0) : 0;
+
+    return {...resolved, depth};
 }
 
 function findItem(items: TodoItem[], id: string): TodoItem | undefined {
@@ -780,6 +926,14 @@ export class TodoOverlayList extends LitElement {
     @state()
     private hoverPlacement?: Placement;
 
+    // How deep the CURRENT target sits (root = 0) - purely cosmetic,
+    // drives the highlight's own indent so it visually lines up with
+    // whatever depth horizontal drag-to-nest has resolved to (see
+    // applyHorizontalNesting) - a live preview of where the item will
+    // actually land, not just which row it's near.
+    @state()
+    private hoverDepth = 0;
+
     // Which entity hoverId's row belongs to - may differ from this.entity
     // when hovering over a row from another entity's section (same
     // multi-entity card, or an entirely different card) - see
@@ -1102,16 +1256,43 @@ export class TodoOverlayList extends LitElement {
             return;
         }
 
-        const hit = findDropTarget(e.clientY, this.rowSnapshot);
+        // The previous frame's own resolved target, fed back in as
+        // resolvePlacement's hysteresis anchor (see ZONE_HYSTERESIS) - a
+        // still-jittery finger sitting right on a zone boundary shouldn't
+        // flip the target back and forth every pointermove.
+        const sticky = this.hoverId !== undefined && this.hoverPlacement !== undefined
+            ? {id: this.hoverId, placement: this.hoverPlacement}
+            : undefined;
+
+        const hit = findDropTarget(
+            e.clientY, e.clientX, this.dragStartPointerPos.x, this.rowSnapshot, sticky,
+        );
         const valid = hit && hit.id !== this.draggedId;
+
+        const previousHoverId = this.hoverId;
+        const previousHoverPlacement = this.hoverPlacement;
 
         this.hoverId = valid ? hit.id : undefined;
         this.hoverPlacement = valid ? hit.placement : undefined;
+        this.hoverDepth = valid ? hit.depth : 0;
         // hit.id being undefined (the empty-list placeholder) is itself a
         // VALID target, so entity has to be tracked independently of
         // hoverId - hoverId alone can no longer answer "is anything being
         // hovered", only hoverEntityId can (see onGlobalPointerUp).
         this.hoverEntityId = valid ? hit.entityId : undefined;
+
+        // A light haptic tick whenever the actual target changes - mobile
+        // physical confirmation that doesn't depend on catching a visual
+        // highlight mid-gesture (see the collapsed-parent fix earlier in
+        // this file for exactly how easy that visual catch is to miss).
+        // Silently does nothing wherever unsupported (desktop, iOS
+        // Safari) - navigator.vibrate simply isn't defined there.
+        if (
+            e.pointerType !== "mouse"
+            && (this.hoverId !== previousHoverId || this.hoverPlacement !== previousHoverPlacement)
+        ) {
+            navigator.vibrate?.(10);
+        }
 
         this.broadcastDragHover();
     };
@@ -1130,6 +1311,7 @@ export class TodoOverlayList extends LitElement {
         this.draggedId = undefined;
         this.hoverId = undefined;
         this.hoverPlacement = undefined;
+        this.hoverDepth = 0;
         this.hoverEntityId = undefined;
         this.rowSnapshot = [];
 
@@ -1594,6 +1776,7 @@ export class TodoOverlayList extends LitElement {
                     .draggedId=${this.draggedId}
                     .hoverId=${this.hoverId}
                     .hoverPlacement=${this.hoverPlacement}
+                    .hoverDepth=${this.hoverDepth}
                     .emptyDropHighlight=${this.isEmptyDropTarget}
                     .hideCompleteForParents=${this.hideCompleteForParents}
                     .showCheckboxes=${this.showCheckboxes}
@@ -1621,6 +1804,7 @@ export class TodoOverlayList extends LitElement {
                     .draggedId=${this.draggedId}
                     .hoverId=${this.hoverId}
                     .hoverPlacement=${this.hoverPlacement}
+                    .hoverDepth=${this.hoverDepth}
                     .emptyDropHighlight=${this.isEmptyDropTarget}
                     .hideCompleteForParents=${this.hideCompleteForParents}
                     .showCheckboxes=${this.showCheckboxes}
@@ -1651,6 +1835,7 @@ export class TodoOverlayList extends LitElement {
                             .draggedId=${this.draggedId}
                             .hoverId=${this.hoverId}
                             .hoverPlacement=${this.hoverPlacement}
+                            .hoverDepth=${this.hoverDepth}
                             .hideCompleteForParents=${this.hideCompleteForParents}
                             .showCheckboxes=${this.showCheckboxes}
                             .confirmDelete=${this.confirmDelete}
@@ -1675,6 +1860,7 @@ export class TodoOverlayList extends LitElement {
                 .draggedId=${this.draggedId}
                 .hoverId=${this.hoverId}
                 .hoverPlacement=${this.hoverPlacement}
+                .hoverDepth=${this.hoverDepth}
                 .hideCompleteForParents=${this.hideCompleteForParents}
                 .showCheckboxes=${this.showCheckboxes}
                 .confirmDelete=${this.confirmDelete}

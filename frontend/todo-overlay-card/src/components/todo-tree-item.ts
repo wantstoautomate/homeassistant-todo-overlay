@@ -11,6 +11,17 @@ import {LONG_PRESS_MS, type Placement, type TodoItem, isOverdue} from "../models
 // the module docstring below) computes placement the same way.
 export const BEFORE_AFTER_ZONE = 0.3;
 
+// One nesting level's worth of visual indent (matches the ul rule
+// below). Exported so the card's own hit-testing can turn a horizontal
+// drag distance into "how many nesting levels" using the exact same
+// unit the rows are actually indented by (see todo-overlay-list.ts's
+// applyHorizontalNesting), and so the live depth-preview marker
+// (rowStyles' depth-indicator) lines up with real row indentation
+// instead of an independently-guessed pixel value that could drift out
+// of sync with it.
+export const ROW_INDENT_PX = 20;
+const rowIndentPx = unsafeCSS(`${ROW_INDENT_PX}px`);
+
 // Pointer movement beyond this many pixels, while still under the hold
 // threshold, cancels the hold-to-edit gesture - a small allowance for
 // natural hand/touch jitter rather than a strict zero-tolerance check.
@@ -145,7 +156,7 @@ export class TodoTreeItem extends LitElement {
         ul {
             list-style: none;
             margin: 0;
-            padding-inline-start: 20px;
+            padding-inline-start: ${rowIndentPx};
         }
 
         .row {
@@ -207,6 +218,25 @@ export class TodoTreeItem extends LitElement {
 
         .row.gap-after {
             margin-bottom: 52px;
+        }
+
+        /* Live preview of the depth a horizontal drag has resolved to
+           (see todo-overlay-list.ts's applyHorizontalNesting) - a thin
+           accent-colored rail inset by that many indent-levels, so
+           dragging left/right visibly moves it in real time rather than
+           requiring a mental model of which row it'll end up under.
+           Absolutely positioned so it never affects row layout/height -
+           purely an overlay on top of whichever row is the current
+           drop target. */
+        .depth-indicator {
+            position: absolute;
+            left: 0;
+            top: 4px;
+            bottom: 4px;
+            width: 3px;
+            border-radius: 2px;
+            background: var(--accent-color, var(--primary-color));
+            transition: margin-left 100ms ease;
         }
 
         .content {
@@ -510,6 +540,15 @@ export class TodoTreeItem extends LitElement {
 
     @property({attribute: false})
     hoverPlacement?: Placement;
+
+    // How deep the CURRENT target sits (root = 0) - see
+    // todo-overlay-list.ts's own hoverDepth for what drives this. Used
+    // only by the row that's actually the drop target (see rowStyles)
+    // to inset its own highlight so it visually lines up with the depth
+    // horizontal drag-to-nest has resolved to - a live preview of where
+    // the item will land, not just which row triggered the highlight.
+    @property({attribute: false})
+    hoverDepth = 0;
 
     @property({attribute: false})
     hideCompleteForParents = false;
@@ -912,6 +951,16 @@ export class TodoTreeItem extends LitElement {
                     @pointerdown=${this.pointerDown}
                 >
                     ${
+                        isDropTarget
+                            ? html`
+                                <div
+                                    class="depth-indicator"
+                                    style=${styleMap({marginLeft: `${this.hoverDepth * ROW_INDENT_PX}px`})}
+                                ></div>
+                            `
+                            : ""
+                    }
+                    ${
                         isBeingDragged
                             ? ""
                             : html`
@@ -1050,6 +1099,7 @@ export class TodoTreeItem extends LitElement {
                                             .draggedId=${this.draggedId}
                                             .hoverId=${this.hoverId}
                                             .hoverPlacement=${this.hoverPlacement}
+                                            .hoverDepth=${this.hoverDepth}
                                             .hideCompleteForParents=${this.hideCompleteForParents}
                                             .showCheckboxes=${this.showCheckboxes}
                                             .confirmDelete=${this.confirmDelete}

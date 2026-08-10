@@ -2003,6 +2003,8 @@ TodoSaveLoadDialog = __decorateClass([
 
 // src/components/todo-tree-item.ts
 var BEFORE_AFTER_ZONE = 0.3;
+var ROW_INDENT_PX = 20;
+var rowIndentPx = r(`${ROW_INDENT_PX}px`);
 var MOVE_CANCEL_THRESHOLD_PX = 6;
 var HOLD_RIPPLE_SIZE = 72;
 var holdRippleSizePx = r(`${HOLD_RIPPLE_SIZE}px`);
@@ -2069,6 +2071,7 @@ function formatDue(item) {
 var TodoTreeItem = class extends i4 {
   constructor() {
     super(...arguments);
+    this.hoverDepth = 0;
     this.hideCompleteForParents = false;
     this.showCheckboxes = false;
     this.confirmDelete = true;
@@ -2310,6 +2313,12 @@ var TodoTreeItem = class extends i4 {
 
                     @pointerdown=${this.pointerDown}
                 >
+                    ${isDropTarget ? b2`
+                                <div
+                                    class="depth-indicator"
+                                    style=${o6({ marginLeft: `${this.hoverDepth * ROW_INDENT_PX}px` })}
+                                ></div>
+                            ` : ""}
                     ${isBeingDragged ? "" : b2`
                                 ${this.hasChildren ? b2`
                                             <button
@@ -2405,6 +2414,7 @@ var TodoTreeItem = class extends i4 {
                                             .draggedId=${this.draggedId}
                                             .hoverId=${this.hoverId}
                                             .hoverPlacement=${this.hoverPlacement}
+                                            .hoverDepth=${this.hoverDepth}
                                             .hideCompleteForParents=${this.hideCompleteForParents}
                                             .showCheckboxes=${this.showCheckboxes}
                                             .confirmDelete=${this.confirmDelete}
@@ -2430,7 +2440,7 @@ TodoTreeItem.styles = i`
         ul {
             list-style: none;
             margin: 0;
-            padding-inline-start: 20px;
+            padding-inline-start: ${rowIndentPx};
         }
 
         .row {
@@ -2492,6 +2502,25 @@ TodoTreeItem.styles = i`
 
         .row.gap-after {
             margin-bottom: 52px;
+        }
+
+        /* Live preview of the depth a horizontal drag has resolved to
+           (see todo-overlay-list.ts's applyHorizontalNesting) - a thin
+           accent-colored rail inset by that many indent-levels, so
+           dragging left/right visibly moves it in real time rather than
+           requiring a mental model of which row it'll end up under.
+           Absolutely positioned so it never affects row layout/height -
+           purely an overlay on top of whichever row is the current
+           drop target. */
+        .depth-indicator {
+            position: absolute;
+            left: 0;
+            top: 4px;
+            bottom: 4px;
+            width: 3px;
+            border-radius: 2px;
+            background: var(--accent-color, var(--primary-color));
+            transition: margin-left 100ms ease;
         }
 
         .content {
@@ -2797,6 +2826,9 @@ __decorateClass([
 ], TodoTreeItem.prototype, "hoverPlacement", 2);
 __decorateClass([
   n4({ attribute: false })
+], TodoTreeItem.prototype, "hoverDepth", 2);
+__decorateClass([
+  n4({ attribute: false })
 ], TodoTreeItem.prototype, "hideCompleteForParents", 2);
 __decorateClass([
   n4({ attribute: false })
@@ -2834,6 +2866,7 @@ var TodoTree = class extends i4 {
   constructor() {
     super(...arguments);
     this.items = [];
+    this.hoverDepth = 0;
     this.emptyDropHighlight = false;
     this.hideCompleteForParents = false;
     this.showCheckboxes = false;
@@ -2861,6 +2894,7 @@ var TodoTree = class extends i4 {
                                     .draggedId=${this.draggedId}
                                     .hoverId=${this.hoverId}
                                     .hoverPlacement=${this.hoverPlacement}
+                                    .hoverDepth=${this.hoverDepth}
                                     .hideCompleteForParents=${this.hideCompleteForParents}
                                     .showCheckboxes=${this.showCheckboxes}
                                     .confirmDelete=${this.confirmDelete}
@@ -2920,6 +2954,9 @@ __decorateClass([
 __decorateClass([
   n4({ attribute: false })
 ], TodoTree.prototype, "hoverPlacement", 2);
+__decorateClass([
+  n4({ attribute: false })
+], TodoTree.prototype, "hoverDepth", 2);
 __decorateClass([
   n4({ attribute: false })
 ], TodoTree.prototype, "emptyDropHighlight", 2);
@@ -2986,11 +3023,12 @@ var REORDER_TOGGLE_ICON = b2`
 `;
 var ITEM_CHANGED_EVENT = "todo_overlay_item_event";
 var HOVER_DEAD_ZONE_PX = 12;
-function collectAllRows(root, currentEntity) {
+function collectAllRows(root, currentEntity, currentDepth = 0, currentParentId) {
   const rows = [];
   for (const el of Array.from(root.querySelectorAll("*"))) {
     const itemEl = el;
-    if (el.localName === "todo-overlay-tree-item" && itemEl.item && currentEntity) {
+    const isTreeItem = el.localName === "todo-overlay-tree-item" && Boolean(itemEl.item);
+    if (isTreeItem && currentEntity) {
       const rowEl = itemEl.shadowRoot?.querySelector(".row");
       if (rowEl) {
         const hasVisibleChildren = itemEl.shadowRoot?.querySelector("ul") != null;
@@ -2998,7 +3036,9 @@ function collectAllRows(root, currentEntity) {
           id: itemEl.item.id,
           entityId: currentEntity,
           children: hasVisibleChildren ? itemEl.item.children : [],
-          rect: rowEl.getBoundingClientRect()
+          rect: rowEl.getBoundingClientRect(),
+          depth: currentDepth,
+          parentId: currentParentId
         });
       }
     }
@@ -3009,33 +3049,83 @@ function collectAllRows(root, currentEntity) {
           id: void 0,
           entityId: currentEntity,
           children: [],
-          rect: emptyZone.getBoundingClientRect()
+          rect: emptyZone.getBoundingClientRect(),
+          depth: 0,
+          parentId: void 0
         });
       }
     }
     if (el.shadowRoot) {
-      const nextEntity = el.localName === "todo-overlay-list" ? el.entity : currentEntity;
-      rows.push(...collectAllRows(el.shadowRoot, nextEntity));
+      const isList = el.localName === "todo-overlay-list";
+      const nextEntity = isList ? el.entity : currentEntity;
+      const nextDepth = isList ? 0 : isTreeItem ? currentDepth + 1 : currentDepth;
+      const nextParentId = isList ? void 0 : isTreeItem ? itemEl.item.id : currentParentId;
+      rows.push(...collectAllRows(el.shadowRoot, nextEntity, nextDepth, nextParentId));
     }
   }
   return rows;
 }
-function resolvePlacement(rowId, rowChildren, relativeY) {
+var ZONE_HYSTERESIS = 0.05;
+function resolvePlacement(rowId, rowChildren, relativeY, sticky) {
   if (rowChildren.length > 0) {
     if (relativeY < BEFORE_AFTER_ZONE) {
       return { id: rowId, placement: "before" };
     }
     return { id: rowChildren[0].id, placement: "before" };
   }
-  if (relativeY < BEFORE_AFTER_ZONE) {
+  const beforeBoundary = sticky?.id === rowId && sticky.placement === "before" ? BEFORE_AFTER_ZONE + ZONE_HYSTERESIS : BEFORE_AFTER_ZONE - ZONE_HYSTERESIS;
+  const afterBoundary = sticky?.id === rowId && sticky.placement === "after" ? 1 - BEFORE_AFTER_ZONE - ZONE_HYSTERESIS : 1 - BEFORE_AFTER_ZONE + ZONE_HYSTERESIS;
+  if (relativeY < beforeBoundary) {
     return { id: rowId, placement: "before" };
   }
-  if (relativeY > 1 - BEFORE_AFTER_ZONE) {
+  if (relativeY > afterBoundary) {
     return { id: rowId, placement: "after" };
   }
   return { id: rowId, placement: "inside" };
 }
-function findDropTarget(y3, rows) {
+function applyHorizontalNesting(target, rows, horizontalSteps) {
+  if (horizontalSteps === 0 || target.id === void 0) {
+    return target;
+  }
+  const sortedByTop = [...rows].sort((a3, b3) => a3.rect.top - b3.rect.top);
+  let current = {
+    id: target.id,
+    entityId: target.entityId,
+    placement: target.placement
+  };
+  let steps = horizontalSteps;
+  while (steps > 0) {
+    let precedingId;
+    if (current.placement === "inside") {
+      const children = rows.filter((r6) => r6.parentId === current.id).sort((a3, b3) => a3.rect.top - b3.rect.top);
+      precedingId = children.at(-1)?.id;
+    } else if (current.placement === "after") {
+      precedingId = current.id;
+    } else {
+      const idx = sortedByTop.findIndex((r6) => r6.id === current.id);
+      precedingId = idx > 0 ? sortedByTop[idx - 1].id : void 0;
+    }
+    if (precedingId === void 0) {
+      break;
+    }
+    current = { id: precedingId, entityId: current.entityId, placement: "inside" };
+    steps -= 1;
+  }
+  while (steps < 0) {
+    if (current.placement === "inside") {
+      current = { id: current.id, entityId: current.entityId, placement: "after" };
+    } else {
+      const owner = rows.find((r6) => r6.id === current.id);
+      if (owner?.parentId === void 0) {
+        break;
+      }
+      current = { id: owner.parentId, entityId: current.entityId, placement: "after" };
+    }
+    steps += 1;
+  }
+  return current;
+}
+function findDropTarget(y3, x2, dragStartX, rows, sticky) {
   if (rows.length === 0) {
     return void 0;
   }
@@ -3049,10 +3139,18 @@ function findDropTarget(y3, rows) {
     }
   }
   if (nearest.id === void 0) {
-    return { id: void 0, entityId: nearest.entityId, placement: "inside" };
+    return { id: void 0, entityId: nearest.entityId, placement: "inside", depth: 0 };
   }
   const relativeY = (y3 - nearest.rect.top) / nearest.rect.height;
-  return { ...resolvePlacement(nearest.id, nearest.children, relativeY), entityId: nearest.entityId };
+  const vertical = {
+    ...resolvePlacement(nearest.id, nearest.children, relativeY, sticky),
+    entityId: nearest.entityId
+  };
+  const horizontalSteps = Math.round((x2 - dragStartX) / ROW_INDENT_PX);
+  const resolved = applyHorizontalNesting(vertical, rows, horizontalSteps);
+  const resolvedRow = rows.find((r6) => r6.id === resolved.id);
+  const depth = resolvedRow ? resolvedRow.depth + (resolved.placement === "inside" ? 1 : 0) : 0;
+  return { ...resolved, depth };
 }
 function findItem(items, id) {
   for (const item of items) {
@@ -3110,6 +3208,7 @@ var TodoOverlayList = class extends i4 {
     this.onToggleReorderMode = () => {
       this.reorderModeActive = !this.reorderModeActive;
     };
+    this.hoverDepth = 0;
     this.foreignDragActive = false;
     this.onForeignDragHover = (e7) => {
       const wasEmptyTarget = this.isEmptyDropTarget;
@@ -3140,11 +3239,24 @@ var TodoOverlayList = class extends i4 {
       if (distanceFromStart < HOVER_DEAD_ZONE_PX) {
         return;
       }
-      const hit = findDropTarget(e7.clientY, this.rowSnapshot);
+      const sticky = this.hoverId !== void 0 && this.hoverPlacement !== void 0 ? { id: this.hoverId, placement: this.hoverPlacement } : void 0;
+      const hit = findDropTarget(
+        e7.clientY,
+        e7.clientX,
+        this.dragStartPointerPos.x,
+        this.rowSnapshot,
+        sticky
+      );
       const valid = hit && hit.id !== this.draggedId;
+      const previousHoverId = this.hoverId;
+      const previousHoverPlacement = this.hoverPlacement;
       this.hoverId = valid ? hit.id : void 0;
       this.hoverPlacement = valid ? hit.placement : void 0;
+      this.hoverDepth = valid ? hit.depth : 0;
       this.hoverEntityId = valid ? hit.entityId : void 0;
+      if (e7.pointerType !== "mouse" && (this.hoverId !== previousHoverId || this.hoverPlacement !== previousHoverPlacement)) {
+        navigator.vibrate?.(10);
+      }
       this.broadcastDragHover();
     };
     this.onGlobalPointerUp = async () => {
@@ -3159,6 +3271,7 @@ var TodoOverlayList = class extends i4 {
       this.draggedId = void 0;
       this.hoverId = void 0;
       this.hoverPlacement = void 0;
+      this.hoverDepth = 0;
       this.hoverEntityId = void 0;
       this.rowSnapshot = [];
       this.broadcastDragHover();
@@ -3636,6 +3749,7 @@ var TodoOverlayList = class extends i4 {
                     .draggedId=${this.draggedId}
                     .hoverId=${this.hoverId}
                     .hoverPlacement=${this.hoverPlacement}
+                    .hoverDepth=${this.hoverDepth}
                     .emptyDropHighlight=${this.isEmptyDropTarget}
                     .hideCompleteForParents=${this.hideCompleteForParents}
                     .showCheckboxes=${this.showCheckboxes}
@@ -3661,6 +3775,7 @@ var TodoOverlayList = class extends i4 {
                     .draggedId=${this.draggedId}
                     .hoverId=${this.hoverId}
                     .hoverPlacement=${this.hoverPlacement}
+                    .hoverDepth=${this.hoverDepth}
                     .emptyDropHighlight=${this.isEmptyDropTarget}
                     .hideCompleteForParents=${this.hideCompleteForParents}
                     .showCheckboxes=${this.showCheckboxes}
@@ -3687,6 +3802,7 @@ var TodoOverlayList = class extends i4 {
                             .draggedId=${this.draggedId}
                             .hoverId=${this.hoverId}
                             .hoverPlacement=${this.hoverPlacement}
+                            .hoverDepth=${this.hoverDepth}
                             .hideCompleteForParents=${this.hideCompleteForParents}
                             .showCheckboxes=${this.showCheckboxes}
                             .confirmDelete=${this.confirmDelete}
@@ -3709,6 +3825,7 @@ var TodoOverlayList = class extends i4 {
                 .draggedId=${this.draggedId}
                 .hoverId=${this.hoverId}
                 .hoverPlacement=${this.hoverPlacement}
+                .hoverDepth=${this.hoverDepth}
                 .hideCompleteForParents=${this.hideCompleteForParents}
                 .showCheckboxes=${this.showCheckboxes}
                 .confirmDelete=${this.confirmDelete}
@@ -4309,6 +4426,9 @@ __decorateClass([
 __decorateClass([
   r5()
 ], TodoOverlayList.prototype, "hoverPlacement", 2);
+__decorateClass([
+  r5()
+], TodoOverlayList.prototype, "hoverDepth", 2);
 __decorateClass([
   r5()
 ], TodoOverlayList.prototype, "foreignDragActive", 2);
