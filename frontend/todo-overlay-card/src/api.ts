@@ -106,6 +106,13 @@ export interface CreateItemFields {
     quantity?: string;
     tags?: string[];
     triggerOnDue?: boolean;
+    // Positions the new item relative to an existing one (same
+    // before/after/inside semantics as moveItem) instead of wherever
+    // the native adapter's own add_item happens to put it - used by
+    // the per-parent quick add to insert directly below a specific
+    // parent's own row, above its existing children.
+    referenceId?: string;
+    placement?: Placement;
 }
 
 export async function createItem(
@@ -124,6 +131,8 @@ export async function createItem(
         quantity: fields.quantity,
         tags: fields.tags,
         trigger_on_due: fields.triggerOnDue,
+        reference_id: fields.referenceId,
+        placement: fields.placement,
     });
 
     return result.id;

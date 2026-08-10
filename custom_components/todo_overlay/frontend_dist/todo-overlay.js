@@ -729,7 +729,9 @@ async function createItem(hass, entityId, fields) {
     due_datetime: fields.dueDatetime,
     quantity: fields.quantity,
     tags: fields.tags,
-    trigger_on_due: fields.triggerOnDue
+    trigger_on_due: fields.triggerOnDue,
+    reference_id: fields.referenceId,
+    placement: fields.placement
   });
   return result.id;
 }
@@ -2042,6 +2044,9 @@ var CROSS_ICON = b2`
         <path d="M19,6.41L17.59,5L12,10.59L6.41,5L5,6.41L10.59,12L5,17.59L6.41,19L12,13.41L17.59,19L19,17.59L13.41,12L19,6.41Z"></path>
     </svg>
 `;
+var PLUS_ICON = b2`
+    <svg viewBox="0 0 24 24"><path d="M19 13H13V19H11V13H5V11H11V5H13V11H19V13Z"></path></svg>
+`;
 var DRAG_HANDLE_ICON = b2`
     <svg viewBox="0 0 24 24">
         <path d="M9,3H11V5H9V3M13,3H15V5H13V3M9,7H11V9H9V7M13,7H15V9H13V7M9,11H11V13H9V11M13,11H15V13H13V11M9,15H11V17H9V15M13,15H15V17H13V15M9,19H11V21H9V19M13,19H15V21H13V19Z"></path>
@@ -2088,8 +2093,10 @@ var TodoTreeItem = class extends i4 {
     this.collapsedIds = /* @__PURE__ */ new Set();
     this.dimmedByAncestorDrag = false;
     this.reorderModeActive = false;
+    this.childQuickAddParentIds = /* @__PURE__ */ new Set();
     this.dragEngaged = false;
     this.confirmingDelete = false;
+    this.childQuickAddValue = "";
     this.pointerDownAt = 0;
     this.hasMoved = false;
     // Mouse users have no reason to wait out the hold timer before a drag
@@ -2214,6 +2221,45 @@ var TodoTreeItem = class extends i4 {
     this.dispatchEvent(
       new CustomEvent("tree-delete-item", {
         detail: { id: this.item.id },
+        bubbles: true,
+        composed: true
+      })
+    );
+  }
+  onToggleChildQuickAddClick(e7) {
+    e7.stopPropagation();
+    this.dispatchEvent(
+      new CustomEvent("tree-toggle-child-quick-add", {
+        detail: { id: this.item.id },
+        bubbles: true,
+        composed: true
+      })
+    );
+  }
+  onChildQuickAddInput(e7) {
+    this.childQuickAddValue = e7.target.value;
+  }
+  onChildQuickAddKeydown(e7) {
+    if (e7.key === "Enter") {
+      this.submitChildQuickAdd();
+    }
+  }
+  // Clears the field the moment it's sent, not once todo-overlay-list.ts
+  // confirms the create actually succeeded (unlike the root quick-add's
+  // own submitQuickAdd, which can afford to wait since it's the one
+  // holding the value) - this component has no way to know that
+  // outcome without a value threaded back down just to say "clear
+  // now", so an error banner (see reportError) is the fallback if the
+  // create fails, same as it would be for any other failed action.
+  submitChildQuickAdd() {
+    const title = this.childQuickAddValue.trim();
+    if (!title) {
+      return;
+    }
+    this.childQuickAddValue = "";
+    this.dispatchEvent(
+      new CustomEvent("tree-quick-add-child", {
+        detail: { parentId: this.item.id, title },
         bubbles: true,
         composed: true
       })
@@ -2400,7 +2446,19 @@ var TodoTreeItem = class extends i4 {
                                             >
                                                 ${DRAG_HANDLE_ICON}
                                             </button>
-                                        ` : this.hasChildren ? "" : b2`
+                                        ` : this.hasChildren ? b2`
+                                                <button
+                                                    class=${e6({
+      "child-quick-add-toggle": true,
+      active: this.childQuickAddParentIds.has(this.item.id)
+    })}
+                                                    aria-label=${this.childQuickAddParentIds.has(this.item.id) ? "Close add-child field" : "Add child item"}
+                                                    @click=${this.onToggleChildQuickAddClick}
+                                                    @pointerdown=${(e7) => e7.stopPropagation()}
+                                                >
+                                                    ${this.childQuickAddParentIds.has(this.item.id) ? CROSS_ICON : PLUS_ICON}
+                                                </button>
+                                            ` : b2`
                                                 <button
                                                     class=${e6({
       "delete-button": true,
@@ -2426,6 +2484,22 @@ var TodoTreeItem = class extends i4 {
                             `}
                 </div>
 
+                ${this.hasChildren && this.childQuickAddParentIds.has(this.item.id) ? b2`
+                            <div class="child-quick-add-row">
+                                <input
+                                    type="text"
+                                    placeholder="Add item"
+                                    .value=${this.childQuickAddValue}
+                                    @input=${this.onChildQuickAddInput}
+                                    @keydown=${this.onChildQuickAddKeydown}
+                                    @pointerdown=${(e7) => e7.stopPropagation()}
+                                />
+                                <button @click=${this.submitChildQuickAdd}>
+                                    Add
+                                </button>
+                            </div>
+                        ` : ""}
+
                 ${this.hasChildren && !this.isCollapsed ? b2`
                             <ul>
                                 ${this.item.children.map(
@@ -2443,6 +2517,7 @@ var TodoTreeItem = class extends i4 {
                                             .collapsedIds=${this.collapsedIds}
                                             .dimmedByAncestorDrag=${isBeingDragged || this.dimmedByAncestorDrag}
                                             .reorderModeActive=${this.reorderModeActive}
+                                            .childQuickAddParentIds=${this.childQuickAddParentIds}
                                         ></todo-overlay-tree-item>
                                     `
     )}
@@ -2809,6 +2884,91 @@ TodoTreeItem.styles = i`
             background: rgba(var(--rgb-error-color, 219, 68, 55), 0.15);
         }
 
+        /* Fills the exact slot the delete button leaves empty for a
+           parent row (see hasChildren in the template, and the delete
+           button's own comment above) - same dimensions/opacity
+           treatment as that button, so it reads as "the same kind of
+           control" rather than a mismatched addition. Toggles to the
+           cross glyph (and stays fully opaque) while this parent's own
+           quick-add field is open - see .child-quick-add-row below. */
+        .child-quick-add-toggle {
+            flex-shrink: 0;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            width: 24px;
+            height: 24px;
+            margin-inline-end: -4px;
+            border: none;
+            background: none;
+            padding: 0;
+            border-radius: 50%;
+            cursor: pointer;
+            color: var(--secondary-text-color);
+            opacity: 0.5;
+            transition: opacity 0.15s ease, background-color 0.15s ease, color 0.15s ease;
+        }
+
+        .row:hover .child-quick-add-toggle {
+            opacity: 1;
+        }
+
+        .child-quick-add-toggle.active {
+            opacity: 1;
+            color: var(--primary-color);
+        }
+
+        .child-quick-add-toggle svg {
+            width: 16px;
+            height: 16px;
+            fill: currentColor;
+        }
+
+        /* Directly below the parent's own row, above its existing
+           children (see the template) - indented to the SAME depth a
+           real child would be (matches the child <ul>'s own
+           padding-inline-start), so it's unambiguous this is adding a
+           child of THIS row, not a sibling of it. Same field styling as
+           the toolbar's own root-level quick-add row
+           (todo-overlay-list.ts's .quick-add-row) - a different
+           attachment point, not a different-looking control. */
+        .child-quick-add-row {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin: 4px 0;
+            padding-inline-start: ${rowIndentPx};
+        }
+
+        .child-quick-add-row input {
+            flex: 1;
+            min-width: 0;
+            font-family: Roboto, "Noto Sans", sans-serif;
+            font-size: 14px;
+            color: var(--primary-text-color);
+            background: none;
+            border: none;
+            border-bottom: 1px solid var(--divider-color);
+            padding: 6px 0;
+            outline: none;
+        }
+
+        .child-quick-add-row input:focus {
+            border-bottom: 2px solid var(--primary-color);
+            padding-bottom: 5px;
+        }
+
+        .child-quick-add-row button {
+            flex-shrink: 0;
+            border: none;
+            background: none;
+            font-family: Roboto, "Noto Sans", sans-serif;
+            font-size: 14px;
+            color: var(--primary-color);
+            font-weight: 500;
+            cursor: pointer;
+        }
+
         /* Shown instead of the delete button (see the template) while
            reorderModeActive, for every row regardless of hasChildren -
            dragging needs to work on parents too, unlike delete.
@@ -2897,6 +3057,9 @@ __decorateClass([
   n4({ attribute: false })
 ], TodoTreeItem.prototype, "reorderModeActive", 2);
 __decorateClass([
+  n4({ attribute: false })
+], TodoTreeItem.prototype, "childQuickAddParentIds", 2);
+__decorateClass([
   r5()
 ], TodoTreeItem.prototype, "holdRippleOrigin", 2);
 __decorateClass([
@@ -2905,6 +3068,9 @@ __decorateClass([
 __decorateClass([
   r5()
 ], TodoTreeItem.prototype, "confirmingDelete", 2);
+__decorateClass([
+  r5()
+], TodoTreeItem.prototype, "childQuickAddValue", 2);
 TodoTreeItem = __decorateClass([
   t3("todo-overlay-tree-item")
 ], TodoTreeItem);
@@ -2922,6 +3088,7 @@ var TodoTree = class extends i4 {
     this.dragDisabled = false;
     this.collapsedIds = /* @__PURE__ */ new Set();
     this.reorderModeActive = false;
+    this.childQuickAddParentIds = /* @__PURE__ */ new Set();
   }
   render() {
     return b2`
@@ -2949,6 +3116,7 @@ var TodoTree = class extends i4 {
                                     .dragDisabled=${this.dragDisabled}
                                     .collapsedIds=${this.collapsedIds}
                                     .reorderModeActive=${this.reorderModeActive}
+                                    .childQuickAddParentIds=${this.childQuickAddParentIds}
                                 ></todo-overlay-tree-item>
                             `
     )}
@@ -3026,6 +3194,9 @@ __decorateClass([
 __decorateClass([
   n4({ attribute: false })
 ], TodoTree.prototype, "reorderModeActive", 2);
+__decorateClass([
+  n4({ attribute: false })
+], TodoTree.prototype, "childQuickAddParentIds", 2);
 TodoTree = __decorateClass([
   t3("todo-overlay-tree")
 ], TodoTree);
@@ -3120,7 +3291,7 @@ TodoConfirmDialog = __decorateClass([
 ], TodoConfirmDialog);
 
 // src/components/todo-overlay-list.ts
-var PLUS_ICON = b2`
+var PLUS_ICON2 = b2`
     <svg viewBox="0 0 24 24"><path d="M19 13H13V19H11V13H5V11H11V5H13V11H19V13Z"></path></svg>
 `;
 var LINK_ICON = b2`
@@ -3323,6 +3494,7 @@ var TodoOverlayList = class extends i4 {
     this.collapsedIds = /* @__PURE__ */ new Set();
     this.filterMode = "all";
     this.quickAddExpanded = false;
+    this.childQuickAddParentIds = /* @__PURE__ */ new Set();
     this.reorderModeActive = false;
     this.onToggleReorderMode = () => {
       this.reorderModeActive = !this.reorderModeActive;
@@ -3666,7 +3838,11 @@ var TodoOverlayList = class extends i4 {
   }
   onToggleQuickAdd() {
     if (this.showQuickAdd) {
-      this.quickAddExpanded = !this.quickAddExpanded;
+      const wasExpanded = this.quickAddExpanded;
+      this.quickAddExpanded = !wasExpanded;
+      if (wasExpanded && this.childQuickAddParentIds.size > 0) {
+        this.childQuickAddParentIds = /* @__PURE__ */ new Set();
+      }
     } else {
       this.openCreateDialog();
     }
@@ -3913,6 +4089,44 @@ var TodoOverlayList = class extends i4 {
       this.reportError("adding the item", err);
     }
   }
+  // Toggling a specific parent's own inline "add a child" field open/
+  // closed (see todo-tree-item.ts's per-row plus icon) - independent
+  // of the root quick-add and of every other parent's own field; see
+  // childQuickAddParentIds' own comment for how the two relate.
+  onToggleChildQuickAdd(e7) {
+    const parentId = e7.detail.id;
+    const next = new Set(this.childQuickAddParentIds);
+    if (next.has(parentId)) {
+      next.delete(parentId);
+    } else {
+      next.add(parentId);
+      if (this.collapsedIds.has(parentId)) {
+        const nextCollapsed = new Set(this.collapsedIds);
+        nextCollapsed.delete(parentId);
+        this.collapsedIds = nextCollapsed;
+        saveCollapsedIds(this.entity, nextCollapsed);
+      }
+    }
+    this.childQuickAddParentIds = next;
+  }
+  async onChildQuickAddSubmit(e7) {
+    const title = e7.detail.title.trim();
+    if (!title || !this.list) {
+      return;
+    }
+    const parent = findItem(this.list.items, e7.detail.parentId);
+    if (!parent) {
+      return;
+    }
+    const referenceId = parent.children.length > 0 ? parent.children[0].id : e7.detail.parentId;
+    const placement = parent.children.length > 0 ? "before" : "inside";
+    try {
+      await createItem(this.hass, this.entity, { title, referenceId, placement });
+      await this.load();
+    } catch (err) {
+      this.reportError("adding the item", err);
+    }
+  }
   renderTree(list) {
     const filtered = filterTree(list.items, this.filterMode);
     const items = sortTree(filtered, this.sortBy, this.sortOrder);
@@ -3930,6 +4144,7 @@ var TodoOverlayList = class extends i4 {
                     .confirmDelete=${this.confirmDelete}
                     .dragDisabled=${this.dragDisabled}
                     .collapsedIds=${this.collapsedIds}
+                    .childQuickAddParentIds=${this.childQuickAddParentIds}
                     .reorderModeActive=${this.reorderModeActive}
 
                     @tree-pointer-down=${this.onPointerDown}
@@ -3937,6 +4152,8 @@ var TodoOverlayList = class extends i4 {
                     @tree-pointer-up=${this.onPointerUp}
                     @tree-toggle-collapse=${this.onToggleCollapse}
                     @tree-delete-item=${this.onDeleteItem}
+                    @tree-toggle-child-quick-add=${this.onToggleChildQuickAdd}
+                    @tree-quick-add-child=${this.onChildQuickAddSubmit}
 
                 ></todo-overlay-tree>
             `;
@@ -3956,6 +4173,7 @@ var TodoOverlayList = class extends i4 {
                     .confirmDelete=${this.confirmDelete}
                     .dragDisabled=${this.dragDisabled}
                     .collapsedIds=${this.collapsedIds}
+                    .childQuickAddParentIds=${this.childQuickAddParentIds}
                     .reorderModeActive=${this.reorderModeActive}
 
                     @tree-pointer-down=${this.onPointerDown}
@@ -3963,6 +4181,8 @@ var TodoOverlayList = class extends i4 {
                     @tree-pointer-up=${this.onPointerUp}
                     @tree-toggle-collapse=${this.onToggleCollapse}
                     @tree-delete-item=${this.onDeleteItem}
+                    @tree-toggle-child-quick-add=${this.onToggleChildQuickAdd}
+                    @tree-quick-add-child=${this.onChildQuickAddSubmit}
 
                 ></todo-overlay-tree>
             `;
@@ -3982,6 +4202,7 @@ var TodoOverlayList = class extends i4 {
                             .confirmDelete=${this.confirmDelete}
                             .dragDisabled=${this.dragDisabled}
                             .collapsedIds=${this.collapsedIds}
+                            .childQuickAddParentIds=${this.childQuickAddParentIds}
                     .reorderModeActive=${this.reorderModeActive}
 
                             @tree-pointer-down=${this.onPointerDown}
@@ -3989,6 +4210,8 @@ var TodoOverlayList = class extends i4 {
                             @tree-pointer-up=${this.onPointerUp}
                             @tree-toggle-collapse=${this.onToggleCollapse}
                             @tree-delete-item=${this.onDeleteItem}
+                            @tree-toggle-child-quick-add=${this.onToggleChildQuickAdd}
+                            @tree-quick-add-child=${this.onChildQuickAddSubmit}
 
                         ></todo-overlay-tree>
                     ` : ""}
@@ -4005,6 +4228,7 @@ var TodoOverlayList = class extends i4 {
                 .confirmDelete=${this.confirmDelete}
                 .dragDisabled=${this.dragDisabled}
                 .collapsedIds=${this.collapsedIds}
+                .childQuickAddParentIds=${this.childQuickAddParentIds}
                 .reorderModeActive=${this.reorderModeActive}
 
                 @tree-pointer-down=${this.onPointerDown}
@@ -4012,6 +4236,8 @@ var TodoOverlayList = class extends i4 {
                 @tree-pointer-up=${this.onPointerUp}
                 @tree-toggle-collapse=${this.onToggleCollapse}
                 @tree-delete-item=${this.onDeleteItem}
+                @tree-toggle-child-quick-add=${this.onToggleChildQuickAdd}
+                @tree-quick-add-child=${this.onChildQuickAddSubmit}
 
             ></todo-overlay-tree>
         `;
@@ -4069,7 +4295,7 @@ var TodoOverlayList = class extends i4 {
                                                 title="Add item"
                                                 @click=${this.onToggleQuickAdd}
                                             >
-                                                ${PLUS_ICON}
+                                                ${PLUS_ICON2}
                                             </button>
 
                                             ${this.showFilterMenu ? b2`
@@ -4637,6 +4863,9 @@ __decorateClass([
 __decorateClass([
   r5()
 ], TodoOverlayList.prototype, "quickAddExpanded", 2);
+__decorateClass([
+  r5()
+], TodoOverlayList.prototype, "childQuickAddParentIds", 2);
 __decorateClass([
   r5()
 ], TodoOverlayList.prototype, "reorderModeActive", 2);

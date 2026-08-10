@@ -407,6 +407,8 @@ async def websocket_delete_saved_list(
         vol.Optional("quantity"): str,
         vol.Optional("tags"): [str],
         vol.Optional("trigger_on_due"): bool,
+        vol.Optional("reference_id"): str,
+        vol.Optional("placement"): vol.In(["before", "after", "inside"]),
     }
 )
 @websocket_api.async_response
@@ -416,7 +418,10 @@ async def websocket_create_item(
     connection: websocket_api.ActiveConnection,
     msg,
 ) -> None:
-    """Create an item, including overlay-only fields like quantity."""
+    """Create an item, including overlay-only fields like quantity -
+    optionally positioned relative to an existing item (reference_id +
+    placement, same semantics as move_item) rather than wherever the
+    native adapter's own add_item happens to put it."""
 
     manager = get_manager(hass)
 
@@ -429,6 +434,8 @@ async def websocket_create_item(
         quantity=msg.get("quantity"),
         tags=msg.get("tags"),
         trigger_on_due=msg.get("trigger_on_due", False),
+        reference_id=msg.get("reference_id"),
+        placement=msg.get("placement"),
     )
 
     connection.send_result(msg["id"], {"id": item_id})

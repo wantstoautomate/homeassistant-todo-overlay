@@ -421,6 +421,123 @@ describe("todo-overlay-list quick add", () => {
     });
 });
 
+// Feature: only root-level items could be quick-added before - every
+// parent row now gets its own "+" (see todo-tree-item.ts) to add a
+// child directly under it, positioned right below the parent's own row
+// and above its existing children.
+describe("todo-overlay-list per-parent quick add", () => {
+    function childQuickAddToggle(el: TodoOverlayList, parentId: string): HTMLElement {
+        const row = deepQueryAll(el.shadowRoot!, "todo-overlay-tree-item")
+            .find(r => (r as unknown as {item?: {id: string}}).item?.id === parentId) as Element & {shadowRoot: ShadowRoot};
+
+        return row.shadowRoot.querySelector(".child-quick-add-toggle") as HTMLElement;
+    }
+
+    function findRow(el: TodoOverlayList, id: string): Element & {shadowRoot: ShadowRoot} {
+        return deepQueryAll(el.shadowRoot!, "todo-overlay-tree-item")
+            .find(r => (r as unknown as {item?: {id: string}}).item?.id === id) as Element & {shadowRoot: ShadowRoot};
+    }
+
+    it("opens that parent's own inline field when its plus icon is clicked, leaving others untouched", async () => {
+        const {el} = await renderList({
+            entity_id: ENTITY_ID,
+            items: [
+                makeItem({id: "parent", title: "Home Assistant", children: [makeItem({id: "child", title: "Firewall"})]}),
+                makeItem({id: "other", title: "Groceries"}),
+            ],
+        });
+
+        childQuickAddToggle(el, "parent").click();
+        await settle(el);
+
+        expect(findRow(el, "parent").shadowRoot.querySelector(".child-quick-add-row")).not.toBeNull();
+        expect(findRow(el, "other").shadowRoot.querySelector(".child-quick-add-row")).toBeNull();
+    });
+
+    it("adding under a parent whose only existing child is 'Firewall' positions the new item before it", async () => {
+        const {el, hass} = await renderList({
+            entity_id: ENTITY_ID,
+            items: [makeItem({id: "parent", title: "Home Assistant", children: [makeItem({id: "child", title: "Firewall"})]})],
+        });
+
+        childQuickAddToggle(el, "parent").click();
+        await settle(el);
+
+        const input = findRow(el, "parent").shadowRoot.querySelector(".child-quick-add-row input") as HTMLInputElement;
+        input.value = "VPN";
+        input.dispatchEvent(new Event("input"));
+
+        const addButton = [...findRow(el, "parent").shadowRoot.querySelectorAll(".child-quick-add-row button")]
+            .find(b => b.textContent?.trim() === "Add") as HTMLButtonElement;
+        addButton.click();
+        await flushAsync();
+
+        // Directly below the parent's own row, above its EXISTING
+        // children - "before" the current first child, not "inside" the
+        // parent (which would append past it instead).
+        expect(hass.connection.sent).toContainEqual(expect.objectContaining({
+            type: "todo_overlay/create_item",
+            title: "VPN",
+            reference_id: "child",
+            placement: "before",
+        }));
+    });
+
+    it("auto-expands a collapsed parent when its quick-add field is opened", async () => {
+        const {el} = await renderList({
+            entity_id: ENTITY_ID,
+            items: [makeItem({id: "parent", title: "Home Assistant", children: [makeItem({id: "child", title: "Firewall"})]})],
+        });
+
+        (el as unknown as {collapsedIds: Set<string>}).collapsedIds = new Set(["parent"]);
+        await settle(el);
+        expect(summaryTexts(el)).toEqual(["Home Assistant"]);
+
+        childQuickAddToggle(el, "parent").click();
+        await settle(el);
+
+        expect(summaryTexts(el)).toEqual(["Home Assistant", "Firewall"]);
+    });
+
+    it("closing the root quick add also closes every open per-parent field", async () => {
+        const {el} = await renderList(
+            {
+                entity_id: ENTITY_ID,
+                items: [makeItem({id: "parent", title: "Home Assistant", children: [makeItem({id: "child", title: "Firewall"})]})],
+            },
+            {showQuickAdd: true},
+        );
+
+        childQuickAddToggle(el, "parent").click();
+        await settle(el);
+        expect(findRow(el, "parent").shadowRoot.querySelector(".child-quick-add-row")).not.toBeNull();
+
+        // Open, then close, the ROOT quick add - the "close everything" action.
+        (el.shadowRoot?.querySelector("button[aria-label='Add item']") as HTMLElement).click();
+        await settle(el);
+        (el.shadowRoot?.querySelector("button[aria-label='Add item']") as HTMLElement).click();
+        await settle(el);
+
+        expect(findRow(el, "parent").shadowRoot.querySelector(".child-quick-add-row")).toBeNull();
+    });
+
+    it("clicking a parent's own toggle again closes just that one field", async () => {
+        const {el} = await renderList({
+            entity_id: ENTITY_ID,
+            items: [makeItem({id: "parent", title: "Home Assistant", children: [makeItem({id: "child", title: "Firewall"})]})],
+        });
+
+        childQuickAddToggle(el, "parent").click();
+        await settle(el);
+        expect(childQuickAddToggle(el, "parent").classList.contains("active")).toBe(true);
+
+        childQuickAddToggle(el, "parent").click();
+        await settle(el);
+
+        expect(findRow(el, "parent").shadowRoot.querySelector(".child-quick-add-row")).toBeNull();
+    });
+});
+
 function mockRect(el: Element, rect: {top: number; bottom: number; height: number}): void {
     (el as HTMLElement).getBoundingClientRect = () => ({
         top: rect.top,

@@ -85,6 +85,11 @@ export class TodoTree extends LitElement {
     @property({attribute: false})
     reorderModeActive = false;
 
+    // Which parent items currently have their own inline "add a child"
+    // field open - see todo-overlay-list.ts's own childQuickAddParentIds.
+    @property({attribute: false})
+    childQuickAddParentIds: Set<string> = new Set();
+
     render() {
         return html`
             <ul>
@@ -114,6 +119,7 @@ export class TodoTree extends LitElement {
                                     .dragDisabled=${this.dragDisabled}
                                     .collapsedIds=${this.collapsedIds}
                                     .reorderModeActive=${this.reorderModeActive}
+                                    .childQuickAddParentIds=${this.childQuickAddParentIds}
                                 ></todo-overlay-tree-item>
                             `,
                         )

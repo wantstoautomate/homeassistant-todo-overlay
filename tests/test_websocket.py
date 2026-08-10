@@ -327,6 +327,31 @@ async def test_websocket_create_item_returns_new_id():
 
 
 @pytest.mark.asyncio
+async def test_websocket_create_item_with_reference_id_and_placement_positions_it():
+    manager = make_manager(
+        items=[TodoItem(id="parent", title="Home Assistant", completed=False)],
+    )
+
+    connection = await call_handler(
+        websocket.websocket_create_item, manager,
+        {
+            "entity_id": ENTITY_ID, "title": "Firewall",
+            "reference_id": "parent", "placement": "inside",
+        },
+    )
+
+    msg_id, result = connection.results[0]
+    new_id = result["id"]
+
+    list_connection = await call_handler(
+        websocket.websocket_get_list, manager, {"entity_id": ENTITY_ID, "group_completed": False},
+    )
+    items = list_connection.results[0][1]["items"]
+    parent = next(item for item in items if item["id"] == "parent")
+    assert [child["id"] for child in parent["children"]] == [new_id]
+
+
+@pytest.mark.asyncio
 async def test_websocket_update_item_updates_native_fields():
     manager = make_manager(items=[TodoItem(id="1", title="Milk", completed=False)])
 

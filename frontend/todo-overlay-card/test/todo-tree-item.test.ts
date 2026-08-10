@@ -582,3 +582,136 @@ describe("todo-overlay-tree-item :hover suppressed while dragging", () => {
         expect(el.shadowRoot?.querySelector(".row")?.classList.contains("drag-active")).toBe(false);
     });
 });
+
+// Feature: every parent row gets its own "+" to quick-add a child
+// directly under it, rather than only being able to add root-level
+// items from the toolbar. Fills the exact slot the delete button
+// leaves empty for a parent (see hasChildren in the template) - a leaf
+// row is unaffected.
+describe("todo-overlay-tree-item per-parent quick add", () => {
+    it("shows the add-child toggle instead of a delete button for a parent row", async () => {
+        const el = await renderItem(makeItem({id: "parent", children: [makeItem({id: "child"})]}));
+
+        expect(el.shadowRoot?.querySelector(".child-quick-add-toggle")).not.toBeNull();
+        expect(el.shadowRoot?.querySelector(".delete-button")).toBeNull();
+    });
+
+    it("still shows the normal delete button for a leaf row", async () => {
+        const el = await renderItem(makeItem({id: "leaf", children: []}));
+
+        expect(el.shadowRoot?.querySelector(".delete-button")).not.toBeNull();
+        expect(el.shadowRoot?.querySelector(".child-quick-add-toggle")).toBeNull();
+    });
+
+    it("dispatches tree-toggle-child-quick-add with this item's id when the toggle is clicked", async () => {
+        const el = await renderItem(makeItem({id: "parent", children: [makeItem({id: "child"})]}));
+
+        let detail: {id: string} | undefined;
+        el.addEventListener("tree-toggle-child-quick-add", (e) => {
+            detail = (e as CustomEvent<{id: string}>).detail;
+        });
+
+        (el.shadowRoot?.querySelector(".child-quick-add-toggle") as HTMLElement).click();
+
+        expect(detail).toEqual({id: "parent"});
+    });
+
+    it("shows the inline quick-add field, indented, directly below the row and above its children, once open", async () => {
+        const el = await renderItem(
+            makeItem({id: "parent", children: [makeItem({id: "child", title: "Child"})]}),
+            {childQuickAddParentIds: new Set(["parent"])},
+        );
+
+        const toggle = el.shadowRoot?.querySelector(".child-quick-add-toggle");
+        expect(toggle?.classList.contains("active"), "toggle should read as active/open").toBe(true);
+
+        const field = el.shadowRoot?.querySelector(".child-quick-add-row");
+        expect(field, "the inline quick-add field should be visible").not.toBeNull();
+
+        // "Directly below the row and above its children" - the field
+        // and the <ul> of children are siblings in the light DOM, in
+        // that order.
+        const li = el.shadowRoot?.querySelector("li");
+        const children = [...(li?.children ?? [])];
+        const fieldIndex = children.findIndex(c => c.classList.contains("child-quick-add-row"));
+        const ulIndex = children.findIndex(c => c.tagName === "UL");
+        expect(fieldIndex).toBeGreaterThan(-1);
+        expect(ulIndex).toBeGreaterThan(fieldIndex);
+    });
+
+    it("submits the typed title via tree-quick-add-child on Enter, then clears the field", async () => {
+        const el = await renderItem(
+            makeItem({id: "parent", children: [makeItem({id: "child"})]}),
+            {childQuickAddParentIds: new Set(["parent"])},
+        );
+
+        let detail: {parentId: string; title: string} | undefined;
+        el.addEventListener("tree-quick-add-child", (e) => {
+            detail = (e as CustomEvent<{parentId: string; title: string}>).detail;
+        });
+
+        const input = el.shadowRoot?.querySelector(".child-quick-add-row input") as HTMLInputElement;
+        input.value = "VPN";
+        input.dispatchEvent(new Event("input"));
+        input.dispatchEvent(new KeyboardEvent("keydown", {key: "Enter"}));
+        await el.updateComplete;
+
+        expect(detail).toEqual({parentId: "parent", title: "VPN"});
+        // Reads the component's own internal state, not the DOM value -
+        // Lit's dirty-checking compares against what IT last committed,
+        // which this test's own manual `input.value = "VPN"` line never
+        // went through, so re-querying the raw DOM value here would be
+        // checking Lit's (inapplicable) bookkeeping, not this component's
+        // actual behavior.
+        expect((el as unknown as {childQuickAddValue: string}).childQuickAddValue).toBe("");
+    });
+
+    it("submits via the Add button too", async () => {
+        const el = await renderItem(
+            makeItem({id: "parent", children: [makeItem({id: "child"})]}),
+            {childQuickAddParentIds: new Set(["parent"])},
+        );
+
+        let detail: {parentId: string; title: string} | undefined;
+        el.addEventListener("tree-quick-add-child", (e) => {
+            detail = (e as CustomEvent<{parentId: string; title: string}>).detail;
+        });
+
+        const input = el.shadowRoot?.querySelector(".child-quick-add-row input") as HTMLInputElement;
+        input.value = "VPN";
+        input.dispatchEvent(new Event("input"));
+
+        const addButton = [...(el.shadowRoot?.querySelectorAll(".child-quick-add-row button") ?? [])]
+            .find(b => b.textContent?.trim() === "Add") as HTMLButtonElement;
+        addButton.click();
+
+        expect(detail).toEqual({parentId: "parent", title: "VPN"});
+    });
+
+    it("does not submit a blank or whitespace-only title", async () => {
+        const el = await renderItem(
+            makeItem({id: "parent", children: [makeItem({id: "child"})]}),
+            {childQuickAddParentIds: new Set(["parent"])},
+        );
+
+        let fired = false;
+        el.addEventListener("tree-quick-add-child", () => { fired = true; });
+
+        const input = el.shadowRoot?.querySelector(".child-quick-add-row input") as HTMLInputElement;
+        input.value = "   ";
+        input.dispatchEvent(new Event("input"));
+        input.dispatchEvent(new KeyboardEvent("keydown", {key: "Enter"}));
+
+        expect(fired).toBe(false);
+    });
+
+    it("hides the add-child toggle in favor of the drag handle while reorder mode is active", async () => {
+        const el = await renderItem(
+            makeItem({id: "parent", children: [makeItem({id: "child"})]}),
+            {reorderModeActive: true},
+        );
+
+        expect(el.shadowRoot?.querySelector(".child-quick-add-toggle")).toBeNull();
+        expect(el.shadowRoot?.querySelector(".drag-handle")).not.toBeNull();
+    });
+});

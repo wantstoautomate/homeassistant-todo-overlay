@@ -81,6 +81,14 @@ const CROSS_ICON = html`
     </svg>
 `;
 
+// Same glyph as todo-overlay-list.ts's own toolbar PLUS_ICON - kept as
+// a separate local copy rather than an import, matching how this file
+// already defines its own CROSS_ICON/DRAG_HANDLE_ICON independently
+// rather than depending on its ultimate parent component.
+const PLUS_ICON = html`
+    <svg viewBox="0 0 24 24"><path d="M19 13H13V19H11V13H5V11H11V5H13V11H19V13Z"></path></svg>
+`;
+
 // Only ever rendered while reorderModeActive - see .drag-handle's own
 // comment for why this exists as a dedicated element rather than
 // letting touch pick up a drag from anywhere on the row.
@@ -511,6 +519,91 @@ export class TodoTreeItem extends LitElement {
             background: rgba(var(--rgb-error-color, 219, 68, 55), 0.15);
         }
 
+        /* Fills the exact slot the delete button leaves empty for a
+           parent row (see hasChildren in the template, and the delete
+           button's own comment above) - same dimensions/opacity
+           treatment as that button, so it reads as "the same kind of
+           control" rather than a mismatched addition. Toggles to the
+           cross glyph (and stays fully opaque) while this parent's own
+           quick-add field is open - see .child-quick-add-row below. */
+        .child-quick-add-toggle {
+            flex-shrink: 0;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            width: 24px;
+            height: 24px;
+            margin-inline-end: -4px;
+            border: none;
+            background: none;
+            padding: 0;
+            border-radius: 50%;
+            cursor: pointer;
+            color: var(--secondary-text-color);
+            opacity: 0.5;
+            transition: opacity 0.15s ease, background-color 0.15s ease, color 0.15s ease;
+        }
+
+        .row:hover .child-quick-add-toggle {
+            opacity: 1;
+        }
+
+        .child-quick-add-toggle.active {
+            opacity: 1;
+            color: var(--primary-color);
+        }
+
+        .child-quick-add-toggle svg {
+            width: 16px;
+            height: 16px;
+            fill: currentColor;
+        }
+
+        /* Directly below the parent's own row, above its existing
+           children (see the template) - indented to the SAME depth a
+           real child would be (matches the child <ul>'s own
+           padding-inline-start), so it's unambiguous this is adding a
+           child of THIS row, not a sibling of it. Same field styling as
+           the toolbar's own root-level quick-add row
+           (todo-overlay-list.ts's .quick-add-row) - a different
+           attachment point, not a different-looking control. */
+        .child-quick-add-row {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin: 4px 0;
+            padding-inline-start: ${rowIndentPx};
+        }
+
+        .child-quick-add-row input {
+            flex: 1;
+            min-width: 0;
+            font-family: Roboto, "Noto Sans", sans-serif;
+            font-size: 14px;
+            color: var(--primary-text-color);
+            background: none;
+            border: none;
+            border-bottom: 1px solid var(--divider-color);
+            padding: 6px 0;
+            outline: none;
+        }
+
+        .child-quick-add-row input:focus {
+            border-bottom: 2px solid var(--primary-color);
+            padding-bottom: 5px;
+        }
+
+        .child-quick-add-row button {
+            flex-shrink: 0;
+            border: none;
+            background: none;
+            font-family: Roboto, "Noto Sans", sans-serif;
+            font-size: 14px;
+            color: var(--primary-color);
+            font-weight: 500;
+            cursor: pointer;
+        }
+
         /* Shown instead of the delete button (see the template) while
            reorderModeActive, for every row regardless of hasChildren -
            dragging needs to work on parents too, unlike delete.
@@ -634,6 +727,13 @@ export class TodoTreeItem extends LitElement {
     @property({attribute: false})
     reorderModeActive = false;
 
+    // Which parent items currently have their own inline "add a child"
+    // field open - see todo-overlay-list.ts's own childQuickAddParentIds
+    // for the full picture (independent per-parent toggles, only ever
+    // bulk-cleared by closing the root quick add).
+    @property({attribute: false})
+    childQuickAddParentIds: Set<string> = new Set();
+
     @state()
     private holdRippleOrigin?: {x: number; y: number};
 
@@ -642,6 +742,15 @@ export class TodoTreeItem extends LitElement {
 
     @state()
     private confirmingDelete = false;
+
+    // Local to this row, not lifted to todo-overlay-list.ts - only the
+    // OPEN/CLOSED state of a parent's quick-add field needs to be known
+    // outside this component (to coordinate the "close everything" bulk
+    // action and to auto-expand a collapsed parent - see
+    // onToggleChildQuickAddClick). The typed-but-not-yet-submitted text
+    // itself has no reason to live any higher.
+    @state()
+    private childQuickAddValue = "";
 
     private pointerDownAt = 0;
     private pointerDownScreenPos?: {x: number; y: number};
@@ -739,6 +848,53 @@ export class TodoTreeItem extends LitElement {
         this.dispatchEvent(
             new CustomEvent("tree-delete-item", {
                 detail: {id: this.item.id},
+                bubbles: true,
+                composed: true,
+            }),
+        );
+    }
+
+    private onToggleChildQuickAddClick(e: Event) {
+        e.stopPropagation();
+
+        this.dispatchEvent(
+            new CustomEvent("tree-toggle-child-quick-add", {
+                detail: {id: this.item.id},
+                bubbles: true,
+                composed: true,
+            }),
+        );
+    }
+
+    private onChildQuickAddInput(e: InputEvent) {
+        this.childQuickAddValue = (e.target as HTMLInputElement).value;
+    }
+
+    private onChildQuickAddKeydown(e: KeyboardEvent) {
+        if (e.key === "Enter") {
+            this.submitChildQuickAdd();
+        }
+    }
+
+    // Clears the field the moment it's sent, not once todo-overlay-list.ts
+    // confirms the create actually succeeded (unlike the root quick-add's
+    // own submitQuickAdd, which can afford to wait since it's the one
+    // holding the value) - this component has no way to know that
+    // outcome without a value threaded back down just to say "clear
+    // now", so an error banner (see reportError) is the fallback if the
+    // create fails, same as it would be for any other failed action.
+    private submitChildQuickAdd() {
+        const title = this.childQuickAddValue.trim();
+
+        if (!title) {
+            return;
+        }
+
+        this.childQuickAddValue = "";
+
+        this.dispatchEvent(
+            new CustomEvent("tree-quick-add-child", {
+                detail: {parentId: this.item.id, title},
                 bubbles: true,
                 composed: true,
             }),
@@ -1100,7 +1256,27 @@ export class TodoTreeItem extends LitElement {
                                             </button>
                                         `
                                         : this.hasChildren
-                                            ? ""
+                                            ? html`
+                                                <button
+                                                    class=${classMap({
+                                                        "child-quick-add-toggle": true,
+                                                        active: this.childQuickAddParentIds.has(this.item.id),
+                                                    })}
+                                                    aria-label=${
+                                                        this.childQuickAddParentIds.has(this.item.id)
+                                                            ? "Close add-child field"
+                                                            : "Add child item"
+                                                    }
+                                                    @click=${this.onToggleChildQuickAddClick}
+                                                    @pointerdown=${(e: Event) => e.stopPropagation()}
+                                                >
+                                                    ${
+                                                        this.childQuickAddParentIds.has(this.item.id)
+                                                            ? CROSS_ICON
+                                                            : PLUS_ICON
+                                                    }
+                                                </button>
+                                            `
                                             : html`
                                                 <button
                                                     class=${classMap({
@@ -1134,6 +1310,26 @@ export class TodoTreeItem extends LitElement {
                 </div>
 
                 ${
+                    this.hasChildren && this.childQuickAddParentIds.has(this.item.id)
+                        ? html`
+                            <div class="child-quick-add-row">
+                                <input
+                                    type="text"
+                                    placeholder="Add item"
+                                    .value=${this.childQuickAddValue}
+                                    @input=${this.onChildQuickAddInput}
+                                    @keydown=${this.onChildQuickAddKeydown}
+                                    @pointerdown=${(e: Event) => e.stopPropagation()}
+                                />
+                                <button @click=${this.submitChildQuickAdd}>
+                                    Add
+                                </button>
+                            </div>
+                        `
+                        : ""
+                }
+
+                ${
                     this.hasChildren && !this.isCollapsed
                         ? html`
                             <ul>
@@ -1152,6 +1348,7 @@ export class TodoTreeItem extends LitElement {
                                             .collapsedIds=${this.collapsedIds}
                                             .dimmedByAncestorDrag=${isBeingDragged || this.dimmedByAncestorDrag}
                                             .reorderModeActive=${this.reorderModeActive}
+                                            .childQuickAddParentIds=${this.childQuickAddParentIds}
                                         ></todo-overlay-tree-item>
                                     `,
                                 )}

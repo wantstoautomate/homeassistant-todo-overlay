@@ -912,6 +912,16 @@ export class TodoOverlayList extends LitElement {
     @state()
     private quickAddExpanded = false;
 
+    // Which parent items currently have their own inline "add a child"
+    // field open (see todo-tree-item.ts's per-row plus toggle) -
+    // independent of quickAddExpanded (the root-level one) and of each
+    // other; any number can be open at once. Only ever cleared in bulk
+    // when the ROOT quick-add is closed (see onToggleQuickAdd) - closing
+    // one specific parent's own field happens via toggling it again,
+    // handled the same way opening it did (see onToggleChildQuickAdd).
+    @state()
+    private childQuickAddParentIds: Set<string> = new Set();
+
     // Touch-only reorder mode - see TodoOverlayCardConfig's
     // show_reorder_toggle comment for why this exists as a separate
     // mode at all rather than just letting touch hold-and-drag like a
@@ -1470,7 +1480,17 @@ export class TodoOverlayList extends LitElement {
 
     private onToggleQuickAdd() {
         if (this.showQuickAdd) {
-            this.quickAddExpanded = !this.quickAddExpanded;
+            const wasExpanded = this.quickAddExpanded;
+            this.quickAddExpanded = !wasExpanded;
+
+            // Closing the root quick add is the one "close everything"
+            // action - any per-parent fields left open elsewhere in the
+            // list (see childQuickAddParentIds) get cleaned up right
+            // along with it, rather than being left open with no single
+            // control still pointing at them all.
+            if (wasExpanded && this.childQuickAddParentIds.size > 0) {
+                this.childQuickAddParentIds = new Set();
+            }
         } else {
             this.openCreateDialog();
         }
@@ -1863,6 +1883,62 @@ export class TodoOverlayList extends LitElement {
         }
     }
 
+    // Toggling a specific parent's own inline "add a child" field open/
+    // closed (see todo-tree-item.ts's per-row plus icon) - independent
+    // of the root quick-add and of every other parent's own field; see
+    // childQuickAddParentIds' own comment for how the two relate.
+    private onToggleChildQuickAdd(e: CustomEvent<{id: string}>) {
+        const parentId = e.detail.id;
+        const next = new Set(this.childQuickAddParentIds);
+
+        if (next.has(parentId)) {
+            next.delete(parentId);
+        } else {
+            next.add(parentId);
+
+            // Opening it while the parent's own children are collapsed
+            // would add the new item invisibly - opening the field is a
+            // clear enough signal of intent to show where it'll land.
+            if (this.collapsedIds.has(parentId)) {
+                const nextCollapsed = new Set(this.collapsedIds);
+                nextCollapsed.delete(parentId);
+                this.collapsedIds = nextCollapsed;
+                saveCollapsedIds(this.entity, nextCollapsed);
+            }
+        }
+
+        this.childQuickAddParentIds = next;
+    }
+
+    private async onChildQuickAddSubmit(e: CustomEvent<{parentId: string; title: string}>) {
+        const title = e.detail.title.trim();
+
+        if (!title || !this.list) {
+            return;
+        }
+
+        const parent = findItem(this.list.items, e.detail.parentId);
+
+        if (!parent) {
+            return;
+        }
+
+        // Directly below the parent's own row, above its EXISTING
+        // children - "inside" alone would append PAST them instead
+        // (same reason resolvePlacement never offers plain "inside" for
+        // a row that already has visible children during drag-and-drop
+        // hit-testing - see this file's own resolvePlacement).
+        const referenceId = parent.children.length > 0 ? parent.children[0].id : e.detail.parentId;
+        const placement: Placement = parent.children.length > 0 ? "before" : "inside";
+
+        try {
+            await createItem(this.hass, this.entity, {title, referenceId, placement});
+            await this.load();
+        } catch (err) {
+            this.reportError("adding the item", err);
+        }
+    }
+
     private renderTree(list: TodoList) {
         const filtered = filterTree(list.items, this.filterMode);
         const items = sortTree(filtered, this.sortBy, this.sortOrder);
@@ -1888,6 +1964,7 @@ export class TodoOverlayList extends LitElement {
                     .confirmDelete=${this.confirmDelete}
                     .dragDisabled=${this.dragDisabled}
                     .collapsedIds=${this.collapsedIds}
+                    .childQuickAddParentIds=${this.childQuickAddParentIds}
                     .reorderModeActive=${this.reorderModeActive}
 
                     @tree-pointer-down=${this.onPointerDown}
@@ -1895,6 +1972,8 @@ export class TodoOverlayList extends LitElement {
                     @tree-pointer-up=${this.onPointerUp}
                     @tree-toggle-collapse=${this.onToggleCollapse}
                     @tree-delete-item=${this.onDeleteItem}
+                    @tree-toggle-child-quick-add=${this.onToggleChildQuickAdd}
+                    @tree-quick-add-child=${this.onChildQuickAddSubmit}
 
                 ></todo-overlay-tree>
             `;
@@ -1916,6 +1995,7 @@ export class TodoOverlayList extends LitElement {
                     .confirmDelete=${this.confirmDelete}
                     .dragDisabled=${this.dragDisabled}
                     .collapsedIds=${this.collapsedIds}
+                    .childQuickAddParentIds=${this.childQuickAddParentIds}
                     .reorderModeActive=${this.reorderModeActive}
 
                     @tree-pointer-down=${this.onPointerDown}
@@ -1923,6 +2003,8 @@ export class TodoOverlayList extends LitElement {
                     @tree-pointer-up=${this.onPointerUp}
                     @tree-toggle-collapse=${this.onToggleCollapse}
                     @tree-delete-item=${this.onDeleteItem}
+                    @tree-toggle-child-quick-add=${this.onToggleChildQuickAdd}
+                    @tree-quick-add-child=${this.onChildQuickAddSubmit}
 
                 ></todo-overlay-tree>
             `;
@@ -1946,6 +2028,7 @@ export class TodoOverlayList extends LitElement {
                             .confirmDelete=${this.confirmDelete}
                             .dragDisabled=${this.dragDisabled}
                             .collapsedIds=${this.collapsedIds}
+                            .childQuickAddParentIds=${this.childQuickAddParentIds}
                     .reorderModeActive=${this.reorderModeActive}
 
                             @tree-pointer-down=${this.onPointerDown}
@@ -1953,6 +2036,8 @@ export class TodoOverlayList extends LitElement {
                             @tree-pointer-up=${this.onPointerUp}
                             @tree-toggle-collapse=${this.onToggleCollapse}
                             @tree-delete-item=${this.onDeleteItem}
+                            @tree-toggle-child-quick-add=${this.onToggleChildQuickAdd}
+                            @tree-quick-add-child=${this.onChildQuickAddSubmit}
 
                         ></todo-overlay-tree>
                     `
@@ -1971,6 +2056,7 @@ export class TodoOverlayList extends LitElement {
                 .confirmDelete=${this.confirmDelete}
                 .dragDisabled=${this.dragDisabled}
                 .collapsedIds=${this.collapsedIds}
+                .childQuickAddParentIds=${this.childQuickAddParentIds}
                 .reorderModeActive=${this.reorderModeActive}
 
                 @tree-pointer-down=${this.onPointerDown}
@@ -1978,6 +2064,8 @@ export class TodoOverlayList extends LitElement {
                 @tree-pointer-up=${this.onPointerUp}
                 @tree-toggle-collapse=${this.onToggleCollapse}
                 @tree-delete-item=${this.onDeleteItem}
+                @tree-toggle-child-quick-add=${this.onToggleChildQuickAdd}
+                @tree-quick-add-child=${this.onChildQuickAddSubmit}
 
             ></todo-overlay-tree>
         `;
