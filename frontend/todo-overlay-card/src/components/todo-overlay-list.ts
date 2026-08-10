@@ -40,7 +40,7 @@ import type {TodoItemDialogFieldSupport, TodoItemFormValue} from "./todo-item-di
 import {EMPTY_FORM_VALUE} from "./todo-item-dialog";
 import type {SaveLoadFormValue} from "./todo-save-load-dialog";
 import {EMPTY_SAVE_LOAD_VALUE} from "./todo-save-load-dialog";
-import {BEFORE_AFTER_ZONE, ROW_INDENT_PX} from "./todo-tree-item";
+import {BEFORE_AFTER_ZONE} from "./todo-tree-item";
 
 import "./todo-tree";
 import "./todo-item-dialog";
@@ -132,17 +132,16 @@ interface TodoListElement extends Element {
 // dropping onto it can only ever mean "become this entity's first root
 // item" (see findDropTarget/onGlobalPointerUp's own handling of this).
 //
-// depth/parentId exist purely for horizontal drag-to-nest (see
-// applyHorizontalNesting) - depth 0 is a root item, parentId is the
-// enclosing row's own id (undefined at the root). Both are undefined/0
-// for the empty-list placeholder, which has no ancestry to speak of.
+// depth exists purely to indent the drop-shadow-box preview to match
+// how deep the target actually sits (see todo-tree-item.ts's
+// hoverDepth) - 0 for a root item, and for the empty-list placeholder,
+// which has no ancestry to speak of.
 type RowSnapshot = {
     id: string | undefined;
     entityId: string;
     children: TodoItem[];
     rect: DOMRect;
     depth: number;
-    parentId: string | undefined;
 };
 
 // Recursively collects every rendered row across all nested shadow roots,
@@ -164,7 +163,6 @@ function collectAllRows(
     root: ParentNode,
     currentEntity?: string,
     currentDepth = 0,
-    currentParentId?: string,
 ): RowSnapshot[] {
     const rows: RowSnapshot[] = [];
 
@@ -201,7 +199,6 @@ function collectAllRows(
                     children: hasVisibleChildren ? itemEl.item!.children : [],
                     rect: rowEl.getBoundingClientRect(),
                     depth: currentDepth,
-                    parentId: currentParentId,
                 });
             }
         }
@@ -216,7 +213,6 @@ function collectAllRows(
                     children: [],
                     rect: emptyZone.getBoundingClientRect(),
                     depth: 0,
-                    parentId: undefined,
                 });
             }
         }
@@ -226,13 +222,12 @@ function collectAllRows(
             const nextEntity = isList ? (el as TodoListElement).entity : currentEntity;
             // Crossing into a fresh todo-overlay-list starts a brand new
             // tree, unrelated to whatever ancestor chain got us here -
-            // depth/parentId reset right along with entity. Crossing into
-            // a tree-item's own shadow root (where its children render -
+            // depth resets right along with entity. Crossing into a
+            // tree-item's own shadow root (where its children render -
             // see todo-tree-item.ts) descends one level into ITS subtree.
             const nextDepth = isList ? 0 : isTreeItem ? currentDepth + 1 : currentDepth;
-            const nextParentId = isList ? undefined : isTreeItem ? itemEl.item!.id : currentParentId;
 
-            rows.push(...collectAllRows(el.shadowRoot, nextEntity, nextDepth, nextParentId));
+            rows.push(...collectAllRows(el.shadowRoot, nextEntity, nextDepth));
         }
     }
 
@@ -304,87 +299,6 @@ function resolvePlacement(
     return {id: rowId, placement: "inside"};
 }
 
-// Lets the pointer's horizontal position adjust the vertical target's
-// depth - drag right to nest one level deeper than the vertical position
-// alone would give, drag left to unnest one level shallower - the same
-// two-axis control most tree/outliner UIs use (VSCode's explorer, Notion,
-// Trello), and a much more direct way to say "no, as a CHILD of that one"
-// than hoping a narrow vertical band lines up with a specific spot.
-//
-// horizontalSteps > 0 walks progressively deeper by repeatedly re-anchoring
-// on "whatever row is rendered immediately above the current insertion
-// point" (or, once already "inside" a row, its own last visible child, if
-// it has one - there's nothing deeper to offer if it doesn't, so that's
-// where escalating stops). horizontalSteps < 0 walks back up the parentId
-// chain the same number of times, each step landing right after whichever
-// row it un-nested out of. Both directions are self-terminating against
-// the actual snapshot (nothing above to nest under; no parent left to
-// escape to), so an exaggerated drag just clamps at the shallowest/deepest
-// position the current layout can actually support, never an invalid one.
-function applyHorizontalNesting(
-    target: {id: string | undefined; entityId: string; placement: Placement},
-    rows: RowSnapshot[],
-    horizontalSteps: number,
-): {id: string | undefined; entityId: string; placement: Placement} {
-    // The empty-list placeholder has no ancestry to walk in either
-    // direction - dropping there can only ever mean "first root item".
-    if (horizontalSteps === 0 || target.id === undefined) {
-        return target;
-    }
-
-    const sortedByTop = [...rows].sort((a, b) => a.rect.top - b.rect.top);
-    let current: {id: string; entityId: string; placement: Placement} = {
-        id: target.id, entityId: target.entityId, placement: target.placement,
-    };
-    let steps = horizontalSteps;
-
-    while (steps > 0) {
-        let precedingId: string | undefined;
-
-        if (current.placement === "inside") {
-            const children = rows
-                .filter(r => r.parentId === current.id)
-                .sort((a, b) => a.rect.top - b.rect.top);
-
-            precedingId = children.at(-1)?.id;
-        } else if (current.placement === "after") {
-            precedingId = current.id;
-        } else {
-            const idx = sortedByTop.findIndex(r => r.id === current.id);
-
-            precedingId = idx > 0 ? sortedByTop[idx - 1].id : undefined;
-        }
-
-        if (precedingId === undefined) {
-            break;
-        }
-
-        current = {id: precedingId, entityId: current.entityId, placement: "inside"};
-        steps -= 1;
-    }
-
-    while (steps < 0) {
-        if (current.placement === "inside") {
-            // Cancel the nesting - land as this row's own next sibling
-            // rather than its child. No parent lookup needed for this
-            // first un-nest step; it's already right there.
-            current = {id: current.id, entityId: current.entityId, placement: "after"};
-        } else {
-            const owner = rows.find(r => r.id === current.id);
-
-            if (owner?.parentId === undefined) {
-                break;
-            }
-
-            current = {id: owner.parentId, entityId: current.entityId, placement: "after"};
-        }
-
-        steps += 1;
-    }
-
-    return current;
-}
-
 // Hit-testing against LIVE row positions creates a feedback loop: hovering
 // near a boundary opens a "gap" (a margin shift) on the rows next to it,
 // which moves those rows' rects, which can put a now-stationary pointer over
@@ -398,8 +312,6 @@ function applyHorizontalNesting(
 // or below the last, where a direct hit would otherwise find nothing.
 function findDropTarget(
     y: number,
-    x: number,
-    dragStartX: number,
     rows: RowSnapshot[],
     sticky?: {id: string; placement: Placement},
 ): {id: string | undefined; entityId: string; placement: Placement; depth: number} | undefined {
@@ -436,20 +348,19 @@ function findDropTarget(
     // resolvePlacement may pick a different id (nearest's own, or its
     // first child's) depending on placement, but never a different
     // entity - a row's children always live on the same entity it does.
-    const vertical = {
+    const resolved = {
         ...resolvePlacement(nearest.id, nearest.children, relativeY, sticky),
         entityId: nearest.entityId,
     };
 
-    const horizontalSteps = Math.round((x - dragStartX) / ROW_INDENT_PX);
-    const resolved = applyHorizontalNesting(vertical, rows, horizontalSteps);
-
-    // depth is purely informational (drives the highlight's own indent -
-    // see todo-tree-item.ts's hoverDepth) - re-derived from whatever row
-    // resolved.id ended up naming, since horizontal nesting may have
-    // retargeted it away from `nearest` entirely.
-    const resolvedRow = rows.find(r => r.id === resolved.id);
-    const depth = resolvedRow ? resolvedRow.depth + (resolved.placement === "inside" ? 1 : 0) : 0;
+    // depth is purely informational (drives the shadow box's own indent -
+    // see todo-tree-item.ts's hoverDepth). resolvePlacement may have
+    // named a different row than `nearest` (its first VISIBLE child, for
+    // a row with some already showing - see resolvePlacement's own
+    // comment), so this re-looks-up whichever row `resolved.id` actually
+    // names rather than assuming it's still `nearest`.
+    const resolvedRow = rows.find(r => r.id === resolved.id) ?? nearest;
+    const depth = resolvedRow.depth + (resolved.placement === "inside" ? 1 : 0);
 
     return {...resolved, depth};
 }
@@ -927,10 +838,10 @@ export class TodoOverlayList extends LitElement {
     private hoverPlacement?: Placement;
 
     // How deep the CURRENT target sits (root = 0) - purely cosmetic,
-    // drives the highlight's own indent so it visually lines up with
-    // whatever depth horizontal drag-to-nest has resolved to (see
-    // applyHorizontalNesting) - a live preview of where the item will
-    // actually land, not just which row it's near.
+    // drives a reorder's (before/after) drop-shadow-box indent so it
+    // visually lines up with the target's actual nesting level.
+    // "inside" (becoming a child) doesn't use this at all - see
+    // todo-tree-item.ts's render().
     @state()
     private hoverDepth = 0;
 
@@ -1264,9 +1175,7 @@ export class TodoOverlayList extends LitElement {
             ? {id: this.hoverId, placement: this.hoverPlacement}
             : undefined;
 
-        const hit = findDropTarget(
-            e.clientY, e.clientX, this.dragStartPointerPos.x, this.rowSnapshot, sticky,
-        );
+        const hit = findDropTarget(e.clientY, this.rowSnapshot, sticky);
         const valid = hit && hit.id !== this.draggedId;
 
         const previousHoverId = this.hoverId;

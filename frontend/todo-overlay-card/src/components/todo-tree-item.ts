@@ -12,13 +12,10 @@ import {LONG_PRESS_MS, type Placement, type TodoItem, isOverdue} from "../models
 export const BEFORE_AFTER_ZONE = 0.3;
 
 // One nesting level's worth of visual indent (matches the ul rule
-// below). Exported so the card's own hit-testing can turn a horizontal
-// drag distance into "how many nesting levels" using the exact same
-// unit the rows are actually indented by (see todo-overlay-list.ts's
-// applyHorizontalNesting), and so the live depth-preview marker
-// (rowStyles' depth-indicator) lines up with real row indentation
-// instead of an independently-guessed pixel value that could drift out
-// of sync with it.
+// below). Exported so the drop-shadow-box preview's own indent (see
+// render()) lines up with real row indentation instead of an
+// independently-guessed pixel value that could drift out of sync
+// with it.
 export const ROW_INDENT_PX = 20;
 const rowIndentPx = unsafeCSS(`${ROW_INDENT_PX}px`);
 
@@ -203,24 +200,25 @@ export class TodoTreeItem extends LitElement {
             opacity: 0.45;
         }
 
-        /* "inside" opens the same kind of live gap before/after do (see
-           their own comment) - directly below the anchor row, since a
-           row only ever offers "inside" when it has no VISIBLE children
-           to insert relative to (see resolvePlacement) - there's always
-           exactly one place a new first child can go: right underneath.
-           The subtle tint on the row itself marks which row is the
-           anchor; the actual shadow box rendered into the opened gap
-           (see .drop-shadow-box) is what shows precisely where the item
-           will land. */
+        /* "inside" (becoming this row's child) draws a bounding box
+           around the row itself, rather than opening a gap - dragging
+           OVER an existing parent to nest under it is a fundamentally
+           different gesture from reordering past a sibling, and reads
+           more clearly as "drop into this container" when the container
+           itself is outlined, the same way a file manager highlights a
+           folder you're dragging onto rather than showing a shadow copy
+           of the file inside it. */
         .row.drop-inside {
-            background: rgba(var(--rgb-accent-color, 255, 152, 0), 0.05);
-            margin-bottom: 52px;
+            outline-color: var(--accent-color, var(--primary-color));
+            background: rgba(var(--rgb-accent-color, 255, 152, 0), 0.08);
         }
 
         /* Instead of a static line, the sibling next to the drop point
            opens a live gap (matching the space a lifted row leaves
            behind), so the list visibly reflows to show where the item
-           would land rather than just marking the spot. */
+           would land rather than just marking the spot. Reordering only -
+           see .row.drop-inside above for why becoming a child looks
+           different. */
         .row.gap-before {
             margin-top: 52px;
         }
@@ -229,18 +227,14 @@ export class TodoTreeItem extends LitElement {
             margin-bottom: 52px;
         }
 
-        /* The actual "it'll go here" preview, rendered into whichever
-           gap the row above just opened (gap-before/gap-after/drop-inside
-           all reserve the same 52px) - a dashed placeholder the size of
-           a real row, indented to match exactly how deep horizontal
-           drag-to-nest has resolved to (see todo-overlay-list.ts's
-           applyHorizontalNesting), so both WHERE and HOW DEEP the item
-           will land are shown as one visual instead of separately
-           requiring a mental model of either. Absolutely positioned
-           against the row (which has its own position:relative) so it
-           overlays the margin gap without adding any height of its own -
-           the margin is what actually reflows the list; this just fills
-           the space it opened. */
+        /* The actual "it'll go here" preview for a reorder (before/after
+           only - see .row.drop-inside above), rendered into whichever
+           gap the row above just opened - a dashed placeholder the size
+           of a real row, indented to match the target's own depth.
+           Absolutely positioned against the row (which has its own
+           position:relative) so it overlays the margin gap without
+           adding any height of its own - the margin is what actually
+           reflows the list; this just fills the space it opened. */
         .drop-shadow-box {
             position: absolute;
             left: 0;
@@ -564,11 +558,10 @@ export class TodoTreeItem extends LitElement {
     hoverPlacement?: Placement;
 
     // How deep the CURRENT target sits (root = 0) - see
-    // todo-overlay-list.ts's own hoverDepth for what drives this. Used
-    // only by the row that's actually the drop target (see rowStyles)
-    // to inset its own highlight so it visually lines up with the depth
-    // horizontal drag-to-nest has resolved to - a live preview of where
-    // the item will land, not just which row triggered the highlight.
+    // todo-overlay-list.ts's own hoverDepth for what drives this. Only
+    // used for a before/after reorder's drop-shadow-box, to inset it to
+    // match the target's own nesting level - "inside" (becoming a
+    // child) shows no shadow box at all, see rowClasses/render() below.
     @property({attribute: false})
     hoverDepth = 0;
 
@@ -973,13 +966,18 @@ export class TodoTreeItem extends LitElement {
                     @pointerdown=${this.pointerDown}
                 >
                     ${
-                        isDropTarget
+                        // Reordering (before/after) shows the shadow box in
+                        // the gap it just opened; becoming a child ("inside")
+                        // shows no shadow box at all - the bounding-box
+                        // outline on THIS row (see rowClasses' drop-inside)
+                        // is the whole highlight for that case.
+                        isDropTarget && this.hoverPlacement !== "inside"
                             ? html`
                                 <div
                                     class=${classMap({
                                         "drop-shadow-box": true,
                                         above: this.hoverPlacement === "before",
-                                        below: this.hoverPlacement !== "before",
+                                        below: this.hoverPlacement === "after",
                                     })}
                                     style=${styleMap({left: `${this.hoverDepth * ROW_INDENT_PX}px`})}
                                 ></div>

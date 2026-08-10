@@ -2313,12 +2313,17 @@ var TodoTreeItem = class extends i4 {
 
                     @pointerdown=${this.pointerDown}
                 >
-                    ${isDropTarget ? b2`
+                    ${// Reordering (before/after) shows the shadow box in
+    // the gap it just opened; becoming a child ("inside")
+    // shows no shadow box at all - the bounding-box
+    // outline on THIS row (see rowClasses' drop-inside)
+    // is the whole highlight for that case.
+    isDropTarget && this.hoverPlacement !== "inside" ? b2`
                                 <div
                                     class=${e6({
       "drop-shadow-box": true,
       above: this.hoverPlacement === "before",
-      below: this.hoverPlacement !== "before"
+      below: this.hoverPlacement === "after"
     })}
                                     style=${o6({ left: `${this.hoverDepth * ROW_INDENT_PX}px` })}
                                 ></div>
@@ -2491,24 +2496,25 @@ TodoTreeItem.styles = i`
             opacity: 0.45;
         }
 
-        /* "inside" opens the same kind of live gap before/after do (see
-           their own comment) - directly below the anchor row, since a
-           row only ever offers "inside" when it has no VISIBLE children
-           to insert relative to (see resolvePlacement) - there's always
-           exactly one place a new first child can go: right underneath.
-           The subtle tint on the row itself marks which row is the
-           anchor; the actual shadow box rendered into the opened gap
-           (see .drop-shadow-box) is what shows precisely where the item
-           will land. */
+        /* "inside" (becoming this row's child) draws a bounding box
+           around the row itself, rather than opening a gap - dragging
+           OVER an existing parent to nest under it is a fundamentally
+           different gesture from reordering past a sibling, and reads
+           more clearly as "drop into this container" when the container
+           itself is outlined, the same way a file manager highlights a
+           folder you're dragging onto rather than showing a shadow copy
+           of the file inside it. */
         .row.drop-inside {
-            background: rgba(var(--rgb-accent-color, 255, 152, 0), 0.05);
-            margin-bottom: 52px;
+            outline-color: var(--accent-color, var(--primary-color));
+            background: rgba(var(--rgb-accent-color, 255, 152, 0), 0.08);
         }
 
         /* Instead of a static line, the sibling next to the drop point
            opens a live gap (matching the space a lifted row leaves
            behind), so the list visibly reflows to show where the item
-           would land rather than just marking the spot. */
+           would land rather than just marking the spot. Reordering only -
+           see .row.drop-inside above for why becoming a child looks
+           different. */
         .row.gap-before {
             margin-top: 52px;
         }
@@ -2517,18 +2523,14 @@ TodoTreeItem.styles = i`
             margin-bottom: 52px;
         }
 
-        /* The actual "it'll go here" preview, rendered into whichever
-           gap the row above just opened (gap-before/gap-after/drop-inside
-           all reserve the same 52px) - a dashed placeholder the size of
-           a real row, indented to match exactly how deep horizontal
-           drag-to-nest has resolved to (see todo-overlay-list.ts's
-           applyHorizontalNesting), so both WHERE and HOW DEEP the item
-           will land are shown as one visual instead of separately
-           requiring a mental model of either. Absolutely positioned
-           against the row (which has its own position:relative) so it
-           overlays the margin gap without adding any height of its own -
-           the margin is what actually reflows the list; this just fills
-           the space it opened. */
+        /* The actual "it'll go here" preview for a reorder (before/after
+           only - see .row.drop-inside above), rendered into whichever
+           gap the row above just opened - a dashed placeholder the size
+           of a real row, indented to match the target's own depth.
+           Absolutely positioned against the row (which has its own
+           position:relative) so it overlays the margin gap without
+           adding any height of its own - the margin is what actually
+           reflows the list; this just fills the space it opened. */
         .drop-shadow-box {
             position: absolute;
             left: 0;
@@ -3049,7 +3051,7 @@ var REORDER_TOGGLE_ICON = b2`
 `;
 var ITEM_CHANGED_EVENT = "todo_overlay_item_event";
 var HOVER_DEAD_ZONE_PX = 12;
-function collectAllRows(root, currentEntity, currentDepth = 0, currentParentId) {
+function collectAllRows(root, currentEntity, currentDepth = 0) {
   const rows = [];
   for (const el of Array.from(root.querySelectorAll("*"))) {
     const itemEl = el;
@@ -3063,8 +3065,7 @@ function collectAllRows(root, currentEntity, currentDepth = 0, currentParentId) 
           entityId: currentEntity,
           children: hasVisibleChildren ? itemEl.item.children : [],
           rect: rowEl.getBoundingClientRect(),
-          depth: currentDepth,
-          parentId: currentParentId
+          depth: currentDepth
         });
       }
     }
@@ -3076,8 +3077,7 @@ function collectAllRows(root, currentEntity, currentDepth = 0, currentParentId) 
           entityId: currentEntity,
           children: [],
           rect: emptyZone.getBoundingClientRect(),
-          depth: 0,
-          parentId: void 0
+          depth: 0
         });
       }
     }
@@ -3085,8 +3085,7 @@ function collectAllRows(root, currentEntity, currentDepth = 0, currentParentId) 
       const isList = el.localName === "todo-overlay-list";
       const nextEntity = isList ? el.entity : currentEntity;
       const nextDepth = isList ? 0 : isTreeItem ? currentDepth + 1 : currentDepth;
-      const nextParentId = isList ? void 0 : isTreeItem ? itemEl.item.id : currentParentId;
-      rows.push(...collectAllRows(el.shadowRoot, nextEntity, nextDepth, nextParentId));
+      rows.push(...collectAllRows(el.shadowRoot, nextEntity, nextDepth));
     }
   }
   return rows;
@@ -3109,49 +3108,7 @@ function resolvePlacement(rowId, rowChildren, relativeY, sticky) {
   }
   return { id: rowId, placement: "inside" };
 }
-function applyHorizontalNesting(target, rows, horizontalSteps) {
-  if (horizontalSteps === 0 || target.id === void 0) {
-    return target;
-  }
-  const sortedByTop = [...rows].sort((a3, b3) => a3.rect.top - b3.rect.top);
-  let current = {
-    id: target.id,
-    entityId: target.entityId,
-    placement: target.placement
-  };
-  let steps = horizontalSteps;
-  while (steps > 0) {
-    let precedingId;
-    if (current.placement === "inside") {
-      const children = rows.filter((r6) => r6.parentId === current.id).sort((a3, b3) => a3.rect.top - b3.rect.top);
-      precedingId = children.at(-1)?.id;
-    } else if (current.placement === "after") {
-      precedingId = current.id;
-    } else {
-      const idx = sortedByTop.findIndex((r6) => r6.id === current.id);
-      precedingId = idx > 0 ? sortedByTop[idx - 1].id : void 0;
-    }
-    if (precedingId === void 0) {
-      break;
-    }
-    current = { id: precedingId, entityId: current.entityId, placement: "inside" };
-    steps -= 1;
-  }
-  while (steps < 0) {
-    if (current.placement === "inside") {
-      current = { id: current.id, entityId: current.entityId, placement: "after" };
-    } else {
-      const owner = rows.find((r6) => r6.id === current.id);
-      if (owner?.parentId === void 0) {
-        break;
-      }
-      current = { id: owner.parentId, entityId: current.entityId, placement: "after" };
-    }
-    steps += 1;
-  }
-  return current;
-}
-function findDropTarget(y3, x2, dragStartX, rows, sticky) {
+function findDropTarget(y3, rows, sticky) {
   if (rows.length === 0) {
     return void 0;
   }
@@ -3168,14 +3125,12 @@ function findDropTarget(y3, x2, dragStartX, rows, sticky) {
     return { id: void 0, entityId: nearest.entityId, placement: "inside", depth: 0 };
   }
   const relativeY = (y3 - nearest.rect.top) / nearest.rect.height;
-  const vertical = {
+  const resolved = {
     ...resolvePlacement(nearest.id, nearest.children, relativeY, sticky),
     entityId: nearest.entityId
   };
-  const horizontalSteps = Math.round((x2 - dragStartX) / ROW_INDENT_PX);
-  const resolved = applyHorizontalNesting(vertical, rows, horizontalSteps);
-  const resolvedRow = rows.find((r6) => r6.id === resolved.id);
-  const depth = resolvedRow ? resolvedRow.depth + (resolved.placement === "inside" ? 1 : 0) : 0;
+  const resolvedRow = rows.find((r6) => r6.id === resolved.id) ?? nearest;
+  const depth = resolvedRow.depth + (resolved.placement === "inside" ? 1 : 0);
   return { ...resolved, depth };
 }
 function findItem(items, id) {
@@ -3266,13 +3221,7 @@ var TodoOverlayList = class extends i4 {
         return;
       }
       const sticky = this.hoverId !== void 0 && this.hoverPlacement !== void 0 ? { id: this.hoverId, placement: this.hoverPlacement } : void 0;
-      const hit = findDropTarget(
-        e7.clientY,
-        e7.clientX,
-        this.dragStartPointerPos.x,
-        this.rowSnapshot,
-        sticky
-      );
+      const hit = findDropTarget(e7.clientY, this.rowSnapshot, sticky);
       const valid = hit && hit.id !== this.draggedId;
       const previousHoverId = this.hoverId;
       const previousHoverPlacement = this.hoverPlacement;
