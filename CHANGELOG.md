@@ -3,6 +3,40 @@
 All notable changes to this project are documented here. Versions follow the
 integration's `manifest.json`/card's `package.json` (kept in lockstep).
 
+## 1.0.3
+
+Same underlying bug class as 1.0.2's edit-dialog fix, found in a second
+place: reported as "typing a name to save the list in the mobile
+browser wipes it occasionally."
+
+- **Fixed: the save/load dialog's name field (and mode/persist-states
+  fields) could silently revert mid-type, same root cause as the edit
+  dialog fixed in 1.0.2.** `todo-save-load-dialog.ts` had the exact
+  same pattern: its `.value` was recomputed and re-passed by the parent
+  card on every re-render, and since lit-html always recommits
+  non-primitive property values regardless of whether the reference
+  changed, any unrelated re-render while the dialog was open (a
+  live-sync reload - including the very one just added in 1.0.2 - a
+  hass poll tick, anything) silently reset the in-progress name back to
+  whatever it was when the dialog opened. Mobile's slower/janker render
+  cadence just made an existing race far easier to hit than on desktop.
+  Fixed with the same seeded-once internal draft pattern now used by
+  both dialogs.
+- Audited every other text input across the card for the same pattern.
+  The quick-add field and the card's config editor are unaffected -
+  both bind directly to state each component owns itself (a primitive
+  string in the first case, dirty-checked by value; a config object
+  only ever reassigned in lockstep with what's typed in the second),
+  never to an object handed down and blindly re-passed by a parent on
+  every render. This bug class specifically requires an object-typed
+  `@property` that a parent keeps re-supplying across renders it
+  doesn't control - the two item/save-load dialogs were the only
+  places that shape existed.
+- This is a frontend-only fix - `link_sync.py` and the save/load
+  backend (`manager_snapshots.py`) are untouched, so there's no change
+  to linked-list sync behavior or any risk of the 0.16.9 echo-loop
+  class recurring.
+
 ## 1.0.2
 
 Two more bugs found during real two-instance testing of 1.0.1, both in

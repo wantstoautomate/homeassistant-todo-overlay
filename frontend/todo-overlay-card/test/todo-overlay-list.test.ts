@@ -1171,6 +1171,47 @@ describe("todo-overlay-list edit-dialog delete (diagnostic)", () => {
     });
 });
 
+describe("todo-overlay-list save-load dialog", () => {
+    it("does not clobber an in-progress unsaved save-list name when a live-sync reload fires while it's open", async () => {
+        // Live-reported bug, same root cause as the edit-dialog one
+        // above: "typing a name to save the list in the mobile browser
+        // wipes it occasionally." The save/load dialog had the exact
+        // same .value-recomputed-every-render pattern the edit dialog
+        // did.
+        const {el, hass} = await renderList({
+            entity_id: ENTITY_ID,
+            items: [makeItem({id: "1", title: "Milk"})],
+        });
+        hass.connection.responses["todo_overlay/list_saved"] = {names: []};
+
+        const saveButton = el.shadowRoot?.querySelector(
+            "button[aria-label='Save list']",
+        ) as HTMLButtonElement;
+        expect(saveButton, "save-list toolbar button should be present").toBeDefined();
+        saveButton.click();
+        await settle(el);
+
+        const dialog = el.shadowRoot?.querySelector("todo-overlay-save-load-dialog");
+        expect(dialog, "save-load dialog should be open").not.toBeNull();
+
+        const nameInput = dialog?.shadowRoot?.querySelector("#save-load-name") as HTMLInputElement;
+        nameInput.value = "weekly_groceries";
+        nameInput.dispatchEvent(new InputEvent("input", {bubbles: true, composed: true}));
+        await (dialog as unknown as {updateComplete: Promise<unknown>}).updateComplete;
+
+        expect(nameInput.value).toBe("weekly_groceries");
+
+        // A live-sync reload fires for this same entity (e.g. a linked
+        // list's incoming change) while the save dialog is still open,
+        // unsaved.
+        hass.connection.fireEvent("todo_overlay_item_event", {entity_id: ENTITY_ID, action: "synced"});
+        await settle(el);
+        await (dialog as unknown as {updateComplete: Promise<unknown>}).updateComplete;
+
+        expect(nameInput.value).toBe("weekly_groceries");
+    });
+});
+
 describe("todo-overlay-list row delete button", () => {
     it("a tree-delete-item event from a row removes that item and reloads", async () => {
         const {el, hass} = await renderList({

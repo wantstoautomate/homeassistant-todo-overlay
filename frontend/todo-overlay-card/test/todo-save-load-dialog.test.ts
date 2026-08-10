@@ -108,4 +108,33 @@ describe("todo-overlay-save-load-dialog", () => {
 
         expect(el.value.name).toBe("my_template");
     });
+
+    it("does not clobber an in-progress unsaved name when the parent re-passes value", async () => {
+        // Live-reported bug: "typing a name to save the list in the
+        // mobile browser wipes it occasionally." The parent
+        // (todo-overlay-list.ts) re-renders for all sorts of reasons
+        // unrelated to this dialog (a live-sync reload, a hass poll
+        // tick) and always re-passes `.value` on every render -
+        // lit-html always recommits a non-primitive property value
+        // regardless of whether its reference changed, so re-assigning
+        // the SAME (or an equal-content) value object here simulates
+        // exactly that.
+        const el = await renderDialog({action: "save"});
+
+        const input = el.shadowRoot?.querySelector("#save-load-name") as HTMLInputElement;
+        input.value = "weekly_groceries";
+        input.dispatchEvent(new Event("input"));
+        await el.updateComplete;
+
+        expect(input.value).toBe("weekly_groceries");
+
+        // The parent re-renders and re-passes its own (stale, pre-edit)
+        // value object - a brand new object, same content as what the
+        // dialog originally opened with.
+        el.value = {...EMPTY_SAVE_LOAD_VALUE};
+        await el.updateComplete;
+
+        expect(input.value).toBe("weekly_groceries");
+        expect(el.value.name).toBe("weekly_groceries");
+    });
 });
