@@ -3061,6 +3061,19 @@ var TodoConfirmDialog = class extends i4 {
   }
 };
 TodoConfirmDialog.styles = i`
+        /* A short yes/no message doesn't need (and looks strange in) the
+           same wide dialog the multi-field item/save-load dialogs need -
+           left unconstrained, ha-dialog's default sizing reads as
+           oddly large and empty for one line of text. Only bounded on
+           the desktop side (min/max-width); mobile still gets the same
+           edge-to-edge behavior every other dialog in this card already
+           has at narrow viewports, via ha-dialog's own responsive
+           default. */
+        ha-dialog {
+            --mdc-dialog-min-width: 280px;
+            --mdc-dialog-max-width: 420px;
+        }
+
         p {
             font-family: Roboto, "Noto Sans", sans-serif;
             font-size: 14px;
@@ -3413,9 +3426,22 @@ var TodoOverlayList = class extends i4 {
     // confirm dialog below, since there's no undo for this one (see
     // clear_all's own docstring - same no-undo precedent as
     // clear_completed already has).
+    //
+    // clearButtonPressedAt/clearButtonHoldTimer are deliberately plain
+    // fields, not @state - mirrors todo-tree-item.ts's own row hold
+    // gesture exactly (pointerDownAt/holdTimer there), including the
+    // same "schedule a requestUpdate() for the moment the threshold is
+    // crossed" trick, since holdReady below is a plain getter computed
+    // from Date.now() rather than something Lit can track reactively on
+    // its own.
     this.clearButtonPressedAt = 0;
     this.onClearButtonPointerDown = () => {
       this.clearButtonPressedAt = Date.now();
+      this.requestUpdate();
+      window.clearTimeout(this.clearButtonHoldTimer);
+      this.clearButtonHoldTimer = window.setTimeout(() => {
+        this.requestUpdate();
+      }, LONG_PRESS_MS);
     };
     this.onClearButtonPointerUp = async () => {
       if (this.clearButtonPressedAt === 0) {
@@ -3423,6 +3449,8 @@ var TodoOverlayList = class extends i4 {
       }
       const pressDurationMs = Date.now() - this.clearButtonPressedAt;
       this.clearButtonPressedAt = 0;
+      window.clearTimeout(this.clearButtonHoldTimer);
+      this.requestUpdate();
       if (pressDurationMs >= LONG_PRESS_MS) {
         this.confirmingClearAll = true;
       } else {
@@ -3431,6 +3459,8 @@ var TodoOverlayList = class extends i4 {
     };
     this.onClearButtonPointerCancel = () => {
       this.clearButtonPressedAt = 0;
+      window.clearTimeout(this.clearButtonHoldTimer);
+      this.requestUpdate();
     };
     this.closeClearAllConfirm = () => {
       this.confirmingClearAll = false;
@@ -3689,6 +3719,9 @@ var TodoOverlayList = class extends i4 {
     } catch (err) {
       this.reportError("clearing completed items", err);
     }
+  }
+  get clearButtonHoldReady() {
+    return this.clearButtonPressedAt !== 0 && Date.now() - this.clearButtonPressedAt >= LONG_PRESS_MS;
   }
   async onClearAllConfirmed() {
     this.confirmingClearAll = false;
@@ -4033,6 +4066,7 @@ var TodoOverlayList = class extends i4 {
       expanded: this.quickAddExpanded
     })}
                                                 aria-label="Add item"
+                                                title="Add item"
                                                 @click=${this.onToggleQuickAdd}
                                             >
                                                 ${PLUS_ICON}
@@ -4045,6 +4079,7 @@ var TodoOverlayList = class extends i4 {
       "filter-select-wrapper": true,
       active: this.filterMode !== "all"
     })}
+                                                            title="Filter items"
                                                         >
                                                             ${FILTER_ICON}
                                                             ${this.filterMode !== "all" ? b2`<span class="badge-dot"></span>` : ""}
@@ -4065,6 +4100,7 @@ var TodoOverlayList = class extends i4 {
                                                         <button
                                                             class="toolbar-icon"
                                                             aria-label="Save list"
+                                                            title="Save list"
                                                             @click=${this.openSaveDialog}
                                                         >
                                                             ${SAVE_ICON}
@@ -4072,6 +4108,7 @@ var TodoOverlayList = class extends i4 {
                                                         <button
                                                             class="toolbar-icon"
                                                             aria-label="Load list"
+                                                            title="Load list"
                                                             @click=${this.openLoadDialog}
                                                         >
                                                             ${LOAD_ICON}
@@ -4082,11 +4119,19 @@ var TodoOverlayList = class extends i4 {
                                                         <button
                                                             class="toolbar-icon"
                                                             aria-label="Clear completed"
-                                                            title="Hold to delete all items"
+                                                            title="Tap: clear completed. Hold: delete all."
                                                             @pointerdown=${this.onClearButtonPointerDown}
                                                             @pointerup=${this.onClearButtonPointerUp}
                                                             @pointercancel=${this.onClearButtonPointerCancel}
                                                         >
+                                                            ${this.clearButtonPressedAt !== 0 ? b2`
+                                                                        <div
+                                                                            class=${e6({
+      "hold-ripple": true,
+      active: this.clearButtonHoldReady
+    })}
+                                                                        ></div>
+                                                                    ` : ""}
                                                             ${CLEAR_COMPLETED_ICON}
                                                         </button>
                                                     ` : ""}
@@ -4099,6 +4144,7 @@ var TodoOverlayList = class extends i4 {
       active: this.reorderModeActive
     })}
                                                             aria-label=${this.reorderModeActive ? "Done reordering" : "Reorder items"}
+                                                            title=${this.reorderModeActive ? "Done reordering" : "Reorder items"}
                                                             @click=${this.onToggleReorderMode}
                                                         >
                                                             ${REORDER_TOGGLE_ICON}
@@ -4189,9 +4235,9 @@ var TodoOverlayList = class extends i4 {
 
             ${this.confirmingClearAll ? b2`
                         <todo-overlay-confirm-dialog
-                            heading="Delete all items?"
-                            message="This permanently deletes every item in this list - active and completed, parents and children. This can't be undone."
-                            confirmLabel="Delete all"
+                            .heading=${"Delete all items?"}
+                            .message=${"This permanently deletes every item in this list - active and completed, parents and children. This can't be undone."}
+                            .confirmLabel=${"Delete all"}
 
                             @dialog-close=${this.closeClearAllConfirm}
                             @dialog-confirm=${this.onClearAllConfirmed}
@@ -4287,6 +4333,31 @@ TodoOverlayList.styles = i`
             height: 8px;
             border-radius: 50%;
             background: var(--primary-color);
+        }
+
+        /* Same visual language as a row's own hold-to-edit ripple
+           (todo-tree-item.ts's .hold-ripple) - pops in once the press
+           has been held long enough to trigger the hold action instead
+           of a plain tap, so there's a clear "you can let go now"
+           signal rather than needing to guess how long is long enough. */
+        .toolbar-icon .hold-ripple {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            width: 32px;
+            height: 32px;
+            margin-left: -16px;
+            margin-top: -16px;
+            border-radius: 50%;
+            background: var(--primary-color);
+            opacity: 0.2;
+            pointer-events: none;
+            transform: scale(0);
+            transition: transform 180ms ease-in-out;
+        }
+
+        .toolbar-icon .hold-ripple.active {
+            transform: scale(1);
         }
 
         .toolbar-icon.quick-add-toggle svg {

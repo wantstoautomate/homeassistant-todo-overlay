@@ -2,7 +2,7 @@ import {afterEach, describe, expect, it, vi} from "vitest";
 
 import "../src/components/todo-overlay-list";
 import type {TodoOverlayList} from "../src/components/todo-overlay-list";
-import type {TodoItem, TodoList} from "../src/models";
+import {LONG_PRESS_MS, type TodoItem, type TodoList} from "../src/models";
 import {makeFakeHass} from "./fakes";
 
 const ENTITY_ID = "todo.shopping";
@@ -1631,6 +1631,41 @@ describe("todo-overlay-list clear-all (hold the clear-completed button)", () => 
         expect(el.shadowRoot?.querySelector("todo-overlay-confirm-dialog")).toBeNull();
     });
 
+    it("shows a ripple as soon as the button is pressed, only marked active once held long enough to trigger", async () => {
+        vi.useFakeTimers({shouldAdvanceTime: true});
+
+        try {
+            const {el} = await renderList({
+                entity_id: ENTITY_ID,
+                items: [makeItem({id: "1", title: "Milk"})],
+            });
+
+            const button = clearButton(el);
+            button.dispatchEvent(new PointerEvent("pointerdown"));
+            await el.updateComplete;
+
+            let ripple = button.querySelector(".hold-ripple");
+            expect(ripple, "ripple should appear as soon as the button is pressed").not.toBeNull();
+            expect(ripple?.classList.contains("active"), "not yet held long enough to be active").toBe(false);
+
+            // The row's own hold-ripple pattern schedules a requestUpdate()
+            // for the exact moment the threshold is crossed (see
+            // clearButtonHoldTimer) - advancing past it and letting that
+            // fire is what flips the ripple to active, not the release.
+            await vi.advanceTimersByTimeAsync(LONG_PRESS_MS + 50);
+
+            ripple = button.querySelector(".hold-ripple");
+            expect(ripple?.classList.contains("active"), "held long enough - ripple should now read as active").toBe(true);
+
+            button.dispatchEvent(new PointerEvent("pointerup"));
+            await el.updateComplete;
+
+            expect(button.querySelector(".hold-ripple"), "ripple should clear on release").toBeNull();
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+
     it("holding past the long-press threshold, then releasing, opens the confirm dialog instead of clearing anything", async () => {
         vi.useFakeTimers({shouldAdvanceTime: true});
 
@@ -1646,7 +1681,21 @@ describe("todo-overlay-list clear-all (hold the clear-completed button)", () => 
             button.dispatchEvent(new PointerEvent("pointerup"));
             await el.updateComplete;
 
-            expect(el.shadowRoot?.querySelector("todo-overlay-confirm-dialog"), "confirm dialog should be open").not.toBeNull();
+            const dialog = el.shadowRoot?.querySelector("todo-overlay-confirm-dialog");
+            expect(dialog, "confirm dialog should be open").not.toBeNull();
+
+            // Regression check: these three used to be set via plain HTML
+            // attributes (heading="...") rather than Lit property bindings
+            // (.heading=${...}) - silently inert, since the component
+            // declares them with attribute: false. Reading the actual
+            // properties here (not just checking the dialog is present)
+            // is what would have caught that - the dialog "opened" either
+            // way, just with an empty message and generic defaults.
+            const dialogProps = dialog as unknown as {heading: string; message: string; confirmLabel: string};
+            expect(dialogProps.heading).toBe("Delete all items?");
+            expect(dialogProps.message).not.toBe("");
+            expect(dialogProps.confirmLabel).toBe("Delete all");
+
             expect(hass.connection.sent).not.toContainEqual(expect.objectContaining({type: "todo_overlay/clear_completed"}));
             expect(hass.connection.sent).not.toContainEqual(expect.objectContaining({type: "todo_overlay/clear_all"}));
         } finally {

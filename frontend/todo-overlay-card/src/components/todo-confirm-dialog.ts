@@ -11,6 +11,19 @@ import {customElement, property} from "lit/decorators.js";
 export class TodoConfirmDialog extends LitElement {
 
     static styles = css`
+        /* A short yes/no message doesn't need (and looks strange in) the
+           same wide dialog the multi-field item/save-load dialogs need -
+           left unconstrained, ha-dialog's default sizing reads as
+           oddly large and empty for one line of text. Only bounded on
+           the desktop side (min/max-width); mobile still gets the same
+           edge-to-edge behavior every other dialog in this card already
+           has at narrow viewports, via ha-dialog's own responsive
+           default. */
+        ha-dialog {
+            --mdc-dialog-min-width: 280px;
+            --mdc-dialog-max-width: 420px;
+        }
+
         p {
             font-family: Roboto, "Noto Sans", sans-serif;
             font-size: 14px;
