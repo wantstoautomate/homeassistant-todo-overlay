@@ -203,9 +203,18 @@ export class TodoTreeItem extends LitElement {
             opacity: 0.45;
         }
 
+        /* "inside" opens the same kind of live gap before/after do (see
+           their own comment) - directly below the anchor row, since a
+           row only ever offers "inside" when it has no VISIBLE children
+           to insert relative to (see resolvePlacement) - there's always
+           exactly one place a new first child can go: right underneath.
+           The subtle tint on the row itself marks which row is the
+           anchor; the actual shadow box rendered into the opened gap
+           (see .drop-shadow-box) is what shows precisely where the item
+           will land. */
         .row.drop-inside {
-            outline-color: var(--accent-color, var(--primary-color));
-            background: rgba(var(--rgb-accent-color, 255, 152, 0), 0.08);
+            background: rgba(var(--rgb-accent-color, 255, 152, 0), 0.05);
+            margin-bottom: 52px;
         }
 
         /* Instead of a static line, the sibling next to the drop point
@@ -220,23 +229,36 @@ export class TodoTreeItem extends LitElement {
             margin-bottom: 52px;
         }
 
-        /* Live preview of the depth a horizontal drag has resolved to
-           (see todo-overlay-list.ts's applyHorizontalNesting) - a thin
-           accent-colored rail inset by that many indent-levels, so
-           dragging left/right visibly moves it in real time rather than
-           requiring a mental model of which row it'll end up under.
-           Absolutely positioned so it never affects row layout/height -
-           purely an overlay on top of whichever row is the current
-           drop target. */
-        .depth-indicator {
+        /* The actual "it'll go here" preview, rendered into whichever
+           gap the row above just opened (gap-before/gap-after/drop-inside
+           all reserve the same 52px) - a dashed placeholder the size of
+           a real row, indented to match exactly how deep horizontal
+           drag-to-nest has resolved to (see todo-overlay-list.ts's
+           applyHorizontalNesting), so both WHERE and HOW DEEP the item
+           will land are shown as one visual instead of separately
+           requiring a mental model of either. Absolutely positioned
+           against the row (which has its own position:relative) so it
+           overlays the margin gap without adding any height of its own -
+           the margin is what actually reflows the list; this just fills
+           the space it opened. */
+        .drop-shadow-box {
             position: absolute;
             left: 0;
-            top: 4px;
-            bottom: 4px;
-            width: 3px;
-            border-radius: 2px;
-            background: var(--accent-color, var(--primary-color));
-            transition: margin-left 100ms ease;
+            right: 8px;
+            height: 44px;
+            border: 2px dashed var(--accent-color, var(--primary-color));
+            border-radius: 4px;
+            background: rgba(var(--rgb-accent-color, 255, 152, 0), 0.08);
+            transition: left 100ms ease;
+            pointer-events: none;
+        }
+
+        .drop-shadow-box.above {
+            top: -48px;
+        }
+
+        .drop-shadow-box.below {
+            bottom: -48px;
         }
 
         .content {
@@ -954,8 +976,12 @@ export class TodoTreeItem extends LitElement {
                         isDropTarget
                             ? html`
                                 <div
-                                    class="depth-indicator"
-                                    style=${styleMap({marginLeft: `${this.hoverDepth * ROW_INDENT_PX}px`})}
+                                    class=${classMap({
+                                        "drop-shadow-box": true,
+                                        above: this.hoverPlacement === "before",
+                                        below: this.hoverPlacement !== "before",
+                                    })}
+                                    style=${styleMap({left: `${this.hoverDepth * ROW_INDENT_PX}px`})}
                                 ></div>
                             `
                             : ""

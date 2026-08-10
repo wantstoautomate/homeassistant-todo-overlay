@@ -656,13 +656,14 @@ describe("todo-overlay-list horizontal drag-to-nest", () => {
         expect(draggable.hoverId).toBe("2");
         expect(draggable.hoverPlacement).toBe("inside");
 
-        // The live depth-preview marker on row "2" reflects one level
-        // deeper than "2"'s own depth (0) - it's about to become a
-        // child of "2", i.e. depth 1.
+        // The shadow box below row "2" reflects one level deeper than
+        // "2"'s own depth (0) - it's about to become a child of "2",
+        // i.e. depth 1.
         await settle(el);
-        const indicator = rows[1].shadowRoot.querySelector(".depth-indicator") as HTMLElement;
-        expect(indicator, "row 2 should show the live depth-preview marker").not.toBeNull();
-        expect(indicator.style.marginLeft).toBe("20px");
+        const shadowBox = rows[1].shadowRoot.querySelector(".drop-shadow-box") as HTMLElement;
+        expect(shadowBox, "row 2 should show the live drop-shadow-box preview").not.toBeNull();
+        expect(shadowBox.classList.contains("below")).toBe(true);
+        expect(shadowBox.style.left).toBe("20px");
 
         await draggable.onGlobalPointerUp();
 
@@ -749,6 +750,36 @@ describe("todo-overlay-list horizontal drag-to-nest", () => {
 
         expect(draggable.hoverId).toBe("1");
         expect(draggable.hoverPlacement).toBe("before");
+    });
+
+    it("shows the shadow box above the row for a 'before' placement, and opens a real gap for the list to reflow around", async () => {
+        const {el} = await renderList({
+            entity_id: ENTITY_ID,
+            items: [makeItem({id: "1", title: "First"}), makeItem({id: "2", title: "Second"})],
+        });
+
+        const rows = deepQueryAll(el.shadowRoot!, "todo-overlay-tree-item") as (Element & {shadowRoot: ShadowRoot})[];
+        mockRect(rows[0].shadowRoot.querySelector(".row")!, {top: 0, bottom: 40, height: 40});
+        mockRect(rows[1].shadowRoot.querySelector(".row")!, {top: 40, bottom: 80, height: 40});
+
+        const draggable = el as unknown as DraggableList;
+
+        draggable.draggedId = "2";
+        draggable.onDragStart(new CustomEvent("tree-drag-start", {
+            detail: {rect: undefined, pointerX: 20, pointerY: 100, grabOffsetX: 0, grabOffsetY: 0},
+        }));
+
+        // Top 30% of row "1" - "before 1".
+        draggable.onGlobalPointerMove(new PointerEvent("pointermove", {clientX: 20, clientY: 5}));
+        await settle(el);
+
+        const row = rows[0].shadowRoot.querySelector(".row")!;
+        expect(row.classList.contains("gap-before"), "the list should reflow (margin push) around the drop point").toBe(true);
+
+        const shadowBox = rows[0].shadowRoot.querySelector(".drop-shadow-box") as HTMLElement;
+        expect(shadowBox, "row 1 should show the shadow box").not.toBeNull();
+        expect(shadowBox.classList.contains("above")).toBe(true);
+        expect(shadowBox.classList.contains("below")).toBe(false);
     });
 });
 
