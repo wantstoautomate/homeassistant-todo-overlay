@@ -2005,6 +2005,8 @@ TodoSaveLoadDialog = __decorateClass([
 var BEFORE_AFTER_ZONE = 0.3;
 var ROW_INDENT_PX = 20;
 var rowIndentPx = r(`${ROW_INDENT_PX}px`);
+var DROP_GAP_PX = 52;
+var dropGapPx = r(`${DROP_GAP_PX}px`);
 var MOVE_CANCEL_THRESHOLD_PX = 6;
 var HOLD_RIPPLE_SIZE = 72;
 var holdRippleSizePx = r(`${HOLD_RIPPLE_SIZE}px`);
@@ -2516,11 +2518,11 @@ TodoTreeItem.styles = i`
            see .row.drop-inside above for why becoming a child looks
            different. */
         .row.gap-before {
-            margin-top: 52px;
+            margin-top: ${dropGapPx};
         }
 
         .row.gap-after {
-            margin-bottom: 52px;
+            margin-bottom: ${dropGapPx};
         }
 
         /* The actual "it'll go here" preview for a reorder (before/after
@@ -3108,6 +3110,35 @@ function resolvePlacement(rowId, rowChildren, relativeY, sticky) {
   }
   return { id: rowId, placement: "inside" };
 }
+function shiftRectDown(rect, amount) {
+  return {
+    top: rect.top + amount,
+    bottom: rect.bottom + amount,
+    left: rect.left,
+    right: rect.right,
+    width: rect.width,
+    height: rect.height,
+    x: rect.x,
+    y: rect.y + amount,
+    toJSON: rect.toJSON
+  };
+}
+function applyGapCorrection(rows, sticky) {
+  if (!sticky || sticky.placement === "inside") {
+    return rows;
+  }
+  const sortedByTop = [...rows].sort((a3, b3) => a3.rect.top - b3.rect.top);
+  const targetIndex = sortedByTop.findIndex((r6) => r6.id === sticky.id);
+  if (targetIndex === -1) {
+    return rows;
+  }
+  const shiftFromIndex = sticky.placement === "before" ? targetIndex : targetIndex + 1;
+  const shiftedIds = new Set(sortedByTop.slice(shiftFromIndex).map((r6) => r6.id));
+  if (shiftedIds.size === 0) {
+    return rows;
+  }
+  return rows.map((row) => shiftedIds.has(row.id) ? { ...row, rect: shiftRectDown(row.rect, DROP_GAP_PX) } : row);
+}
 function findDropTarget(y3, rows, sticky) {
   if (rows.length === 0) {
     return void 0;
@@ -3221,7 +3252,7 @@ var TodoOverlayList = class extends i4 {
         return;
       }
       const sticky = this.hoverId !== void 0 && this.hoverPlacement !== void 0 ? { id: this.hoverId, placement: this.hoverPlacement } : void 0;
-      const hit = findDropTarget(e7.clientY, this.rowSnapshot, sticky);
+      const hit = findDropTarget(e7.clientY, applyGapCorrection(this.rowSnapshot, sticky), sticky);
       const valid = hit && hit.id !== this.draggedId;
       const previousHoverId = this.hoverId;
       const previousHoverPlacement = this.hoverPlacement;
@@ -3232,13 +3263,6 @@ var TodoOverlayList = class extends i4 {
       const targetChanged = this.hoverId !== previousHoverId || this.hoverPlacement !== previousHoverPlacement;
       if (e7.pointerType !== "mouse" && targetChanged) {
         navigator.vibrate?.(10);
-      }
-      if (targetChanged) {
-        setTimeout(() => {
-          if (this.draggedId !== void 0) {
-            this.snapshotRows();
-          }
-        }, 150);
       }
       this.broadcastDragHover();
     };

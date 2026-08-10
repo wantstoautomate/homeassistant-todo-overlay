@@ -721,63 +721,82 @@ describe("todo-overlay-list zone hysteresis", () => {
 
 // Live-reported: "the orange hitbox should be the same as the grey hit
 // box [the browser's own :hover] - the orange hitbox seems fractionally
-// high." Root cause: rowSnapshot is a deliberately frozen snapshot (see
-// findDropTarget's own comment on why), but the gap-before/gap-after/
-// drop-inside classes a target change applies open a REAL CSS margin
-// that reflows every row below it - so the frozen rect for any row
-// below an open gap silently goes stale (reports a position higher
-// than where the row actually now sits) for the rest of the drag. A
-// re-snapshot after the CSS margin transition settles brings hit-testing
-// back in sync with what :hover (and the user's eyes) are seeing.
-describe("todo-overlay-list re-snapshots after a gap opens, to stay in sync with :hover", () => {
-    it("re-snapshots 150ms after a target change, correcting for the reflow that change's own gap caused", async () => {
+// high", and separately: moving only slightly further into what still
+// looked like the same drop-shadow-box could flip the target again.
+// Root cause: rowSnapshot is a deliberately frozen snapshot (see
+// findDropTarget's own comment on why), but a reorder's gap-before/
+// gap-after opens a REAL CSS margin that reflows every row at or after
+// the target - so the frozen rect for any such row silently goes stale
+// (reports a position higher than where it actually now sits) for the
+// rest of the drag. applyGapCorrection corrects for this analytically -
+// instantly, with no re-measurement or timing dependency at all - since
+// the gap's exact size (DROP_GAP_PX) and which row has it open (the
+// previous frame's own resolved target) are both already known.
+describe("todo-overlay-list gap correction keeps hit-testing in sync with the open gap", () => {
+    it("resolves correctly against a row's post-gap position without any re-measurement or delay", async () => {
         const {el} = await renderList({
             entity_id: ENTITY_ID,
             items: [makeItem({id: "1", title: "Only"}), makeItem({id: "2", title: "Dragged"})],
         });
 
         const rows = deepQueryAll(el.shadowRoot!, "todo-overlay-tree-item") as (Element & {shadowRoot: ShadowRoot})[];
-        const rowOneEl = rows[0].shadowRoot.querySelector(".row")!;
-        mockRect(rowOneEl, {top: 0, bottom: 40, height: 40});
+        mockRect(rows[0].shadowRoot.querySelector(".row")!, {top: 0, bottom: 40, height: 40});
 
         const draggable = el as unknown as DraggableList & {hoverId?: string; hoverPlacement?: string};
 
-        vi.useFakeTimers({shouldAdvanceTime: true});
+        draggable.draggedId = "2";
+        draggable.onDragStart(new CustomEvent("tree-drag-start", {
+            detail: {rect: undefined, pointerX: 20, pointerY: 100, grabOffsetX: 0, grabOffsetY: 0},
+        }));
 
-        try {
-            draggable.draggedId = "2";
-            draggable.onDragStart(new CustomEvent("tree-drag-start", {
-                detail: {rect: undefined, pointerX: 20, pointerY: 100, grabOffsetX: 0, grabOffsetY: 0},
-            }));
+        // Top zone of row "1"'s ORIGINAL position (0-40) - "before 1",
+        // opening a gap-before on it. No correction needed yet - this is
+        // the very first resolution, nothing was open before it.
+        draggable.onGlobalPointerMove(new PointerEvent("pointermove", {clientX: 20, clientY: 5}));
+        expect(draggable.hoverId).toBe("1");
+        expect(draggable.hoverPlacement).toBe("before");
 
-            // Top zone of row "1" - "before 1", opening a gap-before on
-            // it (a real target change, so a re-snapshot is now pending).
-            draggable.onGlobalPointerMove(new PointerEvent("pointermove", {clientX: 20, clientY: 5}));
-            expect(draggable.hoverId).toBe("1");
-            expect(draggable.hoverPlacement).toBe("before");
+        // Row "1"'s mocked rect is deliberately left untouched at 0-40 -
+        // the point of this test is that the correction is computed
+        // (shifting it to an effective 52-92 for hit-testing purposes),
+        // not re-measured from a DOM that, in this test, never actually
+        // moves. y=72 is squarely "inside" that corrected 52-92 range.
+        draggable.onGlobalPointerMove(new PointerEvent("pointermove", {clientX: 20, clientY: 72}));
+        expect(draggable.hoverId).toBe("1");
+        expect(draggable.hoverPlacement).toBe("inside");
+    });
 
-            // Simulate the live reflow that gap-before's margin-top:52px
-            // actually causes - row "1" now visually sits at 52-92, not
-            // its original 0-40. rowSnapshot doesn't know this yet.
-            mockRect(rowOneEl, {top: 52, bottom: 92, height: 40});
+    it("does not apply any correction for 'inside', which opens no gap at all", async () => {
+        const {el} = await renderList({
+            entity_id: ENTITY_ID,
+            items: [
+                makeItem({id: "1", title: "First"}),
+                makeItem({id: "2", title: "Second"}),
+                makeItem({id: "3", title: "Dragged"}),
+            ],
+        });
 
-            // Squarely "inside" row 1's real, current position (52-92) -
-            // but against the still-stale snapshot (0-40), this is miles
-            // past the bottom, resolving to "after" instead.
-            draggable.onGlobalPointerMove(new PointerEvent("pointermove", {clientX: 20, clientY: 72}));
-            expect(draggable.hoverPlacement, "should still be using the stale, pre-reflow snapshot").toBe("after");
+        const rows = deepQueryAll(el.shadowRoot!, "todo-overlay-tree-item") as (Element & {shadowRoot: ShadowRoot})[];
+        mockRect(rows[0].shadowRoot.querySelector(".row")!, {top: 0, bottom: 40, height: 40});
+        mockRect(rows[1].shadowRoot.querySelector(".row")!, {top: 40, bottom: 80, height: 40});
 
-            // Let the pending re-snapshot(s) fire.
-            await vi.advanceTimersByTimeAsync(200);
+        const draggable = el as unknown as DraggableList & {hoverId?: string; hoverPlacement?: string};
 
-            // Same physical cursor position as before - now resolves
-            // correctly against row 1's actual, current position.
-            draggable.onGlobalPointerMove(new PointerEvent("pointermove", {clientX: 20, clientY: 73}));
-            expect(draggable.hoverId).toBe("1");
-            expect(draggable.hoverPlacement, "should now be using the refreshed, post-reflow snapshot").toBe("inside");
-        } finally {
-            vi.useRealTimers();
-        }
+        draggable.draggedId = "3";
+        draggable.onDragStart(new CustomEvent("tree-drag-start", {
+            detail: {rect: undefined, pointerX: 20, pointerY: 200, grabOffsetX: 0, grabOffsetY: 0},
+        }));
+
+        // Middle of row "1" - "inside 1", which opens no gap.
+        draggable.onGlobalPointerMove(new PointerEvent("pointermove", {clientX: 20, clientY: 20}));
+        expect(draggable.hoverId).toBe("1");
+        expect(draggable.hoverPlacement).toBe("inside");
+
+        // Row "2" is exactly where it always was (40-80) - no correction
+        // should have been applied on its account. Middle of row "2".
+        draggable.onGlobalPointerMove(new PointerEvent("pointermove", {clientX: 20, clientY: 60}));
+        expect(draggable.hoverId).toBe("2");
+        expect(draggable.hoverPlacement).toBe("inside");
     });
 });
 

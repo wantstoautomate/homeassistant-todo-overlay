@@ -40,7 +40,7 @@ import type {TodoItemDialogFieldSupport, TodoItemFormValue} from "./todo-item-di
 import {EMPTY_FORM_VALUE} from "./todo-item-dialog";
 import type {SaveLoadFormValue} from "./todo-save-load-dialog";
 import {EMPTY_SAVE_LOAD_VALUE} from "./todo-save-load-dialog";
-import {BEFORE_AFTER_ZONE} from "./todo-tree-item";
+import {BEFORE_AFTER_ZONE, DROP_GAP_PX} from "./todo-tree-item";
 
 import "./todo-tree";
 import "./todo-item-dialog";
@@ -299,6 +299,75 @@ function resolvePlacement(
     return {id: rowId, placement: "inside"};
 }
 
+// Shifts a DOMRect down by `amount` - deliberately NOT {...rect, top:
+// rect.top + amount}, since a real (non-mocked) DOMRect's fields are
+// inherited getters, not own properties, so a plain spread silently
+// produces an empty object. Only the fields findDropTarget actually
+// reads (top/bottom/height) need to be correct; the rest just need to
+// satisfy the type.
+function shiftRectDown(rect: DOMRect, amount: number): DOMRect {
+    return {
+        top: rect.top + amount,
+        bottom: rect.bottom + amount,
+        left: rect.left,
+        right: rect.right,
+        width: rect.width,
+        height: rect.height,
+        x: rect.x,
+        y: rect.y + amount,
+        toJSON: rect.toJSON,
+    } as DOMRect;
+}
+
+// The frozen rowSnapshot below doesn't know about the one reflow a drag
+// can cause on its own: the gap-before/gap-after margin the CURRENT
+// target itself opens (see todo-tree-item.ts's own CSS - "inside" opens
+// no gap at all, only before/after do). Re-measuring the DOM to find
+// out would either reintroduce the live-position oscillation
+// findDropTarget's own comment describes, or lag behind by however long
+// the CSS transition takes to settle - live-reported: the orange
+// highlight's hit-zone felt "fractionally high" relative to the
+// browser's own (always-accurate) :hover, and could flip unexpectedly
+// on a small move that still looked like it was inside the shown
+// drop-shadow-box.
+//
+// Since the SIZE of that one gap is a known constant (DROP_GAP_PX) and
+// WHICH row currently has it open is exactly `sticky` (the previous
+// frame's own resolved target), the correction is computed directly
+// instead of re-measured: every row that sits at or after the gap, in
+// the snapshot's own frozen (pre-gap) top-to-bottom order, shifts down
+// by that amount before hit-testing runs - analytically exact, with no
+// re-measurement and no timing dependency at all.
+function applyGapCorrection(
+    rows: RowSnapshot[],
+    sticky?: {id: string; placement: Placement},
+): RowSnapshot[] {
+    if (!sticky || sticky.placement === "inside") {
+        return rows;
+    }
+
+    const sortedByTop = [...rows].sort((a, b) => a.rect.top - b.rect.top);
+    const targetIndex = sortedByTop.findIndex(r => r.id === sticky.id);
+
+    if (targetIndex === -1) {
+        return rows;
+    }
+
+    // gap-before opens ABOVE the target row - it and everything below
+    // it (in the original, pre-gap order) shifts down. gap-after opens
+    // BELOW it - only rows strictly after it shift.
+    const shiftFromIndex = sticky.placement === "before" ? targetIndex : targetIndex + 1;
+    const shiftedIds = new Set(sortedByTop.slice(shiftFromIndex).map(r => r.id));
+
+    if (shiftedIds.size === 0) {
+        return rows;
+    }
+
+    return rows.map(row => (
+        shiftedIds.has(row.id) ? {...row, rect: shiftRectDown(row.rect, DROP_GAP_PX)} : row
+    ));
+}
+
 // Hit-testing against LIVE row positions creates a feedback loop: hovering
 // near a boundary opens a "gap" (a margin shift) on the rows next to it,
 // which moves those rows' rects, which can put a now-stationary pointer over
@@ -307,9 +376,11 @@ function resolvePlacement(
 // Snapshotting every row's rect once when the drag engages, and hit-testing
 // against that frozen snapshot for the rest of the gesture, breaks the loop:
 // the coordinates being tested against never move in response to their own
-// output. Distance-to-nearest-row (rather than requiring the pointer land
-// inside a row's rect) also naturally covers dragging above the first item
-// or below the last, where a direct hit would otherwise find nothing.
+// output (see applyGapCorrection above for the one exception - the
+// current target's own gap - that's corrected for analytically instead).
+// Distance-to-nearest-row (rather than requiring the pointer land inside a
+// row's rect) also naturally covers dragging above the first item or below
+// the last, where a direct hit would otherwise find nothing.
 function findDropTarget(
     y: number,
     rows: RowSnapshot[],
@@ -1167,15 +1238,17 @@ export class TodoOverlayList extends LitElement {
             return;
         }
 
-        // The previous frame's own resolved target, fed back in as
-        // resolvePlacement's hysteresis anchor (see ZONE_HYSTERESIS) - a
-        // still-jittery finger sitting right on a zone boundary shouldn't
-        // flip the target back and forth every pointermove.
+        // The previous frame's own resolved target - fed into resolvePlacement
+        // as the hysteresis anchor (see ZONE_HYSTERESIS), so a still-jittery
+        // finger sitting right on a zone boundary doesn't flip the target
+        // back and forth every pointermove, AND into applyGapCorrection,
+        // which knows from this alone exactly which row's own gap (if any)
+        // the frozen snapshot below needs correcting for.
         const sticky = this.hoverId !== undefined && this.hoverPlacement !== undefined
             ? {id: this.hoverId, placement: this.hoverPlacement}
             : undefined;
 
-        const hit = findDropTarget(e.clientY, this.rowSnapshot, sticky);
+        const hit = findDropTarget(e.clientY, applyGapCorrection(this.rowSnapshot, sticky), sticky);
         const valid = hit && hit.id !== this.draggedId;
 
         const previousHoverId = this.hoverId;
@@ -1200,30 +1273,6 @@ export class TodoOverlayList extends LitElement {
         // Safari) - navigator.vibrate simply isn't defined there.
         if (e.pointerType !== "mouse" && targetChanged) {
             navigator.vibrate?.(10);
-        }
-
-        if (targetChanged) {
-            // The gap-before/gap-after/drop-inside class this target
-            // change just applied (or removed) opens/closes a real
-            // margin on some row, reflowing everything below it - but
-            // rowSnapshot is a frozen snapshot (see findDropTarget's own
-            // comment for why), so it goes stale for the rest of the
-            // drag the moment that happens. Left uncorrected, every row
-            // below the open gap keeps testing against a rect that no
-            // longer matches where it actually sits - live-reported: the
-            // orange drop-target highlight's effective hit-zone drifted
-            // upward relative to the row it's visually drawn on, out of
-            // sync with the browser's own (always-accurate) :hover.
-            // Re-snapshotting after the CSS margin transition (150ms -
-            // matches .row's own `transition: ... margin 150ms ease`)
-            // has settled brings it back in sync - matching the same
-            // snapshot-after-reflow idiom onDragStart already uses for
-            // the initial lift.
-            setTimeout(() => {
-                if (this.draggedId !== undefined) {
-                    this.snapshotRows();
-                }
-            }, 150);
         }
 
         this.broadcastDragHover();

@@ -19,6 +19,16 @@ export const BEFORE_AFTER_ZONE = 0.3;
 export const ROW_INDENT_PX = 20;
 const rowIndentPx = unsafeCSS(`${ROW_INDENT_PX}px`);
 
+// How much space a reorder's gap-before/gap-after opens (see their own
+// CSS rule below). Exported so the card's own hit-testing can correct
+// for it analytically the instant a gap opens/closes, rather than
+// re-measuring the (transitioning) DOM after the fact - see
+// todo-overlay-list.ts's applyGapCorrection for why that matters: the
+// frozen rowSnapshot a drag hit-tests against doesn't know a gap opened
+// at all until told, and this is the one number needed to tell it.
+export const DROP_GAP_PX = 52;
+const dropGapPx = unsafeCSS(`${DROP_GAP_PX}px`);
+
 // Pointer movement beyond this many pixels, while still under the hold
 // threshold, cancels the hold-to-edit gesture - a small allowance for
 // natural hand/touch jitter rather than a strict zero-tolerance check.
@@ -220,11 +230,11 @@ export class TodoTreeItem extends LitElement {
            see .row.drop-inside above for why becoming a child looks
            different. */
         .row.gap-before {
-            margin-top: 52px;
+            margin-top: ${dropGapPx};
         }
 
         .row.gap-after {
-            margin-bottom: 52px;
+            margin-bottom: ${dropGapPx};
         }
 
         /* The actual "it'll go here" preview for a reorder (before/after
