@@ -782,6 +782,13 @@ async function clearCompleted(hass, entityId) {
   });
   return result.removed;
 }
+async function clearAll(hass, entityId) {
+  const result = await hass.connection.sendMessagePromise({
+    type: "todo_overlay/clear_all",
+    entity_id: entityId
+  });
+  return result.removed;
+}
 async function saveList(hass, entityId, name, persistStates) {
   await hass.connection.sendMessagePromise({
     type: "todo_overlay/save_list",
@@ -3023,6 +3030,82 @@ TodoTree = __decorateClass([
   t3("todo-overlay-tree")
 ], TodoTree);
 
+// src/components/todo-confirm-dialog.ts
+var TodoConfirmDialog = class extends i4 {
+  constructor() {
+    super(...arguments);
+    this.heading = "Are you sure?";
+    this.message = "";
+    this.confirmLabel = "Confirm";
+  }
+  close() {
+    this.dispatchEvent(
+      new CustomEvent("dialog-close", { bubbles: true, composed: true })
+    );
+  }
+  confirm() {
+    this.dispatchEvent(
+      new CustomEvent("dialog-confirm", { bubbles: true, composed: true })
+    );
+  }
+  render() {
+    return b2`
+            <ha-dialog open .heading=${this.heading} @closed=${this.close}>
+                <p>${this.message}</p>
+                <div class="actions" slot="footer">
+                    <button @click=${this.close}>Cancel</button>
+                    <button class="destructive" @click=${this.confirm}>${this.confirmLabel}</button>
+                </div>
+            </ha-dialog>
+        `;
+  }
+};
+TodoConfirmDialog.styles = i`
+        p {
+            font-family: Roboto, "Noto Sans", sans-serif;
+            font-size: 14px;
+            color: var(--primary-text-color);
+            margin: 0;
+        }
+
+        .actions {
+            display: flex;
+            align-items: center;
+            justify-content: flex-end;
+            width: 100%;
+            gap: 8px;
+        }
+
+        button {
+            font-family: Roboto, "Noto Sans", sans-serif;
+            font-size: 14px;
+            font-weight: 500;
+            text-transform: uppercase;
+            border: none;
+            background: none;
+            cursor: pointer;
+            padding: 8px 12px;
+            border-radius: 4px;
+            color: var(--primary-color);
+        }
+
+        button.destructive {
+            color: var(--error-color);
+        }
+    `;
+__decorateClass([
+  n4({ attribute: false })
+], TodoConfirmDialog.prototype, "heading", 2);
+__decorateClass([
+  n4({ attribute: false })
+], TodoConfirmDialog.prototype, "message", 2);
+__decorateClass([
+  n4({ attribute: false })
+], TodoConfirmDialog.prototype, "confirmLabel", 2);
+TodoConfirmDialog = __decorateClass([
+  t3("todo-overlay-confirm-dialog")
+], TodoConfirmDialog);
+
 // src/components/todo-overlay-list.ts
 var PLUS_ICON = b2`
     <svg viewBox="0 0 24 24"><path d="M19 13H13V19H11V13H5V11H11V5H13V11H19V13Z"></path></svg>
@@ -3249,6 +3332,7 @@ var TodoOverlayList = class extends i4 {
     this.quickAddValue = "";
     this.saveLoadValue = EMPTY_SAVE_LOAD_VALUE;
     this.savedNames = [];
+    this.confirmingClearAll = false;
     this.itemChangedSubscribeStarted = false;
     this.onGlobalPointerMove = (e7) => {
       if (e7.pointerType !== "mouse") {
@@ -3320,6 +3404,36 @@ var TodoOverlayList = class extends i4 {
           this.reportError("moving the item", err);
         }
       }
+    };
+    // A plain tap on the clear-completed button still does exactly what
+    // it always did (see onClearCompleted); HOLDING it (past
+    // LONG_PRESS_MS, same threshold a row's own hold-to-edit uses) and
+    // then releasing offers the much more destructive "delete literally
+    // everything" instead - gated behind both the hold itself and the
+    // confirm dialog below, since there's no undo for this one (see
+    // clear_all's own docstring - same no-undo precedent as
+    // clear_completed already has).
+    this.clearButtonPressedAt = 0;
+    this.onClearButtonPointerDown = () => {
+      this.clearButtonPressedAt = Date.now();
+    };
+    this.onClearButtonPointerUp = async () => {
+      if (this.clearButtonPressedAt === 0) {
+        return;
+      }
+      const pressDurationMs = Date.now() - this.clearButtonPressedAt;
+      this.clearButtonPressedAt = 0;
+      if (pressDurationMs >= LONG_PRESS_MS) {
+        this.confirmingClearAll = true;
+      } else {
+        await this.onClearCompleted();
+      }
+    };
+    this.onClearButtonPointerCancel = () => {
+      this.clearButtonPressedAt = 0;
+    };
+    this.closeClearAllConfirm = () => {
+      this.confirmingClearAll = false;
     };
   }
   // Native hass.states-based reloading (below) only fires for changes
@@ -3574,6 +3688,15 @@ var TodoOverlayList = class extends i4 {
       await this.load();
     } catch (err) {
       this.reportError("clearing completed items", err);
+    }
+  }
+  async onClearAllConfirmed() {
+    this.confirmingClearAll = false;
+    try {
+      await clearAll(this.hass, this.entity);
+      await this.load();
+    } catch (err) {
+      this.reportError("deleting all items", err);
     }
   }
   // --- save / load ---------------------------------------------------
@@ -3959,7 +4082,10 @@ var TodoOverlayList = class extends i4 {
                                                         <button
                                                             class="toolbar-icon"
                                                             aria-label="Clear completed"
-                                                            @click=${this.onClearCompleted}
+                                                            title="Hold to delete all items"
+                                                            @pointerdown=${this.onClearButtonPointerDown}
+                                                            @pointerup=${this.onClearButtonPointerUp}
+                                                            @pointercancel=${this.onClearButtonPointerCancel}
                                                         >
                                                             ${CLEAR_COMPLETED_ICON}
                                                         </button>
@@ -4059,6 +4185,17 @@ var TodoOverlayList = class extends i4 {
                             @dialog-confirm=${this.onSaveLoadConfirm}
                             @dialog-delete-saved=${this.onSaveLoadDeleteSaved}
                         ></todo-overlay-save-load-dialog>
+                    ` : ""}
+
+            ${this.confirmingClearAll ? b2`
+                        <todo-overlay-confirm-dialog
+                            heading="Delete all items?"
+                            message="This permanently deletes every item in this list - active and completed, parents and children. This can't be undone."
+                            confirmLabel="Delete all"
+
+                            @dialog-close=${this.closeClearAllConfirm}
+                            @dialog-confirm=${this.onClearAllConfirmed}
+                        ></todo-overlay-confirm-dialog>
                     ` : ""}
 
             ${this.renderDragGhost()}
@@ -4477,6 +4614,9 @@ __decorateClass([
 __decorateClass([
   r5()
 ], TodoOverlayList.prototype, "savedNames", 2);
+__decorateClass([
+  r5()
+], TodoOverlayList.prototype, "confirmingClearAll", 2);
 TodoOverlayList = __decorateClass([
   t3("todo-overlay-list")
 ], TodoOverlayList);

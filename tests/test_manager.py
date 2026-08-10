@@ -667,6 +667,52 @@ async def test_manager_clear_completed_leaves_incomplete_nested_completed_subtre
 
 
 @pytest.mark.asyncio
+async def test_manager_clear_all_removes_every_item_regardless_of_completion():
+
+    adapter = FakeAdapter(items=[
+        TodoItem(id="1", title="Shopping", completed=True),
+        TodoItem(id="2", title="Item", completed=True),
+        TodoItem(id="3", title="Milk", completed=False),
+        TodoItem(id="4", title="Eggs", completed=False),
+    ])
+
+    metadata_store = FakeMetadataStore({
+        "1": ItemPosition(parent_id=None, order=0),
+        "2": ItemPosition(parent_id="1", order=0),
+        "3": ItemPosition(parent_id=None, order=1),
+        "4": ItemPosition(parent_id="3", order=0),
+    })
+
+    manager = TodoManager(adapter=adapter, metadata_store=metadata_store)
+
+    removed = await manager.clear_all(entity_id="todo.shopping")
+
+    # Unlike clear_completed, completion status is irrelevant here -
+    # "Milk" and its child "Eggs" are still incomplete and are removed
+    # right along with the completed "Shopping"/"Item" pair.
+    assert set(removed) == {"1", "2", "3", "4"}
+    assert adapter._items == []
+    assert metadata_store._positions == {}
+
+
+@pytest.mark.asyncio
+async def test_manager_clear_all_fires_a_removed_event_per_item():
+    hass = _FakeEventHass()
+    adapter = FakeAdapter(items=[
+        TodoItem(id="1", title="Shopping", completed=False),
+        TodoItem(id="2", title="Milk", completed=True),
+    ])
+    manager = TodoManager(adapter=adapter, metadata_store=FakeMetadataStore(), hass=hass)
+
+    await manager.clear_all(entity_id="todo.shopping")
+
+    assert {(event, data["item_id"], data["action"]) for event, data in hass.calls} == {
+        (EVENT_ITEM_CHANGED, "1", "removed"),
+        (EVENT_ITEM_CHANGED, "2", "removed"),
+    }
+
+
+@pytest.mark.asyncio
 async def test_manager_restore_completed_writes_back_exact_values():
 
     adapter = FakeAdapter(items=[

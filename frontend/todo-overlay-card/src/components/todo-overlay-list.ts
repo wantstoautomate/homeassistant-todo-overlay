@@ -5,6 +5,7 @@ import {styleMap} from "lit/directives/style-map.js";
 
 import {
     type CompletionChange,
+    clearAll,
     clearCompleted,
     createItem,
     deleteItem,
@@ -45,6 +46,7 @@ import {BEFORE_AFTER_ZONE, DROP_GAP_PX} from "./todo-tree-item";
 import "./todo-tree";
 import "./todo-item-dialog";
 import "./todo-save-load-dialog";
+import "./todo-confirm-dialog";
 
 // Hand-rolled inline SVGs, matching the same pattern already used for
 // the row-level clock/chevron icons (todo-tree-item.ts) - avoids any
@@ -994,6 +996,9 @@ export class TodoOverlayList extends LitElement {
     @state()
     private savedNames: string[] = [];
 
+    @state()
+    private confirmingClearAll = false;
+
     private undoTimer?: number;
     private errorTimer?: number;
     private lastEntityUpdate?: string;
@@ -1504,6 +1509,54 @@ export class TodoOverlayList extends LitElement {
             await this.load();
         } catch (err) {
             this.reportError("clearing completed items", err);
+        }
+    }
+
+    // A plain tap on the clear-completed button still does exactly what
+    // it always did (see onClearCompleted); HOLDING it (past
+    // LONG_PRESS_MS, same threshold a row's own hold-to-edit uses) and
+    // then releasing offers the much more destructive "delete literally
+    // everything" instead - gated behind both the hold itself and the
+    // confirm dialog below, since there's no undo for this one (see
+    // clear_all's own docstring - same no-undo precedent as
+    // clear_completed already has).
+    private clearButtonPressedAt = 0;
+
+    private onClearButtonPointerDown = () => {
+        this.clearButtonPressedAt = Date.now();
+    };
+
+    private onClearButtonPointerUp = async () => {
+        if (this.clearButtonPressedAt === 0) {
+            return;
+        }
+
+        const pressDurationMs = Date.now() - this.clearButtonPressedAt;
+        this.clearButtonPressedAt = 0;
+
+        if (pressDurationMs >= LONG_PRESS_MS) {
+            this.confirmingClearAll = true;
+        } else {
+            await this.onClearCompleted();
+        }
+    };
+
+    private onClearButtonPointerCancel = () => {
+        this.clearButtonPressedAt = 0;
+    };
+
+    private closeClearAllConfirm = () => {
+        this.confirmingClearAll = false;
+    };
+
+    private async onClearAllConfirmed() {
+        this.confirmingClearAll = false;
+
+        try {
+            await clearAll(this.hass, this.entity);
+            await this.load();
+        } catch (err) {
+            this.reportError("deleting all items", err);
         }
     }
 
@@ -2018,7 +2071,10 @@ export class TodoOverlayList extends LitElement {
                                                         <button
                                                             class="toolbar-icon"
                                                             aria-label="Clear completed"
-                                                            @click=${this.onClearCompleted}
+                                                            title="Hold to delete all items"
+                                                            @pointerdown=${this.onClearButtonPointerDown}
+                                                            @pointerup=${this.onClearButtonPointerUp}
+                                                            @pointercancel=${this.onClearButtonPointerCancel}
                                                         >
                                                             ${CLEAR_COMPLETED_ICON}
                                                         </button>
@@ -2160,6 +2216,21 @@ export class TodoOverlayList extends LitElement {
                             @dialog-confirm=${this.onSaveLoadConfirm}
                             @dialog-delete-saved=${this.onSaveLoadDeleteSaved}
                         ></todo-overlay-save-load-dialog>
+                    `
+                    : ""
+            }
+
+            ${
+                this.confirmingClearAll
+                    ? html`
+                        <todo-overlay-confirm-dialog
+                            heading="Delete all items?"
+                            message="This permanently deletes every item in this list - active and completed, parents and children. This can't be undone."
+                            confirmLabel="Delete all"
+
+                            @dialog-close=${this.closeClearAllConfirm}
+                            @dialog-confirm=${this.onClearAllConfirmed}
+                        ></todo-overlay-confirm-dialog>
                     `
                     : ""
             }

@@ -239,6 +239,21 @@ async def test_websocket_clear_completed_returns_removed_ids():
     assert result["removed"] == ["1"]
 
 
+@pytest.mark.asyncio
+async def test_websocket_clear_all_removes_every_item_regardless_of_completion():
+    manager = make_manager(items=[
+        TodoItem(id="1", title="Shopping", completed=True),
+        TodoItem(id="2", title="Milk", completed=False),
+    ])
+
+    connection = await call_handler(
+        websocket.websocket_clear_all, manager, {"entity_id": ENTITY_ID},
+    )
+
+    msg_id, result = connection.results[0]
+    assert set(result["removed"]) == {"1", "2"}
+
+
 # --- save_list / load_list / list_saved / delete_saved_list --------------
 
 @pytest.mark.asyncio
@@ -498,6 +513,7 @@ def test_async_register_websocket_registers_every_handler():
         "todo_overlay/set_completed",
         "todo_overlay/restore_completed",
         "todo_overlay/clear_completed",
+        "todo_overlay/clear_all",
         "todo_overlay/save_list",
         "todo_overlay/load_list",
         "todo_overlay/list_saved",

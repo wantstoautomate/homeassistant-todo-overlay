@@ -232,6 +232,20 @@ export async function clearCompleted(
 
 }
 
+export async function clearAll(
+    hass: HassLike,
+    entityId: string,
+): Promise<string[]> {
+
+    const result = await hass.connection.sendMessagePromise<{removed: string[]}>({
+        type: "todo_overlay/clear_all",
+        entity_id: entityId,
+    });
+
+    return result.removed;
+
+}
+
 export async function saveList(
     hass: HassLike,
     entityId: string,

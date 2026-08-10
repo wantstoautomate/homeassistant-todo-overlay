@@ -1603,6 +1603,116 @@ describe("todo-overlay-list save-load dialog", () => {
     });
 });
 
+// A plain tap on the clear-completed (trash) toolbar button keeps doing
+// exactly what it always did; holding it past the long-press threshold
+// and releasing offers the much more destructive "delete literally
+// everything" instead, gated behind a confirm dialog.
+describe("todo-overlay-list clear-all (hold the clear-completed button)", () => {
+    function clearButton(el: TodoOverlayList): HTMLElement {
+        return el.shadowRoot?.querySelector("button[aria-label='Clear completed']") as HTMLElement;
+    }
+
+    it("a quick tap still just clears completed items, with no confirm dialog", async () => {
+        const {el, hass} = await renderList({
+            entity_id: ENTITY_ID,
+            items: [makeItem({id: "1", title: "Milk", completed: true})],
+        });
+
+        const button = clearButton(el);
+        button.dispatchEvent(new PointerEvent("pointerdown"));
+        button.dispatchEvent(new PointerEvent("pointerup"));
+        await flushAsync();
+
+        expect(hass.connection.sent).toContainEqual(expect.objectContaining({
+            type: "todo_overlay/clear_completed",
+            entity_id: ENTITY_ID,
+        }));
+        expect(hass.connection.sent).not.toContainEqual(expect.objectContaining({type: "todo_overlay/clear_all"}));
+        expect(el.shadowRoot?.querySelector("todo-overlay-confirm-dialog")).toBeNull();
+    });
+
+    it("holding past the long-press threshold, then releasing, opens the confirm dialog instead of clearing anything", async () => {
+        vi.useFakeTimers({shouldAdvanceTime: true});
+
+        try {
+            const {el, hass} = await renderList({
+                entity_id: ENTITY_ID,
+                items: [makeItem({id: "1", title: "Milk"})],
+            });
+
+            const button = clearButton(el);
+            button.dispatchEvent(new PointerEvent("pointerdown"));
+            vi.advanceTimersByTime(600);
+            button.dispatchEvent(new PointerEvent("pointerup"));
+            await el.updateComplete;
+
+            expect(el.shadowRoot?.querySelector("todo-overlay-confirm-dialog"), "confirm dialog should be open").not.toBeNull();
+            expect(hass.connection.sent).not.toContainEqual(expect.objectContaining({type: "todo_overlay/clear_completed"}));
+            expect(hass.connection.sent).not.toContainEqual(expect.objectContaining({type: "todo_overlay/clear_all"}));
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+
+    it("confirming the dialog deletes every item, completed or not, and reloads", async () => {
+        vi.useFakeTimers({shouldAdvanceTime: true});
+
+        try {
+            const {el, hass} = await renderList({
+                entity_id: ENTITY_ID,
+                items: [
+                    makeItem({id: "1", title: "Milk", completed: false}),
+                    makeItem({id: "2", title: "Bread", completed: true}),
+                ],
+            });
+
+            const button = clearButton(el);
+            button.dispatchEvent(new PointerEvent("pointerdown"));
+            vi.advanceTimersByTime(600);
+            button.dispatchEvent(new PointerEvent("pointerup"));
+            await el.updateComplete;
+
+            const dialog = el.shadowRoot?.querySelector("todo-overlay-confirm-dialog")!;
+            dialog.dispatchEvent(new CustomEvent("dialog-confirm", {bubbles: true, composed: true}));
+            await vi.advanceTimersByTimeAsync(0);
+
+            expect(hass.connection.sent).toContainEqual(expect.objectContaining({
+                type: "todo_overlay/clear_all",
+                entity_id: ENTITY_ID,
+            }));
+            expect(el.shadowRoot?.querySelector("todo-overlay-confirm-dialog")).toBeNull();
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+
+    it("cancelling the dialog deletes nothing", async () => {
+        vi.useFakeTimers({shouldAdvanceTime: true});
+
+        try {
+            const {el, hass} = await renderList({
+                entity_id: ENTITY_ID,
+                items: [makeItem({id: "1", title: "Milk"})],
+            });
+
+            const button = clearButton(el);
+            button.dispatchEvent(new PointerEvent("pointerdown"));
+            vi.advanceTimersByTime(600);
+            button.dispatchEvent(new PointerEvent("pointerup"));
+            await el.updateComplete;
+
+            const dialog = el.shadowRoot?.querySelector("todo-overlay-confirm-dialog")!;
+            dialog.dispatchEvent(new CustomEvent("dialog-close", {bubbles: true, composed: true}));
+            await el.updateComplete;
+
+            expect(hass.connection.sent).not.toContainEqual(expect.objectContaining({type: "todo_overlay/clear_all"}));
+            expect(el.shadowRoot?.querySelector("todo-overlay-confirm-dialog")).toBeNull();
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+});
+
 describe("todo-overlay-list row delete button", () => {
     it("a tree-delete-item event from a row removes that item and reloads", async () => {
         const {el, hass} = await renderList({
