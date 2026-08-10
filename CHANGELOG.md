@@ -3,6 +3,41 @@
 All notable changes to this project are documented here. Versions follow the
 integration's `manifest.json`/card's `package.json` (kept in lockstep).
 
+## 1.0.4
+
+Reported as: "there's an orange kind of highlight when you are about
+to drag something to a parent... sometimes items can be dragged over
+this and the box won't necessarily show but the item is created as a
+child anyway... it's very likely correct that this occurs but the
+hitbox is inconsistent."
+
+- **Fixed: dragging an item onto a COLLAPSED parent's row could nest it
+  there with zero visual feedback anywhere on screen.** `resolvePlacement`
+  decided whether hovering a row's body meant "become its first child"
+  using that row's raw *data* children (`item.children`), not what's
+  actually rendered. A collapsed parent's `<ul>` of child rows is
+  removed from the DOM entirely (see `todo-tree-item.ts`'s `render()`),
+  but the hit-test snapshot still saw `children.length > 0` from the
+  data - so hovering the parent's own row silently retargeted to
+  "before its first child," a row that doesn't exist anywhere in the
+  DOM right now. No rendered row could ever match that as the drop
+  target, so no highlight ever appeared - yet the drop still went
+  through and the item became a child of the collapsed parent. This
+  was 100% reproducible whenever the target happened to be a collapsed
+  parent, not a rare timing race - it just read as intermittent because
+  it only showed up on that specific kind of row.
+  Fixed by having the hit-test snapshot track only *visible* children
+  per row (whether its `<ul>` is actually in the DOM), so a collapsed
+  parent's body now goes through the same logic as a genuine leaf row:
+  a real, visible "become a child" highlight on the parent's own row,
+  never a phantom target on something off-screen. This directly
+  restores the invariant asked for: no box, no child; box, then child.
+- Broader reorder-intuitiveness ideas (horizontal drag-to-nest, always-
+  visible nesting guides, hysteresis around zone boundaries, haptic
+  feedback on mobile) were considered but deliberately not bundled into
+  this release - noted separately for a follow-up discussion rather
+  than rushed into the same fix as a confirmed, well-understood bug.
+
 ## 1.0.3
 
 Same underlying bug class as 1.0.2's edit-dialog fix, found in a second

@@ -158,10 +158,29 @@ function collectAllRows(root: ParentNode, currentEntity?: string): RowSnapshot[]
             const rowEl = itemEl.shadowRoot?.querySelector(".row");
 
             if (rowEl) {
+                // Deliberately NOT itemEl.item.children unconditionally -
+                // that's the raw DATA, populated regardless of whether
+                // this item is currently collapsed. A collapsed parent's
+                // <ul> of child rows is removed from the DOM entirely
+                // (see todo-tree-item.ts's own render()), so resolvePlacement
+                // treating it as "has children" would silently retarget
+                // hovering the parent's own body to "before its first
+                // child" - a row that doesn't exist anywhere in the DOM
+                // right now, so isDropTarget can never match it and no
+                // highlight ever appears, yet the drop still went ahead
+                // and the item became a child of that collapsed parent.
+                // Live-reported: "the box won't necessarily show but the
+                // item is created as a child anyway." Falling back to []
+                // here routes a collapsed parent's body through the exact
+                // same childless-row logic as a genuine leaf - a real,
+                // visible "become a child" zone on the parent's own row,
+                // never a phantom target on an invisible descendant.
+                const hasVisibleChildren = itemEl.shadowRoot?.querySelector("ul") != null;
+
                 rows.push({
                     id: itemEl.item.id,
                     entityId: currentEntity,
-                    children: itemEl.item.children,
+                    children: hasVisibleChildren ? itemEl.item.children : [],
                     rect: rowEl.getBoundingClientRect(),
                 });
             }
@@ -192,14 +211,21 @@ function collectAllRows(root: ParentNode, currentEntity?: string): RowSnapshot[]
     return rows;
 }
 
+// rowChildren reflects VISIBLE children only (see collectAllRows - a
+// collapsed row's children are passed as [] even though the data has
+// them), which is what makes the two branches below sound: "no
+// children" here means "nothing else currently rendered under this
+// row for a drop to visually land among", not "no children at all".
+//
 // "inside" always appends as the LAST child of the anchor (see manager.py's
 // move_item), and "after" always inserts as the anchor's next sibling at the
 // anchor's OWN level (never as a child of it), regardless of whether that
-// anchor has children of its own. For a row with no children, that's fine -
-// the middle "inside" zone naturally means "become its (only) child", and
-// the bottom "after" zone naturally means "become the next sibling".
+// anchor has children of its own. For a row with no (visible) children,
+// that's fine - the middle "inside" zone naturally means "become its
+// (only visible) child", and the bottom "after" zone naturally means
+// "become the next sibling".
 //
-// For a row that already HAS children, both of those go wrong the same way:
+// For a row that already has VISIBLE children, both of those go wrong the same way:
 // "inside" appends past every existing child, and "after" jumps below the
 // parent's entire subtree - either can render the drop far from wherever
 // the pointer actually was, since both existing children sit visually

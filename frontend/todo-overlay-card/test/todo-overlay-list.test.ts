@@ -551,6 +551,66 @@ describe("todo-overlay-list hover dead zone right after drag engages", () => {
     });
 });
 
+// Live-reported bug: "there's an orange highlight when about to drag
+// something to a parent... sometimes items can be dragged over this
+// and the box won't necessarily show but the item is created as a
+// child anyway." Root cause: resolvePlacement decided whether hovering
+// a row's body meant "become its first child" using the row's raw DATA
+// children (item.children), not what's actually rendered - so hovering
+// a COLLAPSED parent's own row (its <ul> of child rows removed from the
+// DOM entirely - see todo-tree-item.ts's render()) silently retargeted
+// to "before its (invisible) first child", a row nothing on screen ever
+// matches, so no highlight could ever appear - yet the drop still went
+// through and the item became a child of that collapsed parent.
+describe("todo-overlay-list dragging onto a collapsed parent", () => {
+    it("targets the collapsed parent itself (a real, visible 'inside' zone), not its invisible first child", async () => {
+        const {el, hass} = await renderList({
+            entity_id: ENTITY_ID,
+            items: [
+                makeItem({id: "1", title: "Parent", children: [makeItem({id: "1a", title: "Child"})]}),
+                makeItem({id: "2", title: "Other"}),
+            ],
+        });
+
+        (el as unknown as {collapsedIds: Set<string>}).collapsedIds = new Set(["1"]);
+        await settle(el);
+
+        // Only two rows are actually rendered - the collapsed parent and
+        // the sibling - "1a" has no row in the DOM at all right now.
+        const rows = deepQueryAll(el.shadowRoot!, "todo-overlay-tree-item") as (Element & {shadowRoot: ShadowRoot})[];
+        expect(rows).toHaveLength(2);
+        mockRect(rows[0].shadowRoot.querySelector(".row")!, {top: 0, bottom: 40, height: 40});
+        mockRect(rows[1].shadowRoot.querySelector(".row")!, {top: 40, bottom: 80, height: 40});
+
+        const draggable = el as unknown as DraggableList & {hoverId?: string; hoverPlacement?: string};
+
+        draggable.draggedId = "2";
+        draggable.onDragStart(new CustomEvent("tree-drag-start", {
+            detail: {rect: undefined, pointerX: 40, pointerY: 60, grabOffsetX: 0, grabOffsetY: 0},
+        }));
+
+        // Squarely in the middle 40% of the collapsed parent's own row.
+        draggable.onGlobalPointerMove(new PointerEvent("pointermove", {clientX: 20, clientY: 20}));
+
+        expect(draggable.hoverId).toBe("1");
+        expect(draggable.hoverPlacement).toBe("inside");
+        await settle(el);
+
+        // The visible highlight (drop-inside) lands on the parent's own
+        // row - the one actually under the pointer.
+        expect(rows[0].shadowRoot.querySelector(".row")?.classList.contains("drop-inside")).toBe(true);
+
+        await draggable.onGlobalPointerUp();
+
+        expect(hass.connection.sent).toContainEqual(expect.objectContaining({
+            type: "todo_overlay/move_item",
+            child_id: "2",
+            reference_id: "1",
+            placement: "inside",
+        }));
+    });
+});
+
 describe("todo-overlay-list cross-entity drag", () => {
     it("calls transferItem (not moveItem) when dropped on a row belonging to a different entity", async () => {
         const hassA = makeFakeHass({
