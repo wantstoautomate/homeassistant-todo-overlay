@@ -1155,7 +1155,26 @@ export class TodoOverlayList extends LitElement {
             }
         }
 
-        this.rowSnapshot = collectAllRows(document).filter(row => row.id === undefined || !excluded.has(row.id));
+        // Excludes the dragged item (and its own descendants) as a
+        // standalone ROW below, but a row's own `children` field (used
+        // by resolvePlacement to decide before-vs-inside) is read
+        // straight from the item tree's data and needs the same
+        // scrubbing - otherwise a parent whose dragged item happens to
+        // be its own first VISIBLE child keeps "offering" that item as
+        // resolvePlacement's before-target, which then gets invalidated
+        // right back out (see onGlobalPointerMove's own hit.id !==
+        // draggedId check) with no fallback at all. Live-reported: no
+        // orange box at all when hovering that parent, and glitchy
+        // flicker right around where the dragged row used to sit, since
+        // that's exactly the boundary between "still offering the
+        // now-invalid target" and whatever comes next.
+        this.rowSnapshot = collectAllRows(document)
+            .filter(row => row.id === undefined || !excluded.has(row.id))
+            .map(row => (
+                excluded.size > 0 && row.children.some(child => excluded.has(child.id))
+                    ? {...row, children: row.children.filter(child => !excluded.has(child.id))}
+                    : row
+            ));
     }
 
     private onDragStart(e: CustomEvent) {

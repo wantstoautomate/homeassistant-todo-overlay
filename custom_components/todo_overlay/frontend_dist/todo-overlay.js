@@ -3432,7 +3432,7 @@ var TodoOverlayList = class extends i4 {
         collectDescendantIds(dragged, excluded);
       }
     }
-    this.rowSnapshot = collectAllRows(document).filter((row) => row.id === void 0 || !excluded.has(row.id));
+    this.rowSnapshot = collectAllRows(document).filter((row) => row.id === void 0 || !excluded.has(row.id)).map((row) => excluded.size > 0 && row.children.some((child) => excluded.has(child.id)) ? { ...row, children: row.children.filter((child) => !excluded.has(child.id)) } : row);
   }
   onDragStart(e7) {
     const { rect, pointerX, pointerY, grabOffsetX, grabOffsetY } = e7.detail;

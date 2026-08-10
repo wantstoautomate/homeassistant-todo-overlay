@@ -614,6 +614,86 @@ describe("todo-overlay-list dragging onto a collapsed parent", () => {
     });
 });
 
+// Live-reported: dragging a child that's directly below its own parent
+// - i.e. the parent's own first VISIBLE child - up toward roughly its
+// original position glitched a lot, and hovering the parent's own row
+// showed no orange box at all (harmless in itself, since dropping a
+// child back onto its own parent is a no-op, but the glitchiness
+// between there and the position just below it was not). Root cause:
+// snapshotRows() excludes the dragged item as a standalone ROW, but
+// never scrubbed it from other rows' own `children` field - so a
+// parent whose dragged item is its first visible child kept "offering"
+// that item as resolvePlacement's before-target, which then gets
+// invalidated right back out (hit.id === draggedId), leaving no
+// fallback target at all right in that ambiguous zone.
+describe("todo-overlay-list dragging a child that's its own parent's first visible sibling", () => {
+    it("still resolves a valid 'inside' target on the parent when the dragged child was its only one", async () => {
+        const {el, hass} = await renderList({
+            entity_id: ENTITY_ID,
+            items: [
+                makeItem({id: "parent", title: "Parent", children: [makeItem({id: "child", title: "Child"})]}),
+            ],
+        });
+
+        const rows = deepQueryAll(el.shadowRoot!, "todo-overlay-tree-item") as (Element & {shadowRoot: ShadowRoot})[];
+        mockRect(rows[0].shadowRoot.querySelector(".row")!, {top: 0, bottom: 40, height: 40});
+
+        const draggable = el as unknown as DraggableList & {hoverId?: string; hoverPlacement?: string};
+
+        draggable.draggedId = "child";
+        draggable.onDragStart(new CustomEvent("tree-drag-start", {
+            detail: {rect: undefined, pointerX: 20, pointerY: 100, grabOffsetX: 0, grabOffsetY: 0},
+        }));
+
+        // Middle of the parent's row - with "child" correctly scrubbed
+        // from the parent's own children list, this resolves the same
+        // way it would for any genuinely childless row: "inside parent".
+        draggable.onGlobalPointerMove(new PointerEvent("pointermove", {clientX: 20, clientY: 20}));
+
+        expect(draggable.hoverId).toBe("parent");
+        expect(draggable.hoverPlacement).toBe("inside");
+
+        await draggable.onGlobalPointerUp();
+
+        expect(hass.connection.sent).toContainEqual(expect.objectContaining({
+            type: "todo_overlay/move_item",
+            child_id: "child",
+            reference_id: "parent",
+            placement: "inside",
+        }));
+    });
+
+    it("targets the next real sibling, not the dragged child, when the parent has more than one", async () => {
+        const {el, hass} = await renderList({
+            entity_id: ENTITY_ID,
+            items: [
+                makeItem({
+                    id: "parent", title: "Parent",
+                    children: [makeItem({id: "dragged-child", title: "First"}), makeItem({id: "other-child", title: "Second"})],
+                }),
+            ],
+        });
+
+        const rows = deepQueryAll(el.shadowRoot!, "todo-overlay-tree-item") as (Element & {shadowRoot: ShadowRoot})[];
+        mockRect(rows[0].shadowRoot.querySelector(".row")!, {top: 0, bottom: 40, height: 40});
+
+        const draggable = el as unknown as DraggableList & {hoverId?: string; hoverPlacement?: string};
+
+        draggable.draggedId = "dragged-child";
+        draggable.onDragStart(new CustomEvent("tree-drag-start", {
+            detail: {rect: undefined, pointerX: 20, pointerY: 100, grabOffsetX: 0, grabOffsetY: 0},
+        }));
+
+        // Bottom 70% of the parent's row - with "dragged-child" scrubbed
+        // from the parent's children list, "other-child" is correctly
+        // offered as the real first (surviving) child instead.
+        draggable.onGlobalPointerMove(new PointerEvent("pointermove", {clientX: 20, clientY: 30}));
+
+        expect(draggable.hoverId).toBe("other-child");
+        expect(draggable.hoverPlacement).toBe("before");
+    });
+});
+
 // Reported: horizontal drag-to-nest (an earlier iteration on the
 // reorder-intuitiveness feedback) was cumbersome in practice - removed.
 // Becoming a child is back to "drag the item onto the parent's own
