@@ -1,5 +1,5 @@
 import {LitElement, html, css} from "lit";
-import {customElement, property} from "lit/decorators.js";
+import {customElement, property, state} from "lit/decorators.js";
 
 import type {LoadMode} from "../models";
 
@@ -122,11 +122,55 @@ export class TodoSaveLoadDialog extends LitElement {
     @property({attribute: false})
     action: "save" | "load" = "save";
 
-    @property({attribute: false})
-    value: SaveLoadFormValue = EMPTY_SAVE_LOAD_VALUE;
+    // What the parent last handed in - read ONLY by willUpdate() to seed
+    // draftValue exactly once. Never read anywhere else. See draftValue's
+    // own comment, and todo-item-dialog.ts's identical pattern (this
+    // dialog had the exact same bug: typing a save name on mobile could
+    // get silently wiped mid-type by an unrelated parent re-render).
+    private _seedValue: SaveLoadFormValue = EMPTY_SAVE_LOAD_VALUE;
+
+    // The dialog's own live working copy - seeded exactly once from
+    // whatever `value` was set to (see willUpdate()) and never resynced
+    // from it afterwards. Every input in this dialog reads from and
+    // writes to this, not the incoming `value` assignment directly.
+    //
+    // Without this, the parent (todo-overlay-list.ts) re-renders for all
+    // sorts of reasons that have nothing to do with this dialog (a
+    // live-sync reload, a hass state poll tick, an error banner timing
+    // out) - and since lit-html always recommits a non-primitive
+    // property value regardless of whether its reference actually
+    // changed (only primitives are dirty-checked - see
+    // PropertyPart._$setValue), every one of those re-renders reasserted
+    // `value` right back to whatever the parent was holding, wiping out
+    // a save name typed but not yet confirmed. Live-reported: "typing a
+    // name to save the list in the mobile browser wipes it
+    // occasionally" - mobile's slower/janated render cycle just made an
+    // existing race far easier to hit than on desktop.
+    @state()
+    private draftValue: SaveLoadFormValue = EMPTY_SAVE_LOAD_VALUE;
+
+    @property({attribute: false, hasChanged: () => true})
+    set value(newValue: SaveLoadFormValue) {
+        this._seedValue = newValue;
+    }
+
+    get value(): SaveLoadFormValue {
+        return this.draftValue;
+    }
 
     @property({attribute: false})
     savedNames: string[] = [];
+
+    private valueInitialized = false;
+
+    protected willUpdate(changed: Map<string, unknown>): void {
+        if (!changed.has("value") || this.valueInitialized) {
+            return;
+        }
+
+        this.valueInitialized = true;
+        this.draftValue = this._seedValue;
+    }
 
     private close() {
         this.dispatchEvent(
@@ -155,15 +199,15 @@ export class TodoSaveLoadDialog extends LitElement {
     }
 
     private updateName(name: string) {
-        this.value = {...this.value, name};
+        this.draftValue = {...this.draftValue, name};
     }
 
     private updatePersistStates(persistStates: boolean) {
-        this.value = {...this.value, persistStates};
+        this.draftValue = {...this.draftValue, persistStates};
     }
 
     private updateMode(mode: LoadMode) {
-        this.value = {...this.value, mode};
+        this.draftValue = {...this.draftValue, mode};
     }
 
     render() {
@@ -181,7 +225,7 @@ export class TodoSaveLoadDialog extends LitElement {
                                     type="text"
                                     list="save-load-existing-names"
                                     placeholder="e.g. weekly_groceries"
-                                    .value=${this.value.name}
+                                    .value=${this.draftValue.name}
                                     @input=${(e: InputEvent) =>
                                         this.updateName((e.target as HTMLInputElement).value)}
                                 />
@@ -194,7 +238,7 @@ export class TodoSaveLoadDialog extends LitElement {
                                 <input
                                     id="save-load-persist"
                                     type="checkbox"
-                                    .checked=${this.value.persistStates}
+                                    .checked=${this.draftValue.persistStates}
                                     @change=${(e: Event) =>
                                         this.updatePersistStates((e.target as HTMLInputElement).checked)}
                                 />
@@ -206,16 +250,16 @@ export class TodoSaveLoadDialog extends LitElement {
                                 <label for="save-load-select">Saved list</label>
                                 <select
                                     id="save-load-select"
-                                    .value=${this.value.name}
+                                    .value=${this.draftValue.name}
                                     @change=${(e: Event) =>
                                         this.updateName((e.target as HTMLSelectElement).value)}
                                 >
-                                    <option value="" disabled ?selected=${!this.value.name}>
+                                    <option value="" disabled ?selected=${!this.draftValue.name}>
                                         Choose a saved list…
                                     </option>
                                     ${this.savedNames.map(
                                         name => html`
-                                            <option value=${name} ?selected=${this.value.name === name}>
+                                            <option value=${name} ?selected=${this.draftValue.name === name}>
                                                 ${name}
                                             </option>
                                         `,
@@ -224,11 +268,11 @@ export class TodoSaveLoadDialog extends LitElement {
                             </div>
 
                             ${
-                                this.value.name
+                                this.draftValue.name
                                     ? html`
                                         <div class="delete-row">
                                             <button @click=${this.requestDeleteSaved}>
-                                                Delete "${this.value.name}"
+                                                Delete "${this.draftValue.name}"
                                             </button>
                                         </div>
                                     `
@@ -239,13 +283,13 @@ export class TodoSaveLoadDialog extends LitElement {
                                 <label for="save-load-mode">Mode</label>
                                 <select
                                     id="save-load-mode"
-                                    .value=${this.value.mode}
+                                    .value=${this.draftValue.mode}
                                     @change=${(e: Event) =>
                                         this.updateMode((e.target as HTMLSelectElement).value as LoadMode)}
                                 >
                                     ${(Object.keys(MODE_LABELS) as LoadMode[]).map(
                                         mode => html`
-                                            <option value=${mode} ?selected=${this.value.mode === mode}>
+                                            <option value=${mode} ?selected=${this.draftValue.mode === mode}>
                                                 ${MODE_LABELS[mode]}
                                             </option>
                                         `,
@@ -257,7 +301,7 @@ export class TodoSaveLoadDialog extends LitElement {
 
                 <div class="actions" slot="footer">
                     <button @click=${this.close}>Cancel</button>
-                    <button @click=${this.confirm} ?disabled=${!this.value.name}>
+                    <button @click=${this.confirm} ?disabled=${!this.draftValue.name}>
                         ${isSave ? "Save" : "Load"}
                     </button>
                 </div>

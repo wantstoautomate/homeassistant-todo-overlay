@@ -1750,8 +1750,28 @@ var TodoSaveLoadDialog = class extends i4 {
   constructor() {
     super(...arguments);
     this.action = "save";
-    this.value = EMPTY_SAVE_LOAD_VALUE;
+    // What the parent last handed in - read ONLY by willUpdate() to seed
+    // draftValue exactly once. Never read anywhere else. See draftValue's
+    // own comment, and todo-item-dialog.ts's identical pattern (this
+    // dialog had the exact same bug: typing a save name on mobile could
+    // get silently wiped mid-type by an unrelated parent re-render).
+    this._seedValue = EMPTY_SAVE_LOAD_VALUE;
+    this.draftValue = EMPTY_SAVE_LOAD_VALUE;
     this.savedNames = [];
+    this.valueInitialized = false;
+  }
+  set value(newValue) {
+    this._seedValue = newValue;
+  }
+  get value() {
+    return this.draftValue;
+  }
+  willUpdate(changed) {
+    if (!changed.has("value") || this.valueInitialized) {
+      return;
+    }
+    this.valueInitialized = true;
+    this.draftValue = this._seedValue;
   }
   close() {
     this.dispatchEvent(
@@ -1777,13 +1797,13 @@ var TodoSaveLoadDialog = class extends i4 {
     );
   }
   updateName(name) {
-    this.value = { ...this.value, name };
+    this.draftValue = { ...this.draftValue, name };
   }
   updatePersistStates(persistStates) {
-    this.value = { ...this.value, persistStates };
+    this.draftValue = { ...this.draftValue, persistStates };
   }
   updateMode(mode) {
-    this.value = { ...this.value, mode };
+    this.draftValue = { ...this.draftValue, mode };
   }
   render() {
     const isSave = this.action === "save";
@@ -1797,7 +1817,7 @@ var TodoSaveLoadDialog = class extends i4 {
                                     type="text"
                                     list="save-load-existing-names"
                                     placeholder="e.g. weekly_groceries"
-                                    .value=${this.value.name}
+                                    .value=${this.draftValue.name}
                                     @input=${(e7) => this.updateName(e7.target.value)}
                                 />
                                 <datalist id="save-load-existing-names">
@@ -1809,7 +1829,7 @@ var TodoSaveLoadDialog = class extends i4 {
                                 <input
                                     id="save-load-persist"
                                     type="checkbox"
-                                    .checked=${this.value.persistStates}
+                                    .checked=${this.draftValue.persistStates}
                                     @change=${(e7) => this.updatePersistStates(e7.target.checked)}
                                 />
                                 <label for="save-load-persist">Persist completion states</label>
@@ -1819,15 +1839,15 @@ var TodoSaveLoadDialog = class extends i4 {
                                 <label for="save-load-select">Saved list</label>
                                 <select
                                     id="save-load-select"
-                                    .value=${this.value.name}
+                                    .value=${this.draftValue.name}
                                     @change=${(e7) => this.updateName(e7.target.value)}
                                 >
-                                    <option value="" disabled ?selected=${!this.value.name}>
+                                    <option value="" disabled ?selected=${!this.draftValue.name}>
                                         Choose a saved list…
                                     </option>
                                     ${this.savedNames.map(
       (name) => b2`
-                                            <option value=${name} ?selected=${this.value.name === name}>
+                                            <option value=${name} ?selected=${this.draftValue.name === name}>
                                                 ${name}
                                             </option>
                                         `
@@ -1835,10 +1855,10 @@ var TodoSaveLoadDialog = class extends i4 {
                                 </select>
                             </div>
 
-                            ${this.value.name ? b2`
+                            ${this.draftValue.name ? b2`
                                         <div class="delete-row">
                                             <button @click=${this.requestDeleteSaved}>
-                                                Delete "${this.value.name}"
+                                                Delete "${this.draftValue.name}"
                                             </button>
                                         </div>
                                     ` : ""}
@@ -1847,12 +1867,12 @@ var TodoSaveLoadDialog = class extends i4 {
                                 <label for="save-load-mode">Mode</label>
                                 <select
                                     id="save-load-mode"
-                                    .value=${this.value.mode}
+                                    .value=${this.draftValue.mode}
                                     @change=${(e7) => this.updateMode(e7.target.value)}
                                 >
                                     ${Object.keys(MODE_LABELS).map(
       (mode) => b2`
-                                            <option value=${mode} ?selected=${this.value.mode === mode}>
+                                            <option value=${mode} ?selected=${this.draftValue.mode === mode}>
                                                 ${MODE_LABELS[mode]}
                                             </option>
                                         `
@@ -1863,7 +1883,7 @@ var TodoSaveLoadDialog = class extends i4 {
 
                 <div class="actions" slot="footer">
                     <button @click=${this.close}>Cancel</button>
-                    <button @click=${this.confirm} ?disabled=${!this.value.name}>
+                    <button @click=${this.confirm} ?disabled=${!this.draftValue.name}>
                         ${isSave ? "Save" : "Load"}
                     </button>
                 </div>
@@ -1969,8 +1989,11 @@ __decorateClass([
   n4({ attribute: false })
 ], TodoSaveLoadDialog.prototype, "action", 2);
 __decorateClass([
-  n4({ attribute: false })
-], TodoSaveLoadDialog.prototype, "value", 2);
+  r5()
+], TodoSaveLoadDialog.prototype, "draftValue", 2);
+__decorateClass([
+  n4({ attribute: false, hasChanged: () => true })
+], TodoSaveLoadDialog.prototype, "value", 1);
 __decorateClass([
   n4({ attribute: false })
 ], TodoSaveLoadDialog.prototype, "savedNames", 2);
