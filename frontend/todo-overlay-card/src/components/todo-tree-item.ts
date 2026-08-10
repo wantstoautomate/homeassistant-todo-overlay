@@ -181,7 +181,15 @@ export class TodoTreeItem extends LitElement {
             transition: background-color 0.15s ease, outline-color 0.15s ease, margin 150ms ease;
         }
 
-        .row:hover {
+        /* Suppressed while a drag is active (see rowClasses' drag-active) -
+           :hover tracks the literal cursor position, which is a
+           genuinely different (and, once hysteresis/gap-correction are
+           involved, not always identical) thing from the actual resolved
+           drop target the orange/gap highlighting already shows. Live-
+           reported as confusing to have both visible and drifting apart
+           at once - the drop-target highlight is the only "where is this
+           going" signal needed once a drag is underway. */
+        .row:not(.drag-active):hover {
             background: rgba(var(--rgb-primary-text-color, 0, 0, 0), 0.06);
         }
 
@@ -961,6 +969,9 @@ export class TodoTreeItem extends LitElement {
             "gap-before": isDropTarget && this.hoverPlacement === "before",
             "gap-after": isDropTarget && this.hoverPlacement === "after",
             completed: this.item.completed,
+            // Any drag from THIS list being active, not just this row's
+            // own - see .row:not(.drag-active):hover's own comment.
+            "drag-active": this.draggedId !== undefined,
         };
 
         const due = formatDue(this.item);

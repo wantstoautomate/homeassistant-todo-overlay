@@ -562,3 +562,23 @@ describe("todo-overlay-tree-item", () => {
         });
     });
 });
+
+// Live-reported: with the resolved drop target (orange highlight)
+// already showing where an item will actually land, the browser's own
+// :hover (grey) tracking the literal cursor position at the same time
+// read as confusing - especially once hysteresis/gap-correction could
+// legitimately make the two differ. Suppressed for the whole row for
+// any active drag from this list, not just the row being dragged.
+describe("todo-overlay-tree-item :hover suppressed while dragging", () => {
+    it("marks every row drag-active once any item in the list is being dragged", async () => {
+        const el = await renderItem(makeItem({id: "1"}), {draggedId: "some-other-item"});
+
+        expect(el.shadowRoot?.querySelector(".row")?.classList.contains("drag-active")).toBe(true);
+    });
+
+    it("is not drag-active when nothing is being dragged", async () => {
+        const el = await renderItem(makeItem({id: "1"}));
+
+        expect(el.shadowRoot?.querySelector(".row")?.classList.contains("drag-active")).toBe(false);
+    });
+});
