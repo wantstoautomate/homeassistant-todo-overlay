@@ -5,6 +5,7 @@ import {styleMap} from "lit/directives/style-map.js";
 
 import {
     type CompletionChange,
+    clearAll,
     clearCompleted,
     createItem,
     deleteItem,
@@ -27,6 +28,7 @@ import type {FilterMode} from "../filter";
 import {filterTree} from "../filter";
 import type {HassLike} from "../hass";
 import {
+    type DragGhostStyle,
     LONG_PRESS_MS,
     type Placement,
     type TodoItem,
@@ -45,6 +47,7 @@ import {BEFORE_AFTER_ZONE, DROP_GAP_PX} from "./todo-tree-item";
 import "./todo-tree";
 import "./todo-item-dialog";
 import "./todo-save-load-dialog";
+import "./todo-confirm-dialog";
 
 // Hand-rolled inline SVGs, matching the same pattern already used for
 // the row-level clock/chevron icons (todo-tree-item.ts) - avoids any
@@ -117,6 +120,27 @@ const ITEM_CHANGED_EVENT = "todo_overlay_item_event";
 // as an obvious, disorienting glitch rather than a mouse drag's more
 // forgiving one.
 const HOVER_DEAD_ZONE_PX = 12;
+
+// Gap between the ghost's own box and the "label" drag-ghost style's
+// floating pill (see renderDragGhost/DragGhostStyle) - anchored
+// directly beneath the ghost itself (same left edge, plus the ghost's
+// own height) rather than near the raw pointer, so it reads as clearly
+// attached to the thing being dragged instead of an independent
+// floating element with no obvious connection to it (see the label's
+// own CSS arrow, which points straight up at the ghost above it).
+const DRAG_GHOST_LABEL_GAP_PX = 8;
+
+// Only used when dragGhostSize is unset (rare - see onDragStart) as a
+// stand-in for "the ghost's own height", to place the label directly
+// under it anyway rather than not rendering at all.
+const DRAG_GHOST_FALLBACK_HEIGHT_PX = 40;
+
+// How narrow the "shrink" drag-ghost style's ghost collapses to while
+// hovering a valid reparent target (see renderDragGhost) - small enough
+// that the target row is visible around it, without changing the
+// ghost's own top-left anchor (still the pointer minus the original
+// grab offset, exactly like the ghost's normal, non-shrunk width).
+const DRAG_GHOST_SHRINK_WIDTH_PX = 44;
 
 interface TreeItemElement extends Element {
     item?: TodoItem;
@@ -590,6 +614,31 @@ export class TodoOverlayList extends LitElement {
             background: var(--primary-color);
         }
 
+        /* Same visual language as a row's own hold-to-edit ripple
+           (todo-tree-item.ts's .hold-ripple) - pops in once the press
+           has been held long enough to trigger the hold action instead
+           of a plain tap, so there's a clear "you can let go now"
+           signal rather than needing to guess how long is long enough. */
+        .toolbar-icon .hold-ripple {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            width: 32px;
+            height: 32px;
+            margin-left: -16px;
+            margin-top: -16px;
+            border-radius: 50%;
+            background: var(--primary-color);
+            opacity: 0.2;
+            pointer-events: none;
+            transform: scale(0);
+            transition: transform 180ms ease-in-out;
+        }
+
+        .toolbar-icon .hold-ripple.active {
+            transform: scale(1);
+        }
+
         .toolbar-icon.quick-add-toggle svg {
             transition: transform 150ms ease;
         }
@@ -812,6 +861,73 @@ export class TodoOverlayList extends LitElement {
             padding: 1px 7px;
             border-radius: 10px;
         }
+
+        /* "shrink" drag-ghost style only (see DragGhostStyle/
+           renderDragGhost) - width is set inline per-instance (see
+           DRAG_GHOST_SHRINK_WIDTH_PX), this just hides the content that
+           no longer fits so nothing overflows or wraps oddly inside the
+           collapsed box. */
+        .drag-ghost.shrink {
+            padding: 8px;
+            justify-content: center;
+            gap: 0;
+        }
+
+        .drag-ghost.shrink .drag-ghost-title,
+        .drag-ghost.shrink .drag-ghost-quantity,
+        .drag-ghost.shrink ha-checkbox {
+            display: none;
+        }
+
+        /* "translucent" drag-ghost style only - lets the highlighted
+           target row show through well enough to read while still
+           fully covering it, unlike shrink (smaller box) or label (an
+           entirely separate element). */
+        .drag-ghost.translucent {
+            opacity: 0.4;
+        }
+
+        /* "label" drag-ghost style only - a small satellite pill near
+           (not on top of) the pointer, naming the parent a release
+           right now would nest under. Never requires seeing the target
+           row at all, which is what makes it work identically on touch
+           (a finger blocks far more of the view than a mouse cursor
+           does) and mouse alike. */
+        /* Anchored directly under the ghost's own box (same left edge,
+           see renderDragGhost) with a small upward-pointing arrow (see
+           ::before below) so it reads as clearly attached to the thing
+           being dragged, not as an independent floating chip with no
+           obvious connection to it - the exact "dissociated" look
+           live-reported against the first version, which anchored this
+           near the raw pointer instead. */
+        .drag-ghost-label {
+            position: fixed;
+            z-index: 11;
+            pointer-events: none;
+            display: inline-block;
+            background: var(--accent-color, var(--primary-color));
+            color: #fff;
+            font-family: Roboto, "Noto Sans", sans-serif;
+            font-size: 14px;
+            font-weight: 600;
+            padding: 7px 14px;
+            border-radius: 8px;
+            max-width: 260px;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+        }
+
+        .drag-ghost-label::before {
+            content: "";
+            position: absolute;
+            top: -6px;
+            left: 16px;
+            border-left: 6px solid transparent;
+            border-right: 6px solid transparent;
+            border-bottom: 6px solid var(--accent-color, var(--primary-color));
+        }
     `;
 
     @property({attribute: false})
@@ -873,6 +989,10 @@ export class TodoOverlayList extends LitElement {
     @property({type: Boolean})
     public moveCompletedItems = false;
 
+    // See DragGhostStyle's own comment for what each option does.
+    @property()
+    public dragGhostStyle: DragGhostStyle = "label";
+
     @state()
     private list?: TodoList;
 
@@ -882,8 +1002,37 @@ export class TodoOverlayList extends LitElement {
     @state()
     private filterMode: FilterMode = "all";
 
+    // Whether add-mode is active - see this class's own "mode
+    // exclusivity" note above enterAddMode/enterDeleteMode/
+    // enterReorderMode for how this relates to deleteModeActive and
+    // reorderModeActive. Live-reported: an earlier version only ever
+    // showed a per-row "+" on items that ALREADY had children - nothing
+    // that wasn't already a parent had any way to become one. Add-mode
+    // fixes that: every row gets its own "+" (see todo-tree-item.ts's
+    // per-row plus toggle) for the duration this is true, desktop only -
+    // touch relies on the swipe-right gesture for the exact same thing
+    // instead (see todo-tree-item.ts's own swipe handling).
     @state()
-    private quickAddExpanded = false;
+    private addModeActive = false;
+
+    // Which items currently have their own inline "add a child" field
+    // open - independent of each other; any number can be open at once.
+    // Only ever cleared in bulk when add-mode itself is turned off (see
+    // enterAddMode's else-branch) - closing one specific item's own
+    // field happens via toggling it again, handled the same way opening
+    // it did (see onToggleChildQuickAdd).
+    @state()
+    private childQuickAddParentIds: Set<string> = new Set();
+
+    // Desktop-only per-row delete crosses, toggled by the clear-completed
+    // button itself when there's nothing left to clear (see
+    // onClearButtonPointerUp) - see this class's own "mode exclusivity"
+    // note for how this relates to the other two modes. Touch never
+    // shows these at all (crosses are removed entirely from mobile -
+    // see todo-tree-item.ts's own CSS) - swipe-left is the mobile
+    // equivalent instead.
+    @state()
+    private deleteModeActive = false;
 
     // Touch-only reorder mode - see TodoOverlayCardConfig's
     // show_reorder_toggle comment for why this exists as a separate
@@ -892,8 +1041,51 @@ export class TodoOverlayList extends LitElement {
     @state()
     private reorderModeActive = false;
 
+    // add-mode, delete-mode, and reorder-mode all want the same per-row
+    // trailing-icon slot (see todo-tree-item.ts's rowClasses) - only one
+    // can sensibly occupy it at a time, so turning any one of them on
+    // turns the other two off. Each enter* method is the single place
+    // that transition happens, including whatever cleanup turning a mode
+    // OFF needs (childQuickAddParentIds for add-mode; nothing extra for
+    // the other two, which have no per-row draft state of their own).
+    private enterAddMode() {
+        this.deleteModeActive = false;
+        this.reorderModeActive = false;
+        this.addModeActive = true;
+    }
+
+    private exitAddMode() {
+        this.addModeActive = false;
+
+        if (this.childQuickAddParentIds.size > 0) {
+            this.childQuickAddParentIds = new Set();
+        }
+    }
+
+    private enterDeleteMode() {
+        this.addModeActive = false;
+        this.reorderModeActive = false;
+        this.deleteModeActive = true;
+
+        if (this.childQuickAddParentIds.size > 0) {
+            this.childQuickAddParentIds = new Set();
+        }
+    }
+
     private onToggleReorderMode = () => {
-        this.reorderModeActive = !this.reorderModeActive;
+        if (this.reorderModeActive) {
+            this.reorderModeActive = false;
+            return;
+        }
+
+        this.addModeActive = false;
+        this.deleteModeActive = false;
+
+        if (this.childQuickAddParentIds.size > 0) {
+            this.childQuickAddParentIds = new Set();
+        }
+
+        this.reorderModeActive = true;
     };
 
     @state()
@@ -993,6 +1185,9 @@ export class TodoOverlayList extends LitElement {
 
     @state()
     private savedNames: string[] = [];
+
+    @state()
+    private confirmingClearAll = false;
 
     private undoTimer?: number;
     private errorTimer?: number;
@@ -1439,10 +1634,15 @@ export class TodoOverlayList extends LitElement {
     }
 
     private onToggleQuickAdd() {
-        if (this.showQuickAdd) {
-            this.quickAddExpanded = !this.quickAddExpanded;
-        } else {
+        if (!this.showQuickAdd) {
             this.openCreateDialog();
+            return;
+        }
+
+        if (this.addModeActive) {
+            this.exitAddMode();
+        } else {
+            this.enterAddMode();
         }
     }
 
@@ -1504,6 +1704,101 @@ export class TodoOverlayList extends LitElement {
             await this.load();
         } catch (err) {
             this.reportError("clearing completed items", err);
+        }
+    }
+
+    // A plain tap's behavior depends on what's actually true right now:
+    // - delete-mode already active -> exit it (the crosses it revealed
+    //   are the one thing a tap can always turn back off).
+    // - otherwise, any top-level item currently complete -> clear them,
+    //   exactly like this button always used to (see onClearCompleted).
+    // - otherwise (nothing to clear) -> there's nothing useful a plain
+    //   clear-completed tap could DO, so it enters delete-mode instead,
+    //   revealing per-row crosses (desktop only - see deleteModeActive's
+    //   own comment) so individual items can still be removed by hand.
+    private onClearButtonTap() {
+        if (this.deleteModeActive) {
+            this.deleteModeActive = false;
+            return;
+        }
+
+        if (this.list?.items.some(item => item.completed)) {
+            this.onClearCompleted();
+        } else {
+            this.enterDeleteMode();
+        }
+    }
+
+    // HOLDING the clear-completed button (past LONG_PRESS_MS, same
+    // threshold a row's own hold-to-edit uses) and then releasing offers
+    // the much more destructive "delete literally everything" instead -
+    // gated behind both the hold itself and the confirm dialog below,
+    // since there's no undo for this one (see clear_all's own docstring
+    // - same no-undo precedent as clear_completed already has).
+    //
+    // clearButtonPressedAt/clearButtonHoldTimer are deliberately plain
+    // fields, not @state - mirrors todo-tree-item.ts's own row hold
+    // gesture exactly (pointerDownAt/holdTimer there), including the
+    // same "schedule a requestUpdate() for the moment the threshold is
+    // crossed" trick, since holdReady below is a plain getter computed
+    // from Date.now() rather than something Lit can track reactively on
+    // its own.
+    private clearButtonPressedAt = 0;
+    private clearButtonHoldTimer?: number;
+
+    private get clearButtonHoldReady(): boolean {
+        return this.clearButtonPressedAt !== 0 && Date.now() - this.clearButtonPressedAt >= LONG_PRESS_MS;
+    }
+
+    private onClearButtonPointerDown = () => {
+        this.clearButtonPressedAt = Date.now();
+        // Immediate: shows the (not-yet-active) ripple right away - the
+        // row's own equivalent gets this for free since its ripple
+        // origin is @state; clearButtonPressedAt is a plain field (see
+        // its own comment), so nothing re-renders without this.
+        this.requestUpdate();
+
+        window.clearTimeout(this.clearButtonHoldTimer);
+        this.clearButtonHoldTimer = window.setTimeout(() => {
+            this.requestUpdate();
+        }, LONG_PRESS_MS);
+    };
+
+    private onClearButtonPointerUp = () => {
+        if (this.clearButtonPressedAt === 0) {
+            return;
+        }
+
+        const pressDurationMs = Date.now() - this.clearButtonPressedAt;
+        this.clearButtonPressedAt = 0;
+        window.clearTimeout(this.clearButtonHoldTimer);
+        this.requestUpdate();
+
+        if (pressDurationMs >= LONG_PRESS_MS) {
+            this.confirmingClearAll = true;
+        } else {
+            this.onClearButtonTap();
+        }
+    };
+
+    private onClearButtonPointerCancel = () => {
+        this.clearButtonPressedAt = 0;
+        window.clearTimeout(this.clearButtonHoldTimer);
+        this.requestUpdate();
+    };
+
+    private closeClearAllConfirm = () => {
+        this.confirmingClearAll = false;
+    };
+
+    private async onClearAllConfirmed() {
+        this.confirmingClearAll = false;
+
+        try {
+            await clearAll(this.hass, this.entity);
+            await this.load();
+        } catch (err) {
+            this.reportError("deleting all items", err);
         }
     }
 
@@ -1758,6 +2053,62 @@ export class TodoOverlayList extends LitElement {
         }
     }
 
+    // Toggling a specific parent's own inline "add a child" field open/
+    // closed (see todo-tree-item.ts's per-row plus icon) - independent
+    // of the root quick-add and of every other parent's own field; see
+    // childQuickAddParentIds' own comment for how the two relate.
+    private onToggleChildQuickAdd(e: CustomEvent<{id: string}>) {
+        const parentId = e.detail.id;
+        const next = new Set(this.childQuickAddParentIds);
+
+        if (next.has(parentId)) {
+            next.delete(parentId);
+        } else {
+            next.add(parentId);
+
+            // Opening it while the parent's own children are collapsed
+            // would add the new item invisibly - opening the field is a
+            // clear enough signal of intent to show where it'll land.
+            if (this.collapsedIds.has(parentId)) {
+                const nextCollapsed = new Set(this.collapsedIds);
+                nextCollapsed.delete(parentId);
+                this.collapsedIds = nextCollapsed;
+                saveCollapsedIds(this.entity, nextCollapsed);
+            }
+        }
+
+        this.childQuickAddParentIds = next;
+    }
+
+    private async onChildQuickAddSubmit(e: CustomEvent<{parentId: string; title: string}>) {
+        const title = e.detail.title.trim();
+
+        if (!title || !this.list) {
+            return;
+        }
+
+        const parent = findItem(this.list.items, e.detail.parentId);
+
+        if (!parent) {
+            return;
+        }
+
+        // Directly below the parent's own row, above its EXISTING
+        // children - "inside" alone would append PAST them instead
+        // (same reason resolvePlacement never offers plain "inside" for
+        // a row that already has visible children during drag-and-drop
+        // hit-testing - see this file's own resolvePlacement).
+        const referenceId = parent.children.length > 0 ? parent.children[0].id : e.detail.parentId;
+        const placement: Placement = parent.children.length > 0 ? "before" : "inside";
+
+        try {
+            await createItem(this.hass, this.entity, {title, referenceId, placement});
+            await this.load();
+        } catch (err) {
+            this.reportError("adding the item", err);
+        }
+    }
+
     private renderTree(list: TodoList) {
         const filtered = filterTree(list.items, this.filterMode);
         const items = sortTree(filtered, this.sortBy, this.sortOrder);
@@ -1783,6 +2134,9 @@ export class TodoOverlayList extends LitElement {
                     .confirmDelete=${this.confirmDelete}
                     .dragDisabled=${this.dragDisabled}
                     .collapsedIds=${this.collapsedIds}
+                    .childQuickAddParentIds=${this.childQuickAddParentIds}
+                    .addModeActive=${this.addModeActive}
+                    .deleteModeActive=${this.deleteModeActive}
                     .reorderModeActive=${this.reorderModeActive}
 
                     @tree-pointer-down=${this.onPointerDown}
@@ -1790,6 +2144,8 @@ export class TodoOverlayList extends LitElement {
                     @tree-pointer-up=${this.onPointerUp}
                     @tree-toggle-collapse=${this.onToggleCollapse}
                     @tree-delete-item=${this.onDeleteItem}
+                    @tree-toggle-child-quick-add=${this.onToggleChildQuickAdd}
+                    @tree-quick-add-child=${this.onChildQuickAddSubmit}
 
                 ></todo-overlay-tree>
             `;
@@ -1811,6 +2167,9 @@ export class TodoOverlayList extends LitElement {
                     .confirmDelete=${this.confirmDelete}
                     .dragDisabled=${this.dragDisabled}
                     .collapsedIds=${this.collapsedIds}
+                    .childQuickAddParentIds=${this.childQuickAddParentIds}
+                    .addModeActive=${this.addModeActive}
+                    .deleteModeActive=${this.deleteModeActive}
                     .reorderModeActive=${this.reorderModeActive}
 
                     @tree-pointer-down=${this.onPointerDown}
@@ -1818,6 +2177,8 @@ export class TodoOverlayList extends LitElement {
                     @tree-pointer-up=${this.onPointerUp}
                     @tree-toggle-collapse=${this.onToggleCollapse}
                     @tree-delete-item=${this.onDeleteItem}
+                    @tree-toggle-child-quick-add=${this.onToggleChildQuickAdd}
+                    @tree-quick-add-child=${this.onChildQuickAddSubmit}
 
                 ></todo-overlay-tree>
             `;
@@ -1841,6 +2202,9 @@ export class TodoOverlayList extends LitElement {
                             .confirmDelete=${this.confirmDelete}
                             .dragDisabled=${this.dragDisabled}
                             .collapsedIds=${this.collapsedIds}
+                            .childQuickAddParentIds=${this.childQuickAddParentIds}
+                            .addModeActive=${this.addModeActive}
+                            .deleteModeActive=${this.deleteModeActive}
                     .reorderModeActive=${this.reorderModeActive}
 
                             @tree-pointer-down=${this.onPointerDown}
@@ -1848,6 +2212,8 @@ export class TodoOverlayList extends LitElement {
                             @tree-pointer-up=${this.onPointerUp}
                             @tree-toggle-collapse=${this.onToggleCollapse}
                             @tree-delete-item=${this.onDeleteItem}
+                            @tree-toggle-child-quick-add=${this.onToggleChildQuickAdd}
+                            @tree-quick-add-child=${this.onChildQuickAddSubmit}
 
                         ></todo-overlay-tree>
                     `
@@ -1866,6 +2232,9 @@ export class TodoOverlayList extends LitElement {
                 .confirmDelete=${this.confirmDelete}
                 .dragDisabled=${this.dragDisabled}
                 .collapsedIds=${this.collapsedIds}
+                .childQuickAddParentIds=${this.childQuickAddParentIds}
+                .addModeActive=${this.addModeActive}
+                .deleteModeActive=${this.deleteModeActive}
                 .reorderModeActive=${this.reorderModeActive}
 
                 @tree-pointer-down=${this.onPointerDown}
@@ -1873,6 +2242,8 @@ export class TodoOverlayList extends LitElement {
                 @tree-pointer-up=${this.onPointerUp}
                 @tree-toggle-collapse=${this.onToggleCollapse}
                 @tree-delete-item=${this.onDeleteItem}
+                @tree-toggle-child-quick-add=${this.onToggleChildQuickAdd}
+                @tree-quick-add-child=${this.onChildQuickAddSubmit}
 
             ></todo-overlay-tree>
         `;
@@ -1889,16 +2260,40 @@ export class TodoOverlayList extends LitElement {
             return "";
         }
 
+        // The ghost's own top-left anchor is ALWAYS just the pointer
+        // minus the original grab offset, regardless of dragGhostStyle -
+        // an earlier attempt lifted this clear of the pointer entirely
+        // and was live-reported as feeling visually disconnected from
+        // what was actually being dragged. Every style below only ever
+        // changes the ghost's own SIZE/opacity, or adds a separate
+        // satellite element near it - never its position.
         const left = this.ghostPosition.x - this.dragGhostOffset.x;
         const top = this.ghostPosition.y - this.dragGhostOffset.y;
 
+        // Only while actually hovering a valid reparent ("inside")
+        // target - that's the one case the ghost (sitting right at the
+        // pointer, by design) can fully cover the very row being
+        // judged. Before/after reordering already shows its own
+        // always-visible shadow-box gap elsewhere in the list, so none
+        // of this ever applies to it.
+        const hoveringParent = this.hoverPlacement === "inside" && this.hoverId !== undefined;
+        const targetItem = hoveringParent ? findItem(this.list.items, this.hoverId!) : undefined;
+        const applyTreatment = hoveringParent && targetItem !== undefined && this.dragGhostStyle !== "none";
+        const shrinking = applyTreatment && this.dragGhostStyle === "shrink";
+
         return html`
             <div
-                class="drag-ghost"
+                class=${classMap({
+                    "drag-ghost": true,
+                    shrink: shrinking,
+                    translucent: applyTreatment && this.dragGhostStyle === "translucent",
+                })}
                 style=${styleMap({
                     left: `${left}px`,
                     top: `${top}px`,
-                    width: this.dragGhostSize ? `${this.dragGhostSize.width}px` : undefined,
+                    width: shrinking
+                        ? `${DRAG_GHOST_SHRINK_WIDTH_PX}px`
+                        : (this.dragGhostSize ? `${this.dragGhostSize.width}px` : undefined),
                 })}
             >
                 <ha-checkbox .checked=${item.completed}></ha-checkbox>
@@ -1909,6 +2304,21 @@ export class TodoOverlayList extends LitElement {
                         : ""
                 }
             </div>
+            ${
+                applyTreatment && this.dragGhostStyle === "label"
+                    ? html`
+                        <div
+                            class="drag-ghost-label"
+                            style=${styleMap({
+                                left: `${left}px`,
+                                top: `${top + (this.dragGhostSize?.height ?? DRAG_GHOST_FALLBACK_HEIGHT_PX) + DRAG_GHOST_LABEL_GAP_PX}px`,
+                            })}
+                        >
+                            Add to: ${targetItem!.title}
+                        </div>
+                    `
+                    : ""
+            }
         `;
     }
 
@@ -1952,9 +2362,10 @@ export class TodoOverlayList extends LitElement {
                                                 class=${classMap({
                                                     "toolbar-icon": true,
                                                     "quick-add-toggle": true,
-                                                    expanded: this.quickAddExpanded,
+                                                    expanded: this.addModeActive,
                                                 })}
                                                 aria-label="Add item"
+                                                title="Add item"
                                                 @click=${this.onToggleQuickAdd}
                                             >
                                                 ${PLUS_ICON}
@@ -1969,6 +2380,7 @@ export class TodoOverlayList extends LitElement {
                                                                 "filter-select-wrapper": true,
                                                                 active: this.filterMode !== "all",
                                                             })}
+                                                            title="Filter items"
                                                         >
                                                             ${FILTER_ICON}
                                                             ${
@@ -1997,6 +2409,7 @@ export class TodoOverlayList extends LitElement {
                                                         <button
                                                             class="toolbar-icon"
                                                             aria-label="Save list"
+                                                            title="Save list"
                                                             @click=${this.openSaveDialog}
                                                         >
                                                             ${SAVE_ICON}
@@ -2004,6 +2417,7 @@ export class TodoOverlayList extends LitElement {
                                                         <button
                                                             class="toolbar-icon"
                                                             aria-label="Load list"
+                                                            title="Load list"
                                                             @click=${this.openLoadDialog}
                                                         >
                                                             ${LOAD_ICON}
@@ -2016,10 +2430,28 @@ export class TodoOverlayList extends LitElement {
                                                 this.showClearButton
                                                     ? html`
                                                         <button
-                                                            class="toolbar-icon"
-                                                            aria-label="Clear completed"
-                                                            @click=${this.onClearCompleted}
+                                                            class=${classMap({
+                                                                "toolbar-icon": true,
+                                                                active: this.deleteModeActive,
+                                                            })}
+                                                            aria-label=${this.deleteModeActive ? "Done deleting" : "Clear completed"}
+                                                            title="Tap: clear completed (or delete items). Hold: delete all."
+                                                            @pointerdown=${this.onClearButtonPointerDown}
+                                                            @pointerup=${this.onClearButtonPointerUp}
+                                                            @pointercancel=${this.onClearButtonPointerCancel}
                                                         >
+                                                            ${
+                                                                this.clearButtonPressedAt !== 0
+                                                                    ? html`
+                                                                        <div
+                                                                            class=${classMap({
+                                                                                "hold-ripple": true,
+                                                                                active: this.clearButtonHoldReady,
+                                                                            })}
+                                                                        ></div>
+                                                                    `
+                                                                    : ""
+                                                            }
                                                             ${CLEAR_COMPLETED_ICON}
                                                         </button>
                                                     `
@@ -2036,6 +2468,11 @@ export class TodoOverlayList extends LitElement {
                                                                 active: this.reorderModeActive,
                                                             })}
                                                             aria-label=${
+                                                                this.reorderModeActive
+                                                                    ? "Done reordering"
+                                                                    : "Reorder items"
+                                                            }
+                                                            title=${
                                                                 this.reorderModeActive
                                                                     ? "Done reordering"
                                                                     : "Reorder items"
@@ -2057,7 +2494,7 @@ export class TodoOverlayList extends LitElement {
             }
 
             ${
-                this.quickAddExpanded
+                this.addModeActive
                     ? html`
                         <div class="quick-add-panel">
                             <div class="quick-add-row">
@@ -2160,6 +2597,21 @@ export class TodoOverlayList extends LitElement {
                             @dialog-confirm=${this.onSaveLoadConfirm}
                             @dialog-delete-saved=${this.onSaveLoadDeleteSaved}
                         ></todo-overlay-save-load-dialog>
+                    `
+                    : ""
+            }
+
+            ${
+                this.confirmingClearAll
+                    ? html`
+                        <todo-overlay-confirm-dialog
+                            .heading=${"Delete all items?"}
+                            .message=${"This permanently deletes every item in this list - active and completed, parents and children. This can't be undone."}
+                            .confirmLabel=${"Delete all"}
+
+                            @dialog-close=${this.closeClearAllConfirm}
+                            @dialog-confirm=${this.onClearAllConfirmed}
+                        ></todo-overlay-confirm-dialog>
                     `
                     : ""
             }

@@ -667,6 +667,52 @@ async def test_manager_clear_completed_leaves_incomplete_nested_completed_subtre
 
 
 @pytest.mark.asyncio
+async def test_manager_clear_all_removes_every_item_regardless_of_completion():
+
+    adapter = FakeAdapter(items=[
+        TodoItem(id="1", title="Shopping", completed=True),
+        TodoItem(id="2", title="Item", completed=True),
+        TodoItem(id="3", title="Milk", completed=False),
+        TodoItem(id="4", title="Eggs", completed=False),
+    ])
+
+    metadata_store = FakeMetadataStore({
+        "1": ItemPosition(parent_id=None, order=0),
+        "2": ItemPosition(parent_id="1", order=0),
+        "3": ItemPosition(parent_id=None, order=1),
+        "4": ItemPosition(parent_id="3", order=0),
+    })
+
+    manager = TodoManager(adapter=adapter, metadata_store=metadata_store)
+
+    removed = await manager.clear_all(entity_id="todo.shopping")
+
+    # Unlike clear_completed, completion status is irrelevant here -
+    # "Milk" and its child "Eggs" are still incomplete and are removed
+    # right along with the completed "Shopping"/"Item" pair.
+    assert set(removed) == {"1", "2", "3", "4"}
+    assert adapter._items == []
+    assert metadata_store._positions == {}
+
+
+@pytest.mark.asyncio
+async def test_manager_clear_all_fires_a_removed_event_per_item():
+    hass = _FakeEventHass()
+    adapter = FakeAdapter(items=[
+        TodoItem(id="1", title="Shopping", completed=False),
+        TodoItem(id="2", title="Milk", completed=True),
+    ])
+    manager = TodoManager(adapter=adapter, metadata_store=FakeMetadataStore(), hass=hass)
+
+    await manager.clear_all(entity_id="todo.shopping")
+
+    assert {(event, data["item_id"], data["action"]) for event, data in hass.calls} == {
+        (EVENT_ITEM_CHANGED, "1", "removed"),
+        (EVENT_ITEM_CHANGED, "2", "removed"),
+    }
+
+
+@pytest.mark.asyncio
 async def test_manager_restore_completed_writes_back_exact_values():
 
     adapter = FakeAdapter(items=[
@@ -1435,6 +1481,79 @@ async def test_manager_create_item_with_trigger_on_due_but_no_due_datetime_is_si
     todo_list = await manager.get_list("todo.shopping")
     assert todo_list.items[0].id == item_id
     assert todo_list.items[0].trigger_on_due is False
+
+
+@pytest.mark.asyncio
+async def test_manager_create_item_positioned_inside_a_parent_with_no_existing_children():
+    adapter = FakeAdapter(items=[TodoItem(id="parent", title="Home Assistant", completed=False)])
+    metadata_store = FakeMetadataStore()
+    manager = TodoManager(adapter=adapter, metadata_store=metadata_store)
+
+    item_id = await manager.create_item(
+        entity_id="todo.shopping",
+        title="Firewall",
+        reference_id="parent",
+        placement="inside",
+    )
+
+    todo_list = await manager.get_list("todo.shopping")
+    parent = next(item for item in todo_list.items if item.id == "parent")
+    assert [child.id for child in parent.children] == [item_id]
+
+
+@pytest.mark.asyncio
+async def test_manager_create_item_positioned_before_an_existing_first_child():
+    # The frontend's per-parent quick add always wants the new item
+    # directly below the parent's own row and above its EXISTING
+    # children - "inside" alone would append past them instead (same
+    # reason resolvePlacement's own placement logic never offers plain
+    # "inside" for a row that already has visible children) - so it
+    # targets the current first child with "before" instead.
+    adapter = FakeAdapter(items=[
+        TodoItem(id="parent", title="Home Assistant", completed=False),
+        TodoItem(id="firewall", title="Firewall", completed=False),
+    ])
+    metadata_store = FakeMetadataStore({
+        "parent": ItemPosition(parent_id=None, order=0),
+        "firewall": ItemPosition(parent_id="parent", order=0),
+    })
+    manager = TodoManager(adapter=adapter, metadata_store=metadata_store)
+
+    item_id = await manager.create_item(
+        entity_id="todo.shopping",
+        title="VPN",
+        reference_id="firewall",
+        placement="before",
+    )
+
+    todo_list = await manager.get_list("todo.shopping")
+    parent = next(item for item in todo_list.items if item.id == "parent")
+    assert [child.id for child in parent.children] == [item_id, "firewall"]
+
+
+@pytest.mark.asyncio
+async def test_manager_create_item_with_positioning_fires_only_one_created_event():
+    # Positioning reuses the same core logic move_item() does (see
+    # _reposition in manager_position.py), but must NOT go through
+    # move_item() itself - re-acquiring the same (non-reentrant) lock
+    # from inside create_item's own would deadlock, and firing move_item's
+    # own separate "moved" event on top of "created" would be a second,
+    # redundant event for what's really one single action.
+    hass = _FakeEventHass()
+    adapter = FakeAdapter(items=[TodoItem(id="parent", title="Home Assistant", completed=False)])
+    manager = TodoManager(adapter=adapter, metadata_store=FakeMetadataStore(), hass=hass)
+
+    await manager.create_item(
+        entity_id="todo.shopping",
+        title="Firewall",
+        reference_id="parent",
+        placement="inside",
+    )
+
+    assert len(hass.calls) == 1
+    event, data = hass.calls[0]
+    assert event == EVENT_ITEM_CHANGED
+    assert data["action"] == "created"
 
 
 @pytest.mark.asyncio

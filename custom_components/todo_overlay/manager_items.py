@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from .errors import ItemNotFoundError
+from .manager_types import Placement
 from .models import TodoItem
 
 
@@ -21,6 +22,8 @@ class ItemMixin:
         quantity: str | None = None,
         tags: list[str] | None = None,
         trigger_on_due: bool = False,
+        reference_id: str | None = None,
+        placement: Placement | None = None,
     ) -> str:
         """Create an item, including overlay-only fields (quantity,
         tags, trigger_on_due) that Home Assistant's native
@@ -30,6 +33,19 @@ class ItemMixin:
         doesn't end up with a due_datetime (either none was given, or
         the entity doesn't support the feature and add_item dropped it)
         - same "gracefully degrade" precedent as due_datetime itself.
+
+        reference_id/placement optionally position the new item
+        relative to an existing one (same before/after/inside semantics
+        as move_item) instead of wherever the native adapter's own
+        add_item happens to put it - used by the frontend's per-parent
+        quick add to insert a new item as a specific parent's first
+        child, immediately below the parent's own row rather than at
+        the end of the whole list. Repositioning runs via the shared
+        _reposition() core (see manager_position.py) INSIDE this
+        method's own lock, rather than calling the public move_item()
+        - that would try to re-acquire the same (non-reentrant) lock and
+        deadlock, and would fire a redundant second "moved" event for
+        what the caller sees as one single action.
 
         Returns the new item's id.
         """
@@ -55,6 +71,9 @@ class ItemMixin:
 
                 if created_item is not None and created_item.due_datetime:
                     await self._metadata_store.set_trigger_on_due(entity_id, item_id, True)
+
+            if reference_id is not None and placement is not None:
+                await self._reposition(entity_id, item_id, reference_id, placement)
 
         self._fire_event(entity_id, item_id, title, "created", quantity=quantity, tags=tags or [])
 

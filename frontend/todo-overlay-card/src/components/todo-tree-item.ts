@@ -47,6 +47,28 @@ const holdRippleSizePx = unsafeCSS(`${HOLD_RIPPLE_SIZE}px`);
 // moment they happen.
 const CLICK_DEBOUNCE_MS = 250;
 
+// Touch-only horizontal swipe on the plain row (never the dedicated
+// drag-handle, and never while reorderModeActive - see
+// onWindowPointerMove) - the mobile replacement for the desktop-only
+// per-row +/x toggles removed from touch entirely by the @media
+// (pointer: coarse) rule below. Movement under this many px in EITHER
+// axis is still ambiguous (a tap's own jitter, or the very start of a
+// vertical scroll) - the gesture doesn't commit to "this is a
+// horizontal swipe" until it clears this, the same role
+// MOVE_CANCEL_THRESHOLD_PX plays for hold-to-edit, just at a grain
+// suited to telling swipe apart from scroll specifically.
+export const SWIPE_AXIS_LOCK_PX = 12;
+
+// How far a swipe must travel before release commits to its action
+// (delete on the left, add-child on the right) rather than springing
+// back as a no-op - see resolveSwipe.
+export const SWIPE_ACTION_THRESHOLD_PX = 88;
+
+// Clamps how far the row can be dragged past the action threshold - a
+// swipe further than this reveals no more than one already fully
+// armed at the threshold, since there's nothing more to show.
+export const SWIPE_MAX_REVEAL_PX = 132;
+
 const CLOCK_ICON = html`
     <svg viewBox="0 0 24 24">
         <path
@@ -79,6 +101,14 @@ const CROSS_ICON = html`
     <svg viewBox="0 0 24 24">
         <path d="M19,6.41L17.59,5L12,10.59L6.41,5L5,6.41L10.59,12L5,17.59L6.41,19L12,13.41L17.59,19L19,17.59L13.41,12L19,6.41Z"></path>
     </svg>
+`;
+
+// Same glyph as todo-overlay-list.ts's own toolbar PLUS_ICON - kept as
+// a separate local copy rather than an import, matching how this file
+// already defines its own CROSS_ICON/DRAG_HANDLE_ICON independently
+// rather than depending on its ultimate parent component.
+const PLUS_ICON = html`
+    <svg viewBox="0 0 24 24"><path d="M19 13H13V19H11V13H5V11H11V5H13V11H19V13Z"></path></svg>
 `;
 
 // Only ever rendered while reorderModeActive - see .drag-handle's own
@@ -179,6 +209,19 @@ export class TodoTreeItem extends LitElement {
             user-select: none;
             cursor: pointer;
             transition: background-color 0.15s ease, outline-color 0.15s ease, margin 150ms ease;
+            /* Leaves vertical panning to the browser's own native
+               scroll (so the page still scrolls normally on a quick
+               vertical touch, no different from before this existed)
+               while claiming horizontal movement for trackSwipe below
+               instead of letting the browser interpret it as anything
+               native (e.g. an edge back-navigation gesture) - the
+               standard, purpose-built tool for exactly this "one axis
+               is native, the other is mine" split, unlike trying to
+               toggle touch-action mid-gesture (tried first for drag,
+               doesn't reliably work - see the class docstring above),
+               which this sidesteps entirely by being static from the
+               very first touchstart. */
+            touch-action: pan-y;
         }
 
         /* Suppressed while a drag is active (see rowClasses' drag-active) -
@@ -511,6 +554,188 @@ export class TodoTreeItem extends LitElement {
             background: rgba(var(--rgb-error-color, 219, 68, 55), 0.15);
         }
 
+        /* Fills the exact slot the delete button leaves empty for a
+           parent row (see hasChildren in the template, and the delete
+           button's own comment above) - same dimensions/opacity
+           treatment as that button, so it reads as "the same kind of
+           control" rather than a mismatched addition. Toggles to the
+           cross glyph (and stays fully opaque) while this parent's own
+           quick-add field is open - see .child-quick-add-row below. */
+        .child-quick-add-toggle {
+            flex-shrink: 0;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            width: 24px;
+            height: 24px;
+            margin-inline-end: -4px;
+            border: none;
+            background: none;
+            padding: 0;
+            border-radius: 50%;
+            cursor: pointer;
+            color: var(--secondary-text-color);
+            opacity: 0.5;
+            transition: opacity 0.15s ease, background-color 0.15s ease, color 0.15s ease;
+        }
+
+        .row:hover .child-quick-add-toggle {
+            opacity: 1;
+        }
+
+        .child-quick-add-toggle.active {
+            opacity: 1;
+            color: var(--primary-color);
+        }
+
+        .child-quick-add-toggle svg {
+            width: 16px;
+            height: 16px;
+            fill: currentColor;
+        }
+
+        /* Directly below the parent's own row, above its existing
+           children (see the template) - indented to the SAME depth a
+           real child would be (matches the child <ul>'s own
+           padding-inline-start), so it's unambiguous this is adding a
+           child of THIS row, not a sibling of it. Same field styling as
+           the toolbar's own root-level quick-add row
+           (todo-overlay-list.ts's .quick-add-row) - a different
+           attachment point, not a different-looking control. */
+        .child-quick-add-row {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin: 4px 0;
+            padding-inline-start: ${rowIndentPx};
+        }
+
+        .child-quick-add-row input {
+            flex: 1;
+            min-width: 0;
+            font-family: Roboto, "Noto Sans", sans-serif;
+            font-size: 14px;
+            color: var(--primary-text-color);
+            background: none;
+            border: none;
+            border-bottom: 1px solid var(--divider-color);
+            padding: 6px 0;
+            outline: none;
+        }
+
+        .child-quick-add-row input:focus {
+            border-bottom: 2px solid var(--primary-color);
+            padding-bottom: 5px;
+        }
+
+        .child-quick-add-row button {
+            flex-shrink: 0;
+            border: none;
+            background: none;
+            font-family: Roboto, "Noto Sans", sans-serif;
+            font-size: 14px;
+            color: var(--primary-color);
+            font-weight: 500;
+            cursor: pointer;
+        }
+
+        /* Desktop-only, unconditionally - (pointer: coarse) is the
+           reliable "primary input is imprecise" signal (same one
+           todo-overlay-list.ts's own .reorder-toggle uses), not a
+           viewport-width breakpoint. Touch relies on swipe instead of
+           either of these: swipe right to add a child, swipe left to
+           delete (see the swipe handling below) - removed entirely
+           rather than left as a smaller/harder-to-hit tap target, which
+           is what "remove the crosses from mobile entirely" asked for. */
+        @media (pointer: coarse) {
+            .child-quick-add-toggle,
+            .delete-button {
+                display: none;
+            }
+        }
+
+        /* Wraps just the row itself (not its children <ul> or its own
+           quick-add field below) so the swipe reveal panel's absolute
+           bounds always match the row's own box exactly, regardless of
+           how deep this item is nested. flow-root (rather than plain
+           position:relative alone) additionally gives .row's own
+           gap-before/gap-after margins a containing block that can't
+           collapse them out through this wrapper - without it, the
+           reorder-mode gap those classes open risks collapsing against
+           this wrapper's boundary instead of staying scoped exactly the
+           way it already did before this wrapper existed. */
+        .row-wrapper {
+            position: relative;
+            display: flow-root;
+        }
+
+        /* Sits directly behind .row at the same bounds - revealed only
+           in the strip .row's own translateX vacates as it slides away
+           (see trackSwipe/resolveSwipe below), so no width animation or
+           explicit reveal-amount styling is needed here at all, just
+           correct stacking (DOM order alone puts .row on top, since
+           neither element sets z-index) and a matching border-radius so
+           the reveal never pokes out past the row's own rounded
+           corners. */
+        .swipe-action-layer {
+            position: absolute;
+            inset: 0;
+            overflow: hidden;
+            border-radius: 4px;
+            display: flex;
+        }
+
+        .swipe-action {
+            flex: 1;
+            display: flex;
+            align-items: center;
+            padding: 0 18px;
+            color: #fff;
+            opacity: 0.55;
+            transition: opacity 0.15s ease;
+        }
+
+        .swipe-action svg {
+            width: 20px;
+            height: 20px;
+            fill: currentColor;
+        }
+
+        .swipe-action.delete {
+            justify-content: flex-end;
+            background: var(--error-color, #db4437);
+        }
+
+        .swipe-action.add {
+            justify-content: flex-start;
+            background: var(--accent-color, var(--primary-color));
+        }
+
+        /* Past the action threshold - i.e. releasing right now commits
+           - full opacity and a slightly larger glyph make that "it's
+           live" moment unmistakable without needing a second, separate
+           confirm step of its own (see resolveSwipe). */
+        .swipe-action.armed {
+            opacity: 1;
+        }
+
+        .swipe-action.armed svg {
+            width: 24px;
+            height: 24px;
+        }
+
+        /* Adds transform to the transition list ONLY while not actively
+           swiping (see trackSwipe/resolveSwipe's own swipeDragging) -
+           the higher-specificity :not() selector wins over the base
+           .row rule above outright rather than merging with it (a
+           shorthand property can't partially override), so a live
+           swipe's translateX tracks the finger with zero added lag,
+           and only the release - whether committing or springing back
+           to 0 - animates. */
+        .row:not(.swiping) {
+            transition: background-color 0.15s ease, outline-color 0.15s ease, margin 150ms ease, transform 200ms ease;
+        }
+
         /* Shown instead of the delete button (see the template) while
            reorderModeActive, for every row regardless of hasChildren -
            dragging needs to work on parents too, unlike delete.
@@ -634,6 +859,26 @@ export class TodoTreeItem extends LitElement {
     @property({attribute: false})
     reorderModeActive = false;
 
+    // Which items currently have their own inline "add a child" field
+    // open - see todo-overlay-list.ts's own childQuickAddParentIds for
+    // the full picture (independent per-item toggles, only ever
+    // bulk-cleared by turning add-mode off entirely).
+    @property({attribute: false})
+    childQuickAddParentIds: Set<string> = new Set();
+
+    // Desktop-only modes (see todo-overlay-list.ts's own
+    // addModeActive/deleteModeActive) - while active, EVERY row shows
+    // its own "+" (add-mode) or leaf rows show "x" (delete-mode) in the
+    // trailing icon slot, instead of only rows that already had
+    // children ever offering a way to gain one. Mutually exclusive with
+    // each other and with reorderModeActive - see rowClasses below for
+    // how the slot picks between all three.
+    @property({attribute: false})
+    addModeActive = false;
+
+    @property({attribute: false})
+    deleteModeActive = false;
+
     @state()
     private holdRippleOrigin?: {x: number; y: number};
 
@@ -642,6 +887,32 @@ export class TodoTreeItem extends LitElement {
 
     @state()
     private confirmingDelete = false;
+
+    // Live horizontal offset of a touch-only swipe gesture (see
+    // trackSwipe) - negative reveals the delete panel, positive reveals
+    // the add-child panel (see the template's swipe-action-layer and
+    // .row's own translateX). Always 0 outside an active or just-
+    // resolved swipe.
+    @state()
+    private swipeOffsetX = 0;
+
+    // True only while the CURRENT gesture is a live, actively-dragging
+    // horizontal swipe - suppresses .row's own transform transition
+    // (see .row:not(.swiping)) so the translated row tracks the finger
+    // with zero lag, then lets it spring back (or stay committed at 0
+    // once its action fires) with a normal transition once this goes
+    // false on release.
+    @state()
+    private swipeDragging = false;
+
+    // Local to this row, not lifted to todo-overlay-list.ts - only the
+    // OPEN/CLOSED state of a parent's quick-add field needs to be known
+    // outside this component (to coordinate the "close everything" bulk
+    // action and to auto-expand a collapsed parent - see
+    // onToggleChildQuickAddClick). The typed-but-not-yet-submitted text
+    // itself has no reason to live any higher.
+    @state()
+    private childQuickAddValue = "";
 
     private pointerDownAt = 0;
     private pointerDownScreenPos?: {x: number; y: number};
@@ -659,6 +930,17 @@ export class TodoTreeItem extends LitElement {
     // the jitter threshold, same as pointerIsMouse, since the handle has
     // no "quick swipe = scroll" ambiguity to wait out in the first place.
     private initiatedFromHandle = false;
+    // undefined until the current touch gesture's dominant direction is
+    // determined (see trackSwipe) - a "vertical" gesture is left alone
+    // entirely (native scroll owns it, thanks to .row's own
+    // touch-action: pan-y), the same "one axis wins, the other is
+    // ignored for the rest of the gesture" split reorder-mode's own
+    // drag-handle already uses, just decided per-gesture here instead
+    // of per-mode. Reset at the start of every new press (see
+    // pointerDown), covering every way the previous gesture could have
+    // ended - a natural release, a cancel, or never having moved enough
+    // to lock an axis at all.
+    private swipeAxis?: "horizontal" | "vertical";
 
     private get isPressed(): boolean {
         return this.draggedId === this.item.id;
@@ -745,12 +1027,60 @@ export class TodoTreeItem extends LitElement {
         );
     }
 
+    private onToggleChildQuickAddClick(e: Event) {
+        e.stopPropagation();
+
+        this.dispatchEvent(
+            new CustomEvent("tree-toggle-child-quick-add", {
+                detail: {id: this.item.id},
+                bubbles: true,
+                composed: true,
+            }),
+        );
+    }
+
+    private onChildQuickAddInput(e: InputEvent) {
+        this.childQuickAddValue = (e.target as HTMLInputElement).value;
+    }
+
+    private onChildQuickAddKeydown(e: KeyboardEvent) {
+        if (e.key === "Enter") {
+            this.submitChildQuickAdd();
+        }
+    }
+
+    // Clears the field the moment it's sent, not once todo-overlay-list.ts
+    // confirms the create actually succeeded (unlike the root quick-add's
+    // own submitQuickAdd, which can afford to wait since it's the one
+    // holding the value) - this component has no way to know that
+    // outcome without a value threaded back down just to say "clear
+    // now", so an error banner (see reportError) is the fallback if the
+    // create fails, same as it would be for any other failed action.
+    private submitChildQuickAdd() {
+        const title = this.childQuickAddValue.trim();
+
+        if (!title) {
+            return;
+        }
+
+        this.childQuickAddValue = "";
+
+        this.dispatchEvent(
+            new CustomEvent("tree-quick-add-child", {
+                detail: {parentId: this.item.id, title},
+                bubbles: true,
+                composed: true,
+            }),
+        );
+    }
+
     private pointerDown(e: PointerEvent) {
         this.pointerDownAt = Date.now();
         this.pointerDownScreenPos = {x: e.clientX, y: e.clientY};
         this.hasMoved = false;
         this.dragEngaged = false;
         this.initiatedFromHandle = false;
+        this.swipeAxis = undefined;
         this.pointerIsMouse = e.pointerType === "mouse";
 
         // Always the ROW's rect, even when this fires from the small
@@ -882,15 +1212,67 @@ export class TodoTreeItem extends LitElement {
                         grabOffsetY: grabOffset.y,
                         pointerX: e.clientX,
                         pointerY: e.clientY,
+                        pointerType: e.pointerType,
                     },
                     bubbles: true,
                     composed: true,
                 }),
             );
-        } else {
-            this.cancelHoldForMovement();
+            return;
         }
+
+        this.cancelHoldForMovement();
+
+        // Swipe is a touch-only, non-reorder-mode gesture on the plain
+        // row (never the dedicated drag-handle, which already returned
+        // above via initiatedFromHandle) - see the class docstring's own
+        // "swipe right to add a child, swipe left to delete" note.
+        // Reorder-mode's own touch drag only ever starts from the
+        // handle, never the row itself, so this is never fighting that
+        // gesture for the same pointer - it's just off entirely for the
+        // duration, matching what the user asked for ("ignored while
+        // re-order mode... and vice versa").
+        if (this.pointerIsMouse || this.reorderModeActive) {
+            return;
+        }
+
+        this.trackSwipe(dx, dy, e);
     };
+
+    // Determines the gesture's dominant axis once movement clears
+    // SWIPE_AXIS_LOCK_PX, then either drives .row's own live translateX
+    // (horizontal) or leaves the rest of the gesture alone entirely
+    // (vertical - native scroll, via .row's own touch-action: pan-y,
+    // already owns it). Locked for the remainder of THIS gesture either
+    // way - see swipeAxis's own comment for why a fresh decision is
+    // only ever made at the next pointerDown.
+    private trackSwipe(dx: number, dy: number, e: PointerEvent) {
+        if (this.swipeAxis === undefined) {
+            if (Math.abs(dx) < SWIPE_AXIS_LOCK_PX && Math.abs(dy) < SWIPE_AXIS_LOCK_PX) {
+                return;
+            }
+
+            this.swipeAxis = Math.abs(dx) > Math.abs(dy) ? "horizontal" : "vertical";
+
+            if (this.swipeAxis === "horizontal") {
+                this.swipeDragging = true;
+            }
+        }
+
+        if (this.swipeAxis !== "horizontal") {
+            return;
+        }
+
+        // touch-action: pan-y on .row (see its own CSS) already leaves
+        // horizontal movement for this handler to own outright -
+        // preventDefault here stops nothing scroll-related (pan-y
+        // already claimed that), just guards against an edge-swipe-back
+        // gesture some browsers layer on top of raw horizontal touch
+        // movement.
+        e.preventDefault();
+
+        this.swipeOffsetX = Math.max(-SWIPE_MAX_REVEAL_PX, Math.min(SWIPE_MAX_REVEAL_PX, dx));
+    }
 
     private onWindowPointerUp = () => {
         this.pointerUp();
@@ -926,6 +1308,11 @@ export class TodoTreeItem extends LitElement {
             return;
         }
 
+        if (this.swipeAxis === "horizontal") {
+            this.resolveSwipe();
+            return;
+        }
+
         if (this.hasMoved || pressDurationMs >= LONG_PRESS_MS) {
             this.emitPointerUp(pressDurationMs, this.hasMoved);
             return;
@@ -956,6 +1343,45 @@ export class TodoTreeItem extends LitElement {
         }, CLICK_DEBOUNCE_MS);
     }
 
+    // Release past SWIPE_ACTION_THRESHOLD_PX commits to whichever
+    // action that direction means (delete on the left, add-child on
+    // the right) - no separate confirm tap, the swipe-then-release-
+    // past-the-line already IS the confirmation, the same "reveals,
+    // release-past-threshold confirms" model a native iOS/Android
+    // swipe-to-delete list row uses. Short of the threshold - or
+    // dragged back toward 0 before release - springs back as a no-op
+    // instead. Reuses the exact same tree-delete-item/
+    // tree-toggle-child-quick-add events the desktop per-row buttons
+    // already dispatch (see onDeleteClick/onToggleChildQuickAddClick),
+    // not a separate touch-only code path on the list side - swiping
+    // right on an already-open field closes it, same as tapping its
+    // toggle button a second time would on desktop.
+    private resolveSwipe() {
+        const offset = this.swipeOffsetX;
+
+        this.swipeAxis = undefined;
+        this.swipeDragging = false;
+        this.swipeOffsetX = 0;
+
+        if (offset <= -SWIPE_ACTION_THRESHOLD_PX) {
+            this.dispatchEvent(
+                new CustomEvent("tree-delete-item", {
+                    detail: {id: this.item.id},
+                    bubbles: true,
+                    composed: true,
+                }),
+            );
+        } else if (offset >= SWIPE_ACTION_THRESHOLD_PX) {
+            this.dispatchEvent(
+                new CustomEvent("tree-toggle-child-quick-add", {
+                    detail: {id: this.item.id},
+                    bubbles: true,
+                    composed: true,
+                }),
+            );
+        }
+    }
+
     render() {
         const isDropTarget = this.isDropTarget;
         const isBeingDragged = this.isBeingDragged;
@@ -981,11 +1407,42 @@ export class TodoTreeItem extends LitElement {
         return html`
             <li>
 
-                <div
-                    class=${classMap(rowClasses)}
+                <div class="row-wrapper">
+                    ${
+                        this.swipeOffsetX !== 0
+                            ? html`
+                                <div class="swipe-action-layer">
+                                    ${
+                                        this.swipeOffsetX < 0
+                                            ? html`
+                                                <div class=${classMap({
+                                                    "swipe-action": true,
+                                                    delete: true,
+                                                    armed: this.swipeOffsetX <= -SWIPE_ACTION_THRESHOLD_PX,
+                                                })}>
+                                                    ${CROSS_ICON}
+                                                </div>
+                                            `
+                                            : html`
+                                                <div class=${classMap({
+                                                    "swipe-action": true,
+                                                    add: true,
+                                                    armed: this.swipeOffsetX >= SWIPE_ACTION_THRESHOLD_PX,
+                                                })}>
+                                                    ${PLUS_ICON}
+                                                </div>
+                                            `
+                                    }
+                                </div>
+                            `
+                            : ""
+                    }
+                    <div
+                        class=${classMap({...rowClasses, swiping: this.swipeDragging})}
+                        style=${styleMap({transform: this.swipeOffsetX ? `translateX(${this.swipeOffsetX}px)` : ""})}
 
-                    @pointerdown=${this.pointerDown}
-                >
+                        @pointerdown=${this.pointerDown}
+                    >
                     ${
                         // Reordering (before/after) shows the shadow box in
                         // the gap it just opened; becoming a child ("inside")
@@ -1099,21 +1556,43 @@ export class TodoTreeItem extends LitElement {
                                                 ${DRAG_HANDLE_ICON}
                                             </button>
                                         `
-                                        : this.hasChildren
-                                            ? ""
-                                            : html`
+                                        : this.addModeActive
+                                            ? html`
                                                 <button
                                                     class=${classMap({
-                                                        "delete-button": true,
-                                                        confirming: this.confirmingDelete,
+                                                        "child-quick-add-toggle": true,
+                                                        active: this.childQuickAddParentIds.has(this.item.id),
                                                     })}
-                                                    aria-label=${this.confirmingDelete ? "Confirm delete" : "Delete"}
-                                                    @click=${this.onDeleteClick}
+                                                    aria-label=${
+                                                        this.childQuickAddParentIds.has(this.item.id)
+                                                            ? "Close add-child field"
+                                                            : "Add child item"
+                                                    }
+                                                    @click=${this.onToggleChildQuickAddClick}
                                                     @pointerdown=${(e: Event) => e.stopPropagation()}
                                                 >
-                                                    ${CROSS_ICON}
+                                                    ${
+                                                        this.childQuickAddParentIds.has(this.item.id)
+                                                            ? CROSS_ICON
+                                                            : PLUS_ICON
+                                                    }
                                                 </button>
                                             `
+                                            : this.deleteModeActive && !this.hasChildren
+                                                ? html`
+                                                    <button
+                                                        class=${classMap({
+                                                            "delete-button": true,
+                                                            confirming: this.confirmingDelete,
+                                                        })}
+                                                        aria-label=${this.confirmingDelete ? "Confirm delete" : "Delete"}
+                                                        @click=${this.onDeleteClick}
+                                                        @pointerdown=${(e: Event) => e.stopPropagation()}
+                                                    >
+                                                        ${CROSS_ICON}
+                                                    </button>
+                                                `
+                                                : ""
                                 }
 
                                 ${
@@ -1131,7 +1610,28 @@ export class TodoTreeItem extends LitElement {
                                 }
                             `
                     }
+                    </div>
                 </div>
+
+                ${
+                    this.childQuickAddParentIds.has(this.item.id)
+                        ? html`
+                            <div class="child-quick-add-row">
+                                <input
+                                    type="text"
+                                    placeholder="Add item"
+                                    .value=${this.childQuickAddValue}
+                                    @input=${this.onChildQuickAddInput}
+                                    @keydown=${this.onChildQuickAddKeydown}
+                                    @pointerdown=${(e: Event) => e.stopPropagation()}
+                                />
+                                <button @click=${this.submitChildQuickAdd}>
+                                    Add
+                                </button>
+                            </div>
+                        `
+                        : ""
+                }
 
                 ${
                     this.hasChildren && !this.isCollapsed
@@ -1152,6 +1652,9 @@ export class TodoTreeItem extends LitElement {
                                             .collapsedIds=${this.collapsedIds}
                                             .dimmedByAncestorDrag=${isBeingDragged || this.dimmedByAncestorDrag}
                                             .reorderModeActive=${this.reorderModeActive}
+                                            .childQuickAddParentIds=${this.childQuickAddParentIds}
+                                            .addModeActive=${this.addModeActive}
+                                            .deleteModeActive=${this.deleteModeActive}
                                         ></todo-overlay-tree-item>
                                     `,
                                 )}

@@ -85,6 +85,20 @@ export class TodoTree extends LitElement {
     @property({attribute: false})
     reorderModeActive = false;
 
+    // Which parent items currently have their own inline "add a child"
+    // field open - see todo-overlay-list.ts's own childQuickAddParentIds.
+    @property({attribute: false})
+    childQuickAddParentIds: Set<string> = new Set();
+
+    // See todo-overlay-list.ts's own addModeActive/deleteModeActive for
+    // the full picture - desktop-only modes that show a "+" or "x" on
+    // every row for the duration they're active.
+    @property({attribute: false})
+    addModeActive = false;
+
+    @property({attribute: false})
+    deleteModeActive = false;
+
     render() {
         return html`
             <ul>
@@ -114,6 +128,9 @@ export class TodoTree extends LitElement {
                                     .dragDisabled=${this.dragDisabled}
                                     .collapsedIds=${this.collapsedIds}
                                     .reorderModeActive=${this.reorderModeActive}
+                                    .childQuickAddParentIds=${this.childQuickAddParentIds}
+                                    .addModeActive=${this.addModeActive}
+                                    .deleteModeActive=${this.deleteModeActive}
                                 ></todo-overlay-tree-item>
                             `,
                         )

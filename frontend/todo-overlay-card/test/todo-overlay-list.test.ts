@@ -2,7 +2,7 @@ import {afterEach, describe, expect, it, vi} from "vitest";
 
 import "../src/components/todo-overlay-list";
 import type {TodoOverlayList} from "../src/components/todo-overlay-list";
-import type {TodoItem, TodoList} from "../src/models";
+import {LONG_PRESS_MS, type TodoItem, type TodoList} from "../src/models";
 import {makeFakeHass} from "./fakes";
 
 const ENTITY_ID = "todo.shopping";
@@ -418,6 +418,184 @@ describe("todo-overlay-list quick add", () => {
         expect(hass.connection.sent.filter(m => m.type === "todo_overlay/get_list").length)
             .toBeGreaterThan(hass.connection.sent.slice(0, sentBefore)
                 .filter(m => m.type === "todo_overlay/get_list").length);
+    });
+});
+
+// Feature: only root-level items could be quick-added before - every
+// parent row now gets its own "+" (see todo-tree-item.ts) to add a
+// child directly under it, positioned right below the parent's own row
+// and above its existing children.
+describe("todo-overlay-list per-parent quick add", () => {
+    function childQuickAddToggle(el: TodoOverlayList, parentId: string): HTMLElement {
+        const row = deepQueryAll(el.shadowRoot!, "todo-overlay-tree-item")
+            .find(r => (r as unknown as {item?: {id: string}}).item?.id === parentId) as Element & {shadowRoot: ShadowRoot};
+
+        return row.shadowRoot.querySelector(".child-quick-add-toggle") as HTMLElement;
+    }
+
+    function findRow(el: TodoOverlayList, id: string): Element & {shadowRoot: ShadowRoot} {
+        return deepQueryAll(el.shadowRoot!, "todo-overlay-tree-item")
+            .find(r => (r as unknown as {item?: {id: string}}).item?.id === id) as Element & {shadowRoot: ShadowRoot};
+    }
+
+    // Add-mode - the per-row "+" toggle only exists once this is active
+    // (see todo-overlay-list.ts's own addModeActive) - entered the same
+    // way a real user would, via the toolbar's own "+".
+    async function enterAddMode(el: TodoOverlayList): Promise<void> {
+        (el.shadowRoot?.querySelector("button[aria-label='Add item']") as HTMLElement).click();
+        await settle(el);
+    }
+
+    it("opens that parent's own inline field when its plus icon is clicked, leaving others untouched", async () => {
+        const {el} = await renderList({
+            entity_id: ENTITY_ID,
+            items: [
+                makeItem({id: "parent", title: "Home Assistant", children: [makeItem({id: "child", title: "Firewall"})]}),
+                makeItem({id: "other", title: "Groceries"}),
+            ],
+        });
+        await enterAddMode(el);
+
+        childQuickAddToggle(el, "parent").click();
+        await settle(el);
+
+        expect(findRow(el, "parent").shadowRoot.querySelector(".child-quick-add-row")).not.toBeNull();
+        expect(findRow(el, "other").shadowRoot.querySelector(".child-quick-add-row")).toBeNull();
+    });
+
+    it("shows the add-child toggle on a LEAF item too, once add-mode is active - not just existing parents", async () => {
+        // Live-reported: an earlier version only ever showed a per-row
+        // "+" on items that ALREADY had children - nothing that wasn't
+        // already a parent had any way to become one.
+        const {el} = await renderList({
+            entity_id: ENTITY_ID,
+            items: [makeItem({id: "leaf", title: "Groceries"})],
+        });
+        await enterAddMode(el);
+
+        expect(childQuickAddToggle(el, "leaf")).not.toBeNull();
+    });
+
+    it("adding under a parent whose only existing child is 'Firewall' positions the new item before it", async () => {
+        const {el, hass} = await renderList({
+            entity_id: ENTITY_ID,
+            items: [makeItem({id: "parent", title: "Home Assistant", children: [makeItem({id: "child", title: "Firewall"})]})],
+        });
+        await enterAddMode(el);
+
+        childQuickAddToggle(el, "parent").click();
+        await settle(el);
+
+        const input = findRow(el, "parent").shadowRoot.querySelector(".child-quick-add-row input") as HTMLInputElement;
+        input.value = "VPN";
+        input.dispatchEvent(new Event("input"));
+
+        const addButton = [...findRow(el, "parent").shadowRoot.querySelectorAll(".child-quick-add-row button")]
+            .find(b => b.textContent?.trim() === "Add") as HTMLButtonElement;
+        addButton.click();
+        await flushAsync();
+
+        // Directly below the parent's own row, above its EXISTING
+        // children - "before" the current first child, not "inside" the
+        // parent (which would append past it instead).
+        expect(hass.connection.sent).toContainEqual(expect.objectContaining({
+            type: "todo_overlay/create_item",
+            title: "VPN",
+            reference_id: "child",
+            placement: "before",
+        }));
+    });
+
+    it("adding a first child under a LEAF item positions it 'inside' that item directly", async () => {
+        const {el, hass} = await renderList({
+            entity_id: ENTITY_ID,
+            items: [makeItem({id: "leaf", title: "Groceries"})],
+        });
+        await enterAddMode(el);
+
+        childQuickAddToggle(el, "leaf").click();
+        await settle(el);
+
+        const input = findRow(el, "leaf").shadowRoot.querySelector(".child-quick-add-row input") as HTMLInputElement;
+        input.value = "Milk";
+        input.dispatchEvent(new Event("input"));
+        input.dispatchEvent(new KeyboardEvent("keydown", {key: "Enter", bubbles: true, composed: true}));
+        await flushAsync();
+
+        expect(hass.connection.sent).toContainEqual(expect.objectContaining({
+            type: "todo_overlay/create_item",
+            title: "Milk",
+            reference_id: "leaf",
+            placement: "inside",
+        }));
+    });
+
+    it("auto-expands a collapsed parent when its quick-add field is opened", async () => {
+        const {el} = await renderList({
+            entity_id: ENTITY_ID,
+            items: [makeItem({id: "parent", title: "Home Assistant", children: [makeItem({id: "child", title: "Firewall"})]})],
+        });
+
+        (el as unknown as {collapsedIds: Set<string>}).collapsedIds = new Set(["parent"]);
+        await settle(el);
+        expect(summaryTexts(el)).toEqual(["Home Assistant"]);
+
+        await enterAddMode(el);
+        childQuickAddToggle(el, "parent").click();
+        await settle(el);
+
+        expect(summaryTexts(el)).toEqual(["Home Assistant", "Firewall"]);
+    });
+
+    it("closing the root quick add (add-mode) also closes every open per-parent field", async () => {
+        const {el} = await renderList({
+            entity_id: ENTITY_ID,
+            items: [makeItem({id: "parent", title: "Home Assistant", children: [makeItem({id: "child", title: "Firewall"})]})],
+        });
+        await enterAddMode(el);
+
+        childQuickAddToggle(el, "parent").click();
+        await settle(el);
+        expect(findRow(el, "parent").shadowRoot.querySelector(".child-quick-add-row")).not.toBeNull();
+
+        // Close add-mode itself - the "close everything" action.
+        await enterAddMode(el); // toggling again closes it
+
+        expect(findRow(el, "parent").shadowRoot.querySelector(".child-quick-add-row")).toBeNull();
+        expect(findRow(el, "parent").shadowRoot.querySelector(".child-quick-add-toggle")).toBeNull();
+    });
+
+    it("clicking a parent's own toggle again closes just that one field", async () => {
+        const {el} = await renderList({
+            entity_id: ENTITY_ID,
+            items: [makeItem({id: "parent", title: "Home Assistant", children: [makeItem({id: "child", title: "Firewall"})]})],
+        });
+        await enterAddMode(el);
+
+        childQuickAddToggle(el, "parent").click();
+        await settle(el);
+        expect(childQuickAddToggle(el, "parent").classList.contains("active")).toBe(true);
+
+        childQuickAddToggle(el, "parent").click();
+        await settle(el);
+
+        expect(findRow(el, "parent").shadowRoot.querySelector(".child-quick-add-row")).toBeNull();
+    });
+
+    it("add-mode, delete-mode, and reorder-mode are mutually exclusive", async () => {
+        const {el} = await renderList(
+            {entity_id: ENTITY_ID, items: [makeItem({id: "1", title: "Milk", completed: false})]},
+            {showReorderToggle: true},
+        );
+
+        await enterAddMode(el);
+        expect((el as unknown as {addModeActive: boolean}).addModeActive).toBe(true);
+
+        (el.shadowRoot?.querySelector("button[aria-label='Reorder items']") as HTMLElement).click();
+        await settle(el);
+
+        expect((el as unknown as {addModeActive: boolean}).addModeActive).toBe(false);
+        expect((el as unknown as {reorderModeActive: boolean}).reorderModeActive).toBe(true);
     });
 });
 
@@ -1603,6 +1781,165 @@ describe("todo-overlay-list save-load dialog", () => {
     });
 });
 
+// A plain tap on the clear-completed (trash) toolbar button keeps doing
+// exactly what it always did; holding it past the long-press threshold
+// and releasing offers the much more destructive "delete literally
+// everything" instead, gated behind a confirm dialog.
+describe("todo-overlay-list clear-all (hold the clear-completed button)", () => {
+    function clearButton(el: TodoOverlayList): HTMLElement {
+        return el.shadowRoot?.querySelector("button[aria-label='Clear completed']") as HTMLElement;
+    }
+
+    it("a quick tap still just clears completed items, with no confirm dialog", async () => {
+        const {el, hass} = await renderList({
+            entity_id: ENTITY_ID,
+            items: [makeItem({id: "1", title: "Milk", completed: true})],
+        });
+
+        const button = clearButton(el);
+        button.dispatchEvent(new PointerEvent("pointerdown"));
+        button.dispatchEvent(new PointerEvent("pointerup"));
+        await flushAsync();
+
+        expect(hass.connection.sent).toContainEqual(expect.objectContaining({
+            type: "todo_overlay/clear_completed",
+            entity_id: ENTITY_ID,
+        }));
+        expect(hass.connection.sent).not.toContainEqual(expect.objectContaining({type: "todo_overlay/clear_all"}));
+        expect(el.shadowRoot?.querySelector("todo-overlay-confirm-dialog")).toBeNull();
+    });
+
+    it("shows a ripple as soon as the button is pressed, only marked active once held long enough to trigger", async () => {
+        vi.useFakeTimers({shouldAdvanceTime: true});
+
+        try {
+            const {el} = await renderList({
+                entity_id: ENTITY_ID,
+                items: [makeItem({id: "1", title: "Milk"})],
+            });
+
+            const button = clearButton(el);
+            button.dispatchEvent(new PointerEvent("pointerdown"));
+            await el.updateComplete;
+
+            let ripple = button.querySelector(".hold-ripple");
+            expect(ripple, "ripple should appear as soon as the button is pressed").not.toBeNull();
+            expect(ripple?.classList.contains("active"), "not yet held long enough to be active").toBe(false);
+
+            // The row's own hold-ripple pattern schedules a requestUpdate()
+            // for the exact moment the threshold is crossed (see
+            // clearButtonHoldTimer) - advancing past it and letting that
+            // fire is what flips the ripple to active, not the release.
+            await vi.advanceTimersByTimeAsync(LONG_PRESS_MS + 50);
+
+            ripple = button.querySelector(".hold-ripple");
+            expect(ripple?.classList.contains("active"), "held long enough - ripple should now read as active").toBe(true);
+
+            button.dispatchEvent(new PointerEvent("pointerup"));
+            await el.updateComplete;
+
+            expect(button.querySelector(".hold-ripple"), "ripple should clear on release").toBeNull();
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+
+    it("holding past the long-press threshold, then releasing, opens the confirm dialog instead of clearing anything", async () => {
+        vi.useFakeTimers({shouldAdvanceTime: true});
+
+        try {
+            const {el, hass} = await renderList({
+                entity_id: ENTITY_ID,
+                items: [makeItem({id: "1", title: "Milk"})],
+            });
+
+            const button = clearButton(el);
+            button.dispatchEvent(new PointerEvent("pointerdown"));
+            vi.advanceTimersByTime(600);
+            button.dispatchEvent(new PointerEvent("pointerup"));
+            await el.updateComplete;
+
+            const dialog = el.shadowRoot?.querySelector("todo-overlay-confirm-dialog");
+            expect(dialog, "confirm dialog should be open").not.toBeNull();
+
+            // Regression check: these three used to be set via plain HTML
+            // attributes (heading="...") rather than Lit property bindings
+            // (.heading=${...}) - silently inert, since the component
+            // declares them with attribute: false. Reading the actual
+            // properties here (not just checking the dialog is present)
+            // is what would have caught that - the dialog "opened" either
+            // way, just with an empty message and generic defaults.
+            const dialogProps = dialog as unknown as {heading: string; message: string; confirmLabel: string};
+            expect(dialogProps.heading).toBe("Delete all items?");
+            expect(dialogProps.message).not.toBe("");
+            expect(dialogProps.confirmLabel).toBe("Delete all");
+
+            expect(hass.connection.sent).not.toContainEqual(expect.objectContaining({type: "todo_overlay/clear_completed"}));
+            expect(hass.connection.sent).not.toContainEqual(expect.objectContaining({type: "todo_overlay/clear_all"}));
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+
+    it("confirming the dialog deletes every item, completed or not, and reloads", async () => {
+        vi.useFakeTimers({shouldAdvanceTime: true});
+
+        try {
+            const {el, hass} = await renderList({
+                entity_id: ENTITY_ID,
+                items: [
+                    makeItem({id: "1", title: "Milk", completed: false}),
+                    makeItem({id: "2", title: "Bread", completed: true}),
+                ],
+            });
+
+            const button = clearButton(el);
+            button.dispatchEvent(new PointerEvent("pointerdown"));
+            vi.advanceTimersByTime(600);
+            button.dispatchEvent(new PointerEvent("pointerup"));
+            await el.updateComplete;
+
+            const dialog = el.shadowRoot?.querySelector("todo-overlay-confirm-dialog")!;
+            dialog.dispatchEvent(new CustomEvent("dialog-confirm", {bubbles: true, composed: true}));
+            await vi.advanceTimersByTimeAsync(0);
+
+            expect(hass.connection.sent).toContainEqual(expect.objectContaining({
+                type: "todo_overlay/clear_all",
+                entity_id: ENTITY_ID,
+            }));
+            expect(el.shadowRoot?.querySelector("todo-overlay-confirm-dialog")).toBeNull();
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+
+    it("cancelling the dialog deletes nothing", async () => {
+        vi.useFakeTimers({shouldAdvanceTime: true});
+
+        try {
+            const {el, hass} = await renderList({
+                entity_id: ENTITY_ID,
+                items: [makeItem({id: "1", title: "Milk"})],
+            });
+
+            const button = clearButton(el);
+            button.dispatchEvent(new PointerEvent("pointerdown"));
+            vi.advanceTimersByTime(600);
+            button.dispatchEvent(new PointerEvent("pointerup"));
+            await el.updateComplete;
+
+            const dialog = el.shadowRoot?.querySelector("todo-overlay-confirm-dialog")!;
+            dialog.dispatchEvent(new CustomEvent("dialog-close", {bubbles: true, composed: true}));
+            await el.updateComplete;
+
+            expect(hass.connection.sent).not.toContainEqual(expect.objectContaining({type: "todo_overlay/clear_all"}));
+            expect(el.shadowRoot?.querySelector("todo-overlay-confirm-dialog")).toBeNull();
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+});
+
 describe("todo-overlay-list row delete button", () => {
     it("a tree-delete-item event from a row removes that item and reloads", async () => {
         const {el, hass} = await renderList({
@@ -1627,5 +1964,124 @@ describe("todo-overlay-list row delete button", () => {
         expect(hass.connection.sent.filter(m => m.type === "todo_overlay/get_list").length)
             .toBeGreaterThan(hass.connection.sent.slice(0, sentBefore)
                 .filter(m => m.type === "todo_overlay/get_list").length);
+    });
+});
+
+// Live-reported: an earlier version lifted the drag ghost clear of the
+// pointer entirely (to keep a touch drag's target row visible under
+// it), and it looked visually disconnected from what was actually
+// being dragged - on both touch AND mouse. Replaced with three opt-in,
+// A/B-testable treatments (see DragGhostStyle in models.ts) that only
+// ever change the ghost's own size/opacity, or add a separate satellite
+// element near it - never its position, which always stays pinned
+// exactly to the pointer regardless of which (if any) style is active.
+describe("todo-overlay-list drag ghost styles", () => {
+    function setDragState(el: TodoOverlayList, overrides: Record<string, unknown>) {
+        Object.assign(el as unknown as Record<string, unknown>, overrides);
+    }
+
+    async function renderHoveringParent(dragGhostStyle?: "none" | "label" | "shrink" | "translucent") {
+        const {el} = await renderList(
+            {
+                entity_id: ENTITY_ID,
+                items: [
+                    makeItem({id: "parent", title: "Home Assistant", children: []}),
+                    makeItem({id: "leaf", title: "Groceries"}),
+                ],
+            },
+            dragGhostStyle ? {dragGhostStyle} : {},
+        );
+
+        setDragState(el, {
+            draggedId: "leaf",
+            ghostPosition: {x: 100, y: 200},
+            dragGhostOffset: {x: 10, y: 15},
+            dragGhostSize: {width: 300, height: 40},
+            hoverId: "parent",
+            hoverPlacement: "inside",
+        });
+        await settle(el);
+
+        return el;
+    }
+
+    it("keeps the ghost's own position pinned exactly to the pointer minus the grab offset, regardless of style", async () => {
+        const el = await renderHoveringParent("shrink");
+
+        const ghost = el.shadowRoot?.querySelector(".drag-ghost") as HTMLElement;
+        expect(ghost.style.left).toBe("90px");
+        expect(ghost.style.top).toBe("185px");
+    });
+
+    it("applies no special treatment at all while style is 'none', even hovering a parent", async () => {
+        const el = await renderHoveringParent("none");
+
+        const ghost = el.shadowRoot?.querySelector(".drag-ghost") as HTMLElement;
+        expect(ghost.classList.contains("shrink")).toBe(false);
+        expect(ghost.classList.contains("translucent")).toBe(false);
+        expect(ghost.style.width).toBe("300px");
+        expect(el.shadowRoot?.querySelector(".drag-ghost-label")).toBeNull();
+    });
+
+    it("'shrink' collapses the ghost's width only while hovering a valid parent ('inside')", async () => {
+        const el = await renderHoveringParent("shrink");
+
+        const ghost = el.shadowRoot?.querySelector(".drag-ghost") as HTMLElement;
+        expect(ghost.classList.contains("shrink")).toBe(true);
+        expect(parseInt(ghost.style.width, 10)).toBeLessThan(100);
+
+        // Switching to a before/after (reorder) target is NOT a
+        // reparent - the ghost never obscures anything a shadow-box gap
+        // doesn't already show elsewhere, so no treatment applies.
+        setDragState(el, {hoverPlacement: "before"});
+        await settle(el);
+
+        expect(el.shadowRoot?.querySelector(".drag-ghost")?.classList.contains("shrink")).toBe(false);
+    });
+
+    it("'translucent' fades the ghost only while hovering a valid parent", async () => {
+        const el = await renderHoveringParent("translucent");
+
+        expect(el.shadowRoot?.querySelector(".drag-ghost")?.classList.contains("translucent")).toBe(true);
+    });
+
+    it("'label' renders a floating pill naming the parent, directly under the ghost - not near the raw pointer", async () => {
+        const el = await renderHoveringParent("label");
+
+        const label = el.shadowRoot?.querySelector(".drag-ghost-label") as HTMLElement;
+        expect(label).not.toBeNull();
+        expect(label.textContent?.trim()).toBe("Add to: Home Assistant");
+
+        // Same left edge as the ghost itself (90 = 100 - 10 grab
+        // offset), directly beneath it (185 ghost-top + 40 ghost height
+        // + 8 gap) - anchored to the GHOST's own box, not the raw
+        // pointer, so it always reads as attached to what's being
+        // dragged regardless of where on the row it was grabbed.
+        expect(label.style.left).toBe("90px");
+        expect(label.style.top).toBe("233px");
+    });
+
+    it("shows no label while hovering a before/after target, even with 'label' selected", async () => {
+        const {el} = await renderList(
+            {
+                entity_id: ENTITY_ID,
+                items: [
+                    makeItem({id: "parent", title: "Home Assistant", children: [makeItem({id: "child", title: "Firewall"})]}),
+                    makeItem({id: "leaf", title: "Groceries"}),
+                ],
+            },
+            {dragGhostStyle: "label"},
+        );
+
+        setDragState(el, {
+            draggedId: "leaf",
+            ghostPosition: {x: 100, y: 200},
+            dragGhostOffset: {x: 0, y: 0},
+            hoverId: "child",
+            hoverPlacement: "before",
+        });
+        await settle(el);
+
+        expect(el.shadowRoot?.querySelector(".drag-ghost-label")).toBeNull();
     });
 });

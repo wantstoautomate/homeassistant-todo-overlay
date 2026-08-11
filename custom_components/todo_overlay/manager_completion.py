@@ -265,3 +265,48 @@ class CompletionMixin:
                 await self._metadata_store.remove_tags_for_items(entity_id, removed_ids)
 
         return removed_ids
+
+    async def clear_all(
+        self,
+        entity_id: str,
+    ) -> list[str]:
+        """Remove every item in the list - active or completed, parents
+        and children alike. Same top-level-plus-descendants removal
+        shape as clear_completed, just without the "only if complete"
+        gate - a parent is only ever removed directly (never via a
+        separate call for each descendant), same reasoning as there.
+
+        Returns the ids of everything removed.
+        """
+
+        async with self._lock_for(entity_id):
+            items = await self._adapter.get_items(entity_id)
+            positions = await self._metadata_store.get_relationships(entity_id)
+
+            root_ids = [
+                item.id
+                for item in items
+                if self._parent_id_of(item.id, positions) is None
+            ]
+
+            removed_ids: list[str] = []
+
+            for root_id in root_ids:
+                removed_ids.append(root_id)
+                removed_ids.extend(self._descendants(root_id, positions, items))
+
+            item_by_id = {item.id: item for item in items}
+
+            for removed_id in removed_ids:
+                await self._adapter.remove_item(entity_id, removed_id)
+                removed_item = item_by_id.get(removed_id)
+                self._fire_event(
+                    entity_id, removed_id, removed_item.title if removed_item else "", "removed",
+                )
+
+            if removed_ids:
+                await self._metadata_store.remove_positions(entity_id, removed_ids)
+                await self._metadata_store.remove_quantities(entity_id, removed_ids)
+                await self._metadata_store.remove_tags_for_items(entity_id, removed_ids)
+
+        return removed_ids

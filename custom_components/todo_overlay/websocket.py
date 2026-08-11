@@ -9,6 +9,7 @@ from homeassistant.helpers import config_validation as cv
 
 from .const import (
     WS_TYPE_ADD_TAG,
+    WS_TYPE_CLEAR_ALL,
     WS_TYPE_CLEAR_COMPLETED,
     WS_TYPE_CREATE_ITEM,
     WS_TYPE_DELETE_ITEM,
@@ -273,6 +274,31 @@ async def websocket_clear_completed(
 
 @websocket_api.websocket_command(
     {
+        vol.Required("type"): WS_TYPE_CLEAR_ALL,
+        vol.Required("entity_id"): cv.entity_id,
+    }
+)
+@websocket_api.async_response
+@_handle_manager_errors
+async def websocket_clear_all(
+    hass: HomeAssistant,
+    connection: websocket_api.ActiveConnection,
+    msg,
+) -> None:
+    """Remove every item in the list - active or completed, parents and
+    children alike."""
+
+    manager = get_manager(hass)
+
+    removed = await manager.clear_all(
+        entity_id=msg["entity_id"],
+    )
+
+    connection.send_result(msg["id"], {"removed": removed})
+
+
+@websocket_api.websocket_command(
+    {
         vol.Required("type"): WS_TYPE_SAVE_LIST,
         vol.Required("entity_id"): cv.entity_id,
         vol.Required("name"): str,
@@ -381,6 +407,8 @@ async def websocket_delete_saved_list(
         vol.Optional("quantity"): str,
         vol.Optional("tags"): [str],
         vol.Optional("trigger_on_due"): bool,
+        vol.Optional("reference_id"): str,
+        vol.Optional("placement"): vol.In(["before", "after", "inside"]),
     }
 )
 @websocket_api.async_response
@@ -390,7 +418,10 @@ async def websocket_create_item(
     connection: websocket_api.ActiveConnection,
     msg,
 ) -> None:
-    """Create an item, including overlay-only fields like quantity."""
+    """Create an item, including overlay-only fields like quantity -
+    optionally positioned relative to an existing item (reference_id +
+    placement, same semantics as move_item) rather than wherever the
+    native adapter's own add_item happens to put it."""
 
     manager = get_manager(hass)
 
@@ -403,6 +434,8 @@ async def websocket_create_item(
         quantity=msg.get("quantity"),
         tags=msg.get("tags"),
         trigger_on_due=msg.get("trigger_on_due", False),
+        reference_id=msg.get("reference_id"),
+        placement=msg.get("placement"),
     )
 
     connection.send_result(msg["id"], {"id": item_id})
@@ -616,6 +649,7 @@ def async_register_websocket(hass: HomeAssistant) -> None:
         websocket_set_completed,
         websocket_restore_completed,
         websocket_clear_completed,
+        websocket_clear_all,
         websocket_save_list,
         websocket_load_list,
         websocket_list_saved,

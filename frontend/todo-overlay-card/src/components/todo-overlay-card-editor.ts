@@ -2,6 +2,7 @@ import {LitElement, html, css} from "lit";
 import {customElement, property, state} from "lit/decorators.js";
 
 import type {HassLike} from "../hass";
+import type {DragGhostStyle} from "../models";
 import type {SortBy, SortOrder} from "../sort";
 import type {TodoOverlayCardConfig} from "../todo-overlay";
 
@@ -162,6 +163,12 @@ export class TodoOverlayCardEditor extends LitElement {
         this.emitConfigChanged({...this._config, sort_order: value});
     }
 
+    private onDragGhostStyleChanged(e: Event) {
+        const value = (e.target as HTMLSelectElement).value as DragGhostStyle;
+
+        this.emitConfigChanged({...this._config, drag_ghost_style: value === "label" ? undefined : value});
+    }
+
     private onSwitchChanged(field: keyof TodoOverlayCardConfig, defaultValue: boolean) {
         return (e: Event) => {
             const checked = (e.target as HTMLInputElement).checked;
@@ -298,6 +305,22 @@ export class TodoOverlayCardEditor extends LitElement {
                             @change=${this.onSwitchChanged("show_reorder_toggle", true)}
                         ></ha-switch>
                     </ha-formfield>
+
+                    <div class="field select-field">
+                        <label for="todo-overlay-drag-ghost-style">
+                            Drag ghost style while hovering a parent
+                        </label>
+                        <select
+                            id="todo-overlay-drag-ghost-style"
+                            .value=${this._config.drag_ghost_style ?? "label"}
+                            @change=${this.onDragGhostStyleChanged}
+                        >
+                            <option value="label">Floating label naming the parent (default)</option>
+                            <option value="shrink">Shrink the ghost</option>
+                            <option value="translucent">Make the ghost translucent</option>
+                            <option value="none">None</option>
+                        </select>
+                    </div>
                 </div>
             </details>
         `;

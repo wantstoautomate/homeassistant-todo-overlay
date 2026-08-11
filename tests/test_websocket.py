@@ -239,6 +239,21 @@ async def test_websocket_clear_completed_returns_removed_ids():
     assert result["removed"] == ["1"]
 
 
+@pytest.mark.asyncio
+async def test_websocket_clear_all_removes_every_item_regardless_of_completion():
+    manager = make_manager(items=[
+        TodoItem(id="1", title="Shopping", completed=True),
+        TodoItem(id="2", title="Milk", completed=False),
+    ])
+
+    connection = await call_handler(
+        websocket.websocket_clear_all, manager, {"entity_id": ENTITY_ID},
+    )
+
+    msg_id, result = connection.results[0]
+    assert set(result["removed"]) == {"1", "2"}
+
+
 # --- save_list / load_list / list_saved / delete_saved_list --------------
 
 @pytest.mark.asyncio
@@ -309,6 +324,31 @@ async def test_websocket_create_item_returns_new_id():
     bread = next(item for item in items if item["title"] == "Bread")
     assert bread["quantity"] == "2"
     assert bread["tags"] == ["bakery"]
+
+
+@pytest.mark.asyncio
+async def test_websocket_create_item_with_reference_id_and_placement_positions_it():
+    manager = make_manager(
+        items=[TodoItem(id="parent", title="Home Assistant", completed=False)],
+    )
+
+    connection = await call_handler(
+        websocket.websocket_create_item, manager,
+        {
+            "entity_id": ENTITY_ID, "title": "Firewall",
+            "reference_id": "parent", "placement": "inside",
+        },
+    )
+
+    msg_id, result = connection.results[0]
+    new_id = result["id"]
+
+    list_connection = await call_handler(
+        websocket.websocket_get_list, manager, {"entity_id": ENTITY_ID, "group_completed": False},
+    )
+    items = list_connection.results[0][1]["items"]
+    parent = next(item for item in items if item["id"] == "parent")
+    assert [child["id"] for child in parent["children"]] == [new_id]
 
 
 @pytest.mark.asyncio
@@ -498,6 +538,7 @@ def test_async_register_websocket_registers_every_handler():
         "todo_overlay/set_completed",
         "todo_overlay/restore_completed",
         "todo_overlay/clear_completed",
+        "todo_overlay/clear_all",
         "todo_overlay/save_list",
         "todo_overlay/load_list",
         "todo_overlay/list_saved",

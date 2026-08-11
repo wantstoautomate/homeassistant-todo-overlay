@@ -20,38 +20,8 @@ class PositionMixin:
     ) -> None:
         """Move an item before, after, or inside another item."""
 
-        if reference_id == child_id:
-            raise CycleError(f"Cannot move {child_id} relative to itself")
-
         async with self._lock_for(entity_id):
-            items = await self._adapter.get_items(entity_id)
-            positions = await self._metadata_store.get_relationships(entity_id)
-
-            reference_position = positions.get(reference_id)
-            reference_parent_id = (
-                reference_position.parent_id if reference_position else None
-            )
-
-            new_parent_id = reference_id if placement == "inside" else reference_parent_id
-
-            self._ensure_no_cycle(child_id, new_parent_id, positions)
-
-            siblings = self._siblings(items, positions, new_parent_id, exclude=child_id)
-
-            if placement == "inside":
-                siblings.append(child_id)
-            else:
-                reference_index = siblings.index(reference_id)
-                insert_at = reference_index if placement == "before" else reference_index + 1
-                siblings.insert(insert_at, child_id)
-
-            await self._metadata_store.set_positions(
-                entity_id,
-                {
-                    item_id: ItemPosition(parent_id=new_parent_id, order=order)
-                    for order, item_id in enumerate(siblings)
-                },
-            )
+            await self._reposition(entity_id, child_id, reference_id, placement)
 
         # Purely overlay metadata - never touches the native entity's
         # items or state at all, so without this, no OTHER card instance
@@ -59,10 +29,58 @@ class PositionMixin:
         # happened at all (see todo-overlay-list.ts's own comment on its
         # hass-state-based refresh trigger, which only reacts to a native
         # todo.* entity actually changing).
+        items = await self._adapter.get_items(entity_id)
         moved_item = next((item for item in items if item.id == child_id), None)
 
         if moved_item is not None:
             self._fire_event(entity_id, child_id, moved_item.title, "moved")
+
+    async def _reposition(
+        self,
+        entity_id: str,
+        child_id: str,
+        reference_id: str,
+        placement: Placement,
+    ) -> None:
+        """Core before/after/inside repositioning - no locking, no event
+        firing. Callers own both themselves: move_item() locks and fires
+        its own "moved" event; create_item()'s own optional positioning
+        (see manager_items.py) needs this to run inside its OWN
+        already-held lock instead, firing only a single "created" event
+        for the whole create-and-place operation.
+        """
+
+        if reference_id == child_id:
+            raise CycleError(f"Cannot move {child_id} relative to itself")
+
+        items = await self._adapter.get_items(entity_id)
+        positions = await self._metadata_store.get_relationships(entity_id)
+
+        reference_position = positions.get(reference_id)
+        reference_parent_id = (
+            reference_position.parent_id if reference_position else None
+        )
+
+        new_parent_id = reference_id if placement == "inside" else reference_parent_id
+
+        self._ensure_no_cycle(child_id, new_parent_id, positions)
+
+        siblings = self._siblings(items, positions, new_parent_id, exclude=child_id)
+
+        if placement == "inside":
+            siblings.append(child_id)
+        else:
+            reference_index = siblings.index(reference_id)
+            insert_at = reference_index if placement == "before" else reference_index + 1
+            siblings.insert(insert_at, child_id)
+
+        await self._metadata_store.set_positions(
+            entity_id,
+            {
+                item_id: ItemPosition(parent_id=new_parent_id, order=order)
+                for order, item_id in enumerate(siblings)
+            },
+        )
 
     async def transfer_item(
         self,

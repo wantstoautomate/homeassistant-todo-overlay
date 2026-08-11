@@ -2,6 +2,7 @@ import {LitElement, html, css, nothing} from "lit";
 import {customElement, property} from "lit/decorators.js";
 
 import type {HassLike} from "./hass";
+import type {DragGhostStyle} from "./models";
 import type {SortBy, SortOrder} from "./sort";
 
 import "./components/todo-overlay-list";
@@ -78,6 +79,11 @@ export interface TodoOverlayCardConfig {
     // - mouse users never see it, since hold-anywhere-to-drag already
     // works reliably for them.
     show_reorder_toggle?: boolean;
+    // Cosmetic - see DragGhostStyle's own comment in models.ts for what
+    // each option does. Defaults to "label"; "none" and the other two
+    // remain available (card editor's Advanced section) for anyone who
+    // prefers a different treatment.
+    drag_ghost_style?: DragGhostStyle;
 }
 
 function friendlyName(hass: HassLike, entityId: string): string {
@@ -184,6 +190,7 @@ export class TodoOverlayCard extends LitElement {
                             .showFilterMenu=${this.config.show_filter_menu ?? false}
                             .showReorderToggle=${this.config.show_reorder_toggle ?? true}
                             .moveCompletedItems=${this.config.move_completed_items ?? false}
+                            .dragGhostStyle=${this.config.drag_ghost_style ?? "label"}
                         ></todo-overlay-list>
                     </div>
                 `)}
