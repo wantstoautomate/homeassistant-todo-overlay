@@ -2,7 +2,7 @@ import {afterEach, describe, expect, it, vi} from "vitest";
 
 import "../src/components/todo-tree-item";
 import type {TodoTreeItem} from "../src/components/todo-tree-item";
-import {SWIPE_ACTION_THRESHOLD_PX, SWIPE_MAX_REVEAL_PX} from "../src/components/todo-tree-item";
+import {SWIPE_ACTION_THRESHOLD_PX, SWIPE_AXIS_LOCK_PX, SWIPE_MAX_REVEAL_PX} from "../src/components/todo-tree-item";
 import {LONG_PRESS_MS, type TodoItem} from "../src/models";
 
 function makeItem(overrides: Partial<TodoItem> = {}): TodoItem {
@@ -555,6 +555,75 @@ describe("todo-overlay-tree-item", () => {
             // row only ever dispatches the same toggle event regardless
             // of current state, exactly once per qualifying swipe.
             expect(toggleCount).toBe(1);
+        });
+
+        // Live-reported: a page-level swipe-between-tabs add-on (HACS'
+        // "Home Assistant Swipe Navigation") still navigated tabs on
+        // release even while swiping a row. Confirmed via its own
+        // source: it listens for raw touchmove/touchend on an ancestor
+        // of every card, in the default BUBBLE phase - a completely
+        // separate event stream from the pointermove events this
+        // gesture is otherwise built on, so preventDefault() on THOSE
+        // was never going to reach it. onWindowTouchTail's window-level
+        // CAPTURE-phase listener runs before any such bubble listener
+        // ever sees the event at all.
+        describe("touch-tail propagation guard (page-level swipe-nav add-ons)", () => {
+            it("stops a locked-in horizontal swipe's touchmove from reaching a bubble-phase listener higher up the page", async () => {
+                const el = await renderItem(makeItem({id: "1"}));
+                touchPress(el);
+                move(el, -(SWIPE_AXIS_LOCK_PX + 5), 0);
+                await el.updateComplete;
+
+                let sawItOnDocument = false;
+                const onDocumentTouchMove = () => { sawItOnDocument = true; };
+                document.addEventListener("touchmove", onDocumentTouchMove);
+
+                try {
+                    document.body.dispatchEvent(new Event("touchmove", {bubbles: true, cancelable: true}));
+                    expect(sawItOnDocument).toBe(false);
+                } finally {
+                    document.removeEventListener("touchmove", onDocumentTouchMove);
+                    touchRelease();
+                }
+            });
+
+            it("leaves a vertical (non-swipe) touch gesture's touchmove alone - normal scrolling and page-level swipes elsewhere are unaffected", async () => {
+                const el = await renderItem(makeItem({id: "1"}));
+                touchPress(el);
+                move(el, 2, SWIPE_AXIS_LOCK_PX + 20);
+                await el.updateComplete;
+
+                let sawItOnDocument = false;
+                const onDocumentTouchMove = () => { sawItOnDocument = true; };
+                document.addEventListener("touchmove", onDocumentTouchMove);
+
+                try {
+                    document.body.dispatchEvent(new Event("touchmove", {bubbles: true, cancelable: true}));
+                    expect(sawItOnDocument).toBe(true);
+                } finally {
+                    document.removeEventListener("touchmove", onDocumentTouchMove);
+                    touchRelease();
+                }
+            });
+
+            it("no longer intercepts touchmove once the gesture has ended", async () => {
+                const el = await renderItem(makeItem({id: "1"}));
+                touchPress(el);
+                move(el, -(SWIPE_AXIS_LOCK_PX + 5), 0);
+                await el.updateComplete;
+                touchRelease();
+
+                let sawItOnDocument = false;
+                const onDocumentTouchMove = () => { sawItOnDocument = true; };
+                document.addEventListener("touchmove", onDocumentTouchMove);
+
+                try {
+                    document.body.dispatchEvent(new Event("touchmove", {bubbles: true, cancelable: true}));
+                    expect(sawItOnDocument).toBe(true);
+                } finally {
+                    document.removeEventListener("touchmove", onDocumentTouchMove);
+                }
+            });
         });
     });
 

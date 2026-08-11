@@ -2084,4 +2084,87 @@ describe("todo-overlay-list drag ghost styles", () => {
 
         expect(el.shadowRoot?.querySelector(".drag-ghost-label")).toBeNull();
     });
+
+    // Live-reported on a real phone: touch can only ever start a drag
+    // from the reorder handle, which sits at the row's far-right edge -
+    // so the grab offset baked into the ghost's position ends up close
+    // to the row's ENTIRE width. A natural thumb drag curving even
+    // slightly left off that edge (ordinary ergonomics, not user error)
+    // then amplified into the ghost - and the "label" style's pill
+    // anchored under it - jumping far to the left, often off-screen.
+    describe("touch grab-offset cap and viewport clamp", () => {
+        it("caps a TOUCH drag's horizontal grab offset so the ghost stays close to the pointer, regardless of where on the row it was grabbed", async () => {
+            const {el} = await renderList({
+                entity_id: ENTITY_ID,
+                items: [makeItem({id: "1", title: "Milk"})],
+            });
+
+            const draggable = el as unknown as DraggableList;
+            draggable.draggedId = "1";
+            draggable.onDragStart(new CustomEvent("tree-drag-start", {
+                detail: {
+                    rect: {x: 0, y: 0, width: 300, height: 40},
+                    pointerX: 300,
+                    pointerY: 100,
+                    grabOffsetX: 280,
+                    grabOffsetY: 20,
+                    pointerType: "touch",
+                },
+            }));
+            await settle(el);
+
+            const ghost = el.shadowRoot?.querySelector(".drag-ghost") as HTMLElement;
+            // Uncapped this would be 300 - 280 = 20px - the whole point
+            // is that it ISN'T that, and stays much closer to the
+            // pointer (300) instead.
+            expect(parseInt(ghost.style.left, 10)).toBeGreaterThan(200);
+        });
+
+        it("does not cap a MOUSE drag's horizontal grab offset - a cursor has no equivalent edge-anchoring problem", async () => {
+            const {el} = await renderList({
+                entity_id: ENTITY_ID,
+                items: [makeItem({id: "1", title: "Milk"})],
+            });
+
+            const draggable = el as unknown as DraggableList;
+            draggable.draggedId = "1";
+            draggable.onDragStart(new CustomEvent("tree-drag-start", {
+                detail: {
+                    rect: {x: 0, y: 0, width: 300, height: 40},
+                    pointerX: 300,
+                    pointerY: 100,
+                    grabOffsetX: 280,
+                    grabOffsetY: 20,
+                    pointerType: "mouse",
+                },
+            }));
+            await settle(el);
+
+            const ghost = el.shadowRoot?.querySelector(".drag-ghost") as HTMLElement;
+            expect(ghost.style.left).toBe("20px");
+        });
+
+        it("clamps the ghost to stay fully on-screen even from a wildly off-screen raw position", async () => {
+            const el = await renderHoveringParent("shrink");
+
+            setDragState(el, {ghostPosition: {x: -5000, y: -5000}, dragGhostOffset: {x: 0, y: 0}});
+            await settle(el);
+
+            const ghost = el.shadowRoot?.querySelector(".drag-ghost") as HTMLElement;
+            expect(parseInt(ghost.style.left, 10)).toBeGreaterThanOrEqual(0);
+            expect(parseInt(ghost.style.top, 10)).toBeGreaterThanOrEqual(0);
+        });
+
+        it("clamps the 'label' style's pill to stay on-screen too, even from a wildly off-screen raw position", async () => {
+            const el = await renderHoveringParent("label");
+
+            setDragState(el, {ghostPosition: {x: 100000, y: 100000}, dragGhostOffset: {x: 0, y: 0}});
+            await settle(el);
+
+            const label = el.shadowRoot?.querySelector(".drag-ghost-label") as HTMLElement;
+            expect(label).not.toBeNull();
+            expect(parseInt(label.style.left, 10)).toBeLessThan(100000);
+            expect(parseInt(label.style.top, 10)).toBeLessThan(100000);
+        });
+    });
 });

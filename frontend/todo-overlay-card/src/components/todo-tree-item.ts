@@ -1111,6 +1111,16 @@ export class TodoTreeItem extends LitElement {
         // need to end the gesture the same way, or a touch drag would
         // get stuck with dangling listeners and never finalize.
         window.addEventListener("pointercancel", this.onWindowPointerUp, {capture: true});
+        // See onWindowTouchTail's own comment - these are the RAW touch
+        // events, a separate parallel stream from the pointer events
+        // above, needed only to stop a page-level swipe-navigation
+        // add-on (confirmed live: github.com/zanna-37/hass-swipe-
+        // navigation, which listens for these specifically, not
+        // Pointer Events) from also treating a row's own swipe gesture
+        // as a dashboard tab change.
+        window.addEventListener("touchmove", this.onWindowTouchTail, {capture: true});
+        window.addEventListener("touchend", this.onWindowTouchTail, {capture: true});
+        window.addEventListener("touchcancel", this.onWindowTouchTail, {capture: true});
 
         this.dispatchEvent(
             new CustomEvent("tree-pointer-down", {
@@ -1278,10 +1288,31 @@ export class TodoTreeItem extends LitElement {
         this.pointerUp();
     };
 
+    // Stops a locked-in horizontal swipe's raw touch events from ever
+    // reaching a page-level gesture recognizer attached higher up the
+    // DOM (e.g. a swipe-between-tabs add-on listening on the app's own
+    // layout element, in the default bubble phase) - this listener is
+    // attached at window with {capture: true} (see pointerDown), which
+    // runs BEFORE any bubble-phase listener anywhere else on the page,
+    // so stopping propagation here reliably keeps it from ever seeing
+    // enough of the gesture to register its own swipe. Left alone
+    // entirely for anything that isn't a locked-in horizontal swipe on
+    // THIS row (an ambiguous press, a vertical scroll, a reorder-handle
+    // drag) - swiping to navigate everywhere else on the dashboard is
+    // completely unaffected.
+    private onWindowTouchTail = (e: TouchEvent) => {
+        if (this.swipeAxis === "horizontal") {
+            e.stopPropagation();
+        }
+    };
+
     private detachWindowListeners() {
         window.removeEventListener("pointermove", this.onWindowPointerMove, {capture: true});
         window.removeEventListener("pointerup", this.onWindowPointerUp, {capture: true});
         window.removeEventListener("pointercancel", this.onWindowPointerUp, {capture: true});
+        window.removeEventListener("touchmove", this.onWindowTouchTail, {capture: true});
+        window.removeEventListener("touchend", this.onWindowTouchTail, {capture: true});
+        window.removeEventListener("touchcancel", this.onWindowTouchTail, {capture: true});
     }
 
     private emitPointerUp(pressDurationMs: number, moved = false) {

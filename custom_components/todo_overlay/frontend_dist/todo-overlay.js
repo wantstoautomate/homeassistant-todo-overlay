@@ -2172,6 +2172,23 @@ var TodoTreeItem = class extends i4 {
     this.onWindowPointerUp = () => {
       this.pointerUp();
     };
+    // Stops a locked-in horizontal swipe's raw touch events from ever
+    // reaching a page-level gesture recognizer attached higher up the
+    // DOM (e.g. a swipe-between-tabs add-on listening on the app's own
+    // layout element, in the default bubble phase) - this listener is
+    // attached at window with {capture: true} (see pointerDown), which
+    // runs BEFORE any bubble-phase listener anywhere else on the page,
+    // so stopping propagation here reliably keeps it from ever seeing
+    // enough of the gesture to register its own swipe. Left alone
+    // entirely for anything that isn't a locked-in horizontal swipe on
+    // THIS row (an ambiguous press, a vertical scroll, a reorder-handle
+    // drag) - swiping to navigate everywhere else on the dashboard is
+    // completely unaffected.
+    this.onWindowTouchTail = (e7) => {
+      if (this.swipeAxis === "horizontal") {
+        e7.stopPropagation();
+      }
+    };
   }
   get isPressed() {
     return this.draggedId === this.item.id;
@@ -2294,6 +2311,9 @@ var TodoTreeItem = class extends i4 {
     window.addEventListener("pointermove", this.onWindowPointerMove, { capture: true });
     window.addEventListener("pointerup", this.onWindowPointerUp, { capture: true });
     window.addEventListener("pointercancel", this.onWindowPointerUp, { capture: true });
+    window.addEventListener("touchmove", this.onWindowTouchTail, { capture: true });
+    window.addEventListener("touchend", this.onWindowTouchTail, { capture: true });
+    window.addEventListener("touchcancel", this.onWindowTouchTail, { capture: true });
     this.dispatchEvent(
       new CustomEvent("tree-pointer-down", {
         detail: { id: this.item.id },
@@ -2347,6 +2367,9 @@ var TodoTreeItem = class extends i4 {
     window.removeEventListener("pointermove", this.onWindowPointerMove, { capture: true });
     window.removeEventListener("pointerup", this.onWindowPointerUp, { capture: true });
     window.removeEventListener("pointercancel", this.onWindowPointerUp, { capture: true });
+    window.removeEventListener("touchmove", this.onWindowTouchTail, { capture: true });
+    window.removeEventListener("touchend", this.onWindowTouchTail, { capture: true });
+    window.removeEventListener("touchcancel", this.onWindowTouchTail, { capture: true });
   }
   emitPointerUp(pressDurationMs, moved = false) {
     this.dispatchEvent(
@@ -3568,6 +3591,10 @@ var HOVER_DEAD_ZONE_PX = 12;
 var DRAG_GHOST_LABEL_GAP_PX = 8;
 var DRAG_GHOST_FALLBACK_HEIGHT_PX = 40;
 var DRAG_GHOST_SHRINK_WIDTH_PX = 44;
+var TOUCH_DRAG_MAX_GRAB_OFFSET_X_PX = 32;
+var GHOST_VIEWPORT_MARGIN_PX = 8;
+var DRAG_GHOST_LABEL_FALLBACK_HEIGHT_PX = 36;
+var DRAG_GHOST_FALLBACK_WIDTH_PX = 200;
 function collectAllRows(root, currentEntity, currentDepth = 0) {
   const rows = [];
   for (const el of Array.from(root.querySelectorAll("*"))) {
@@ -4034,8 +4061,9 @@ var TodoOverlayList = class extends i4 {
     this.rowSnapshot = collectAllRows(document).filter((row) => row.id === void 0 || !excluded.has(row.id)).map((row) => excluded.size > 0 && row.children.some((child) => excluded.has(child.id)) ? { ...row, children: row.children.filter((child) => !excluded.has(child.id)) } : row);
   }
   onDragStart(e7) {
-    const { rect, pointerX, pointerY, grabOffsetX, grabOffsetY } = e7.detail;
-    this.dragGhostOffset = { x: grabOffsetX ?? 0, y: grabOffsetY ?? 0 };
+    const { rect, pointerX, pointerY, grabOffsetX, grabOffsetY, pointerType } = e7.detail;
+    const cappedGrabOffsetX = pointerType !== "mouse" ? Math.min(grabOffsetX ?? 0, TOUCH_DRAG_MAX_GRAB_OFFSET_X_PX) : grabOffsetX ?? 0;
+    this.dragGhostOffset = { x: cappedGrabOffsetX, y: grabOffsetY ?? 0 };
     this.dragGhostSize = rect ? { width: rect.width, height: rect.height } : void 0;
     this.ghostPosition = { x: pointerX, y: pointerY };
     this.dragStartPointerPos = { x: pointerX, y: pointerY };
@@ -4542,6 +4570,20 @@ var TodoOverlayList = class extends i4 {
             ></todo-overlay-tree>
         `;
   }
+  // Keeps a box positioned at (left, top) with the given size fully
+  // on-screen - a backstop alongside onDragStart's own grab-offset
+  // cap for touch, not a replacement for it: the cap addresses WHY
+  // the ghost drifts far from the pointer in the first place (see its
+  // own comment), this just guarantees nothing ever renders off-
+  // screen regardless of cause.
+  clampToViewport(left, top, width, height) {
+    const maxLeft = Math.max(GHOST_VIEWPORT_MARGIN_PX, window.innerWidth - width - GHOST_VIEWPORT_MARGIN_PX);
+    const maxTop = Math.max(GHOST_VIEWPORT_MARGIN_PX, window.innerHeight - height - GHOST_VIEWPORT_MARGIN_PX);
+    return {
+      left: Math.min(Math.max(left, GHOST_VIEWPORT_MARGIN_PX), maxLeft),
+      top: Math.min(Math.max(top, GHOST_VIEWPORT_MARGIN_PX), maxTop)
+    };
+  }
   renderDragGhost() {
     if (!this.ghostPosition || !this.draggedId || !this.list) {
       return "";
@@ -4550,12 +4592,15 @@ var TodoOverlayList = class extends i4 {
     if (!item) {
       return "";
     }
-    const left = this.ghostPosition.x - this.dragGhostOffset.x;
-    const top = this.ghostPosition.y - this.dragGhostOffset.y;
+    const rawLeft = this.ghostPosition.x - this.dragGhostOffset.x;
+    const rawTop = this.ghostPosition.y - this.dragGhostOffset.y;
     const hoveringParent = this.hoverPlacement === "inside" && this.hoverId !== void 0;
     const targetItem = hoveringParent ? findItem(this.list.items, this.hoverId) : void 0;
     const applyTreatment = hoveringParent && targetItem !== void 0 && this.dragGhostStyle !== "none";
     const shrinking = applyTreatment && this.dragGhostStyle === "shrink";
+    const ghostWidth = shrinking ? DRAG_GHOST_SHRINK_WIDTH_PX : this.dragGhostSize?.width ?? DRAG_GHOST_FALLBACK_WIDTH_PX;
+    const ghostHeight = this.dragGhostSize?.height ?? DRAG_GHOST_FALLBACK_HEIGHT_PX;
+    const { left, top } = this.clampToViewport(rawLeft, rawTop, ghostWidth, ghostHeight);
     return b2`
             <div
                 class=${e6({
@@ -4566,24 +4611,32 @@ var TodoOverlayList = class extends i4 {
                 style=${o6({
       left: `${left}px`,
       top: `${top}px`,
-      width: shrinking ? `${DRAG_GHOST_SHRINK_WIDTH_PX}px` : this.dragGhostSize ? `${this.dragGhostSize.width}px` : void 0
+      width: `${ghostWidth}px`
     })}
             >
                 <ha-checkbox .checked=${item.completed}></ha-checkbox>
                 <span class="drag-ghost-title">${item.title}</span>
                 ${item.quantity ? b2`<span class="drag-ghost-quantity">${item.quantity}</span>` : ""}
             </div>
-            ${applyTreatment && this.dragGhostStyle === "label" ? b2`
+            ${(() => {
+      if (!(applyTreatment && this.dragGhostStyle === "label")) {
+        return "";
+      }
+      const labelPos = this.clampToViewport(
+        left,
+        top + ghostHeight + DRAG_GHOST_LABEL_GAP_PX,
+        ghostWidth,
+        DRAG_GHOST_LABEL_FALLBACK_HEIGHT_PX
+      );
+      return b2`
                         <div
                             class="drag-ghost-label"
-                            style=${o6({
-      left: `${left}px`,
-      top: `${top + (this.dragGhostSize?.height ?? DRAG_GHOST_FALLBACK_HEIGHT_PX) + DRAG_GHOST_LABEL_GAP_PX}px`
-    })}
+                            style=${o6({ left: `${labelPos.left}px`, top: `${labelPos.top}px` })}
                         >
                             Add to: ${targetItem.title}
                         </div>
-                    ` : ""}
+                    `;
+    })()}
         `;
   }
   render() {
