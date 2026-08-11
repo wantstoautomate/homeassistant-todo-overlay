@@ -2020,6 +2020,9 @@ var MOVE_CANCEL_THRESHOLD_PX = 6;
 var HOLD_RIPPLE_SIZE = 72;
 var holdRippleSizePx = r(`${HOLD_RIPPLE_SIZE}px`);
 var CLICK_DEBOUNCE_MS = 250;
+var SWIPE_AXIS_LOCK_PX = 12;
+var SWIPE_ACTION_THRESHOLD_PX = 88;
+var SWIPE_MAX_REVEAL_PX = 132;
 var CLOCK_ICON = b2`
     <svg viewBox="0 0 24 24">
         <path
@@ -2098,6 +2101,8 @@ var TodoTreeItem = class extends i4 {
     this.deleteModeActive = false;
     this.dragEngaged = false;
     this.confirmingDelete = false;
+    this.swipeOffsetX = 0;
+    this.swipeDragging = false;
     this.childQuickAddValue = "";
     this.pointerDownAt = 0;
     this.hasMoved = false;
@@ -2156,9 +2161,13 @@ var TodoTreeItem = class extends i4 {
             composed: true
           })
         );
-      } else {
-        this.cancelHoldForMovement();
+        return;
       }
+      this.cancelHoldForMovement();
+      if (this.pointerIsMouse || this.reorderModeActive) {
+        return;
+      }
+      this.trackSwipe(dx, dy, e7);
     };
     this.onWindowPointerUp = () => {
       this.pointerUp();
@@ -2274,6 +2283,7 @@ var TodoTreeItem = class extends i4 {
     this.hasMoved = false;
     this.dragEngaged = false;
     this.initiatedFromHandle = false;
+    this.swipeAxis = void 0;
     this.pointerIsMouse = e7.pointerType === "mouse";
     const rect = this.shadowRoot?.querySelector(".row")?.getBoundingClientRect() ?? e7.currentTarget.getBoundingClientRect();
     this.holdRippleOrigin = { x: e7.clientX - rect.left, y: e7.clientY - rect.top };
@@ -2310,6 +2320,29 @@ var TodoTreeItem = class extends i4 {
     this.hasMoved = true;
     this.clearHoldRipple();
   }
+  // Determines the gesture's dominant axis once movement clears
+  // SWIPE_AXIS_LOCK_PX, then either drives .row's own live translateX
+  // (horizontal) or leaves the rest of the gesture alone entirely
+  // (vertical - native scroll, via .row's own touch-action: pan-y,
+  // already owns it). Locked for the remainder of THIS gesture either
+  // way - see swipeAxis's own comment for why a fresh decision is
+  // only ever made at the next pointerDown.
+  trackSwipe(dx, dy, e7) {
+    if (this.swipeAxis === void 0) {
+      if (Math.abs(dx) < SWIPE_AXIS_LOCK_PX && Math.abs(dy) < SWIPE_AXIS_LOCK_PX) {
+        return;
+      }
+      this.swipeAxis = Math.abs(dx) > Math.abs(dy) ? "horizontal" : "vertical";
+      if (this.swipeAxis === "horizontal") {
+        this.swipeDragging = true;
+      }
+    }
+    if (this.swipeAxis !== "horizontal") {
+      return;
+    }
+    e7.preventDefault();
+    this.swipeOffsetX = Math.max(-SWIPE_MAX_REVEAL_PX, Math.min(SWIPE_MAX_REVEAL_PX, dx));
+  }
   detachWindowListeners() {
     window.removeEventListener("pointermove", this.onWindowPointerMove, { capture: true });
     window.removeEventListener("pointerup", this.onWindowPointerUp, { capture: true });
@@ -2332,6 +2365,10 @@ var TodoTreeItem = class extends i4 {
       this.dragEngaged = false;
       return;
     }
+    if (this.swipeAxis === "horizontal") {
+      this.resolveSwipe();
+      return;
+    }
     if (this.hasMoved || pressDurationMs >= LONG_PRESS_MS) {
       this.emitPointerUp(pressDurationMs, this.hasMoved);
       return;
@@ -2346,6 +2383,42 @@ var TodoTreeItem = class extends i4 {
       this.clickTimer = void 0;
       this.emitPointerUp(pressDurationMs, false);
     }, CLICK_DEBOUNCE_MS);
+  }
+  // Release past SWIPE_ACTION_THRESHOLD_PX commits to whichever
+  // action that direction means (delete on the left, add-child on
+  // the right) - no separate confirm tap, the swipe-then-release-
+  // past-the-line already IS the confirmation, the same "reveals,
+  // release-past-threshold confirms" model a native iOS/Android
+  // swipe-to-delete list row uses. Short of the threshold - or
+  // dragged back toward 0 before release - springs back as a no-op
+  // instead. Reuses the exact same tree-delete-item/
+  // tree-toggle-child-quick-add events the desktop per-row buttons
+  // already dispatch (see onDeleteClick/onToggleChildQuickAddClick),
+  // not a separate touch-only code path on the list side - swiping
+  // right on an already-open field closes it, same as tapping its
+  // toggle button a second time would on desktop.
+  resolveSwipe() {
+    const offset = this.swipeOffsetX;
+    this.swipeAxis = void 0;
+    this.swipeDragging = false;
+    this.swipeOffsetX = 0;
+    if (offset <= -SWIPE_ACTION_THRESHOLD_PX) {
+      this.dispatchEvent(
+        new CustomEvent("tree-delete-item", {
+          detail: { id: this.item.id },
+          bubbles: true,
+          composed: true
+        })
+      );
+    } else if (offset >= SWIPE_ACTION_THRESHOLD_PX) {
+      this.dispatchEvent(
+        new CustomEvent("tree-toggle-child-quick-add", {
+          detail: { id: this.item.id },
+          bubbles: true,
+          composed: true
+        })
+      );
+    }
   }
   render() {
     const isDropTarget = this.isDropTarget;
@@ -2369,11 +2442,34 @@ var TodoTreeItem = class extends i4 {
     return b2`
             <li>
 
-                <div
-                    class=${e6(rowClasses)}
+                <div class="row-wrapper">
+                    ${this.swipeOffsetX !== 0 ? b2`
+                                <div class="swipe-action-layer">
+                                    ${this.swipeOffsetX < 0 ? b2`
+                                                <div class=${e6({
+      "swipe-action": true,
+      delete: true,
+      armed: this.swipeOffsetX <= -SWIPE_ACTION_THRESHOLD_PX
+    })}>
+                                                    ${CROSS_ICON}
+                                                </div>
+                                            ` : b2`
+                                                <div class=${e6({
+      "swipe-action": true,
+      add: true,
+      armed: this.swipeOffsetX >= SWIPE_ACTION_THRESHOLD_PX
+    })}>
+                                                    ${PLUS_ICON}
+                                                </div>
+                                            `}
+                                </div>
+                            ` : ""}
+                    <div
+                        class=${e6({ ...rowClasses, swiping: this.swipeDragging })}
+                        style=${o6({ transform: this.swipeOffsetX ? `translateX(${this.swipeOffsetX}px)` : "" })}
 
-                    @pointerdown=${this.pointerDown}
-                >
+                        @pointerdown=${this.pointerDown}
+                    >
                     ${// Reordering (before/after) shows the shadow box in
     // the gap it just opened; becoming a child ("inside")
     // shows no shadow box at all - the bounding-box
@@ -2485,6 +2581,7 @@ var TodoTreeItem = class extends i4 {
                                             ></div>
                                         ` : ""}
                             `}
+                    </div>
                 </div>
 
                 ${this.childQuickAddParentIds.has(this.item.id) ? b2`
@@ -2557,6 +2654,19 @@ TodoTreeItem.styles = i`
             user-select: none;
             cursor: pointer;
             transition: background-color 0.15s ease, outline-color 0.15s ease, margin 150ms ease;
+            /* Leaves vertical panning to the browser's own native
+               scroll (so the page still scrolls normally on a quick
+               vertical touch, no different from before this existed)
+               while claiming horizontal movement for trackSwipe below
+               instead of letting the browser interpret it as anything
+               native (e.g. an edge back-navigation gesture) - the
+               standard, purpose-built tool for exactly this "one axis
+               is native, the other is mine" split, unlike trying to
+               toggle touch-action mid-gesture (tried first for drag,
+               doesn't reliably work - see the class docstring above),
+               which this sidesteps entirely by being static from the
+               very first touchstart. */
+            touch-action: pan-y;
         }
 
         /* Suppressed while a drag is active (see rowClasses' drag-active) -
@@ -2989,6 +3099,88 @@ TodoTreeItem.styles = i`
             }
         }
 
+        /* Wraps just the row itself (not its children <ul> or its own
+           quick-add field below) so the swipe reveal panel's absolute
+           bounds always match the row's own box exactly, regardless of
+           how deep this item is nested. flow-root (rather than plain
+           position:relative alone) additionally gives .row's own
+           gap-before/gap-after margins a containing block that can't
+           collapse them out through this wrapper - without it, the
+           reorder-mode gap those classes open risks collapsing against
+           this wrapper's boundary instead of staying scoped exactly the
+           way it already did before this wrapper existed. */
+        .row-wrapper {
+            position: relative;
+            display: flow-root;
+        }
+
+        /* Sits directly behind .row at the same bounds - revealed only
+           in the strip .row's own translateX vacates as it slides away
+           (see trackSwipe/resolveSwipe below), so no width animation or
+           explicit reveal-amount styling is needed here at all, just
+           correct stacking (DOM order alone puts .row on top, since
+           neither element sets z-index) and a matching border-radius so
+           the reveal never pokes out past the row's own rounded
+           corners. */
+        .swipe-action-layer {
+            position: absolute;
+            inset: 0;
+            overflow: hidden;
+            border-radius: 4px;
+            display: flex;
+        }
+
+        .swipe-action {
+            flex: 1;
+            display: flex;
+            align-items: center;
+            padding: 0 18px;
+            color: #fff;
+            opacity: 0.55;
+            transition: opacity 0.15s ease;
+        }
+
+        .swipe-action svg {
+            width: 20px;
+            height: 20px;
+            fill: currentColor;
+        }
+
+        .swipe-action.delete {
+            justify-content: flex-end;
+            background: var(--error-color, #db4437);
+        }
+
+        .swipe-action.add {
+            justify-content: flex-start;
+            background: var(--accent-color, var(--primary-color));
+        }
+
+        /* Past the action threshold - i.e. releasing right now commits
+           - full opacity and a slightly larger glyph make that "it's
+           live" moment unmistakable without needing a second, separate
+           confirm step of its own (see resolveSwipe). */
+        .swipe-action.armed {
+            opacity: 1;
+        }
+
+        .swipe-action.armed svg {
+            width: 24px;
+            height: 24px;
+        }
+
+        /* Adds transform to the transition list ONLY while not actively
+           swiping (see trackSwipe/resolveSwipe's own swipeDragging) -
+           the higher-specificity :not() selector wins over the base
+           .row rule above outright rather than merging with it (a
+           shorthand property can't partially override), so a live
+           swipe's translateX tracks the finger with zero added lag,
+           and only the release - whether committing or springing back
+           to 0 - animates. */
+        .row:not(.swiping) {
+            transition: background-color 0.15s ease, outline-color 0.15s ease, margin 150ms ease, transform 200ms ease;
+        }
+
         /* Shown instead of the delete button (see the template) while
            reorderModeActive, for every row regardless of hasChildren -
            dragging needs to work on parents too, unlike delete.
@@ -3094,6 +3286,12 @@ __decorateClass([
 __decorateClass([
   r5()
 ], TodoTreeItem.prototype, "confirmingDelete", 2);
+__decorateClass([
+  r5()
+], TodoTreeItem.prototype, "swipeOffsetX", 2);
+__decorateClass([
+  r5()
+], TodoTreeItem.prototype, "swipeDragging", 2);
 __decorateClass([
   r5()
 ], TodoTreeItem.prototype, "childQuickAddValue", 2);

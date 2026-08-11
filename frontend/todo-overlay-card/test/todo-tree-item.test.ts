@@ -2,6 +2,7 @@ import {afterEach, describe, expect, it, vi} from "vitest";
 
 import "../src/components/todo-tree-item";
 import type {TodoTreeItem} from "../src/components/todo-tree-item";
+import {SWIPE_ACTION_THRESHOLD_PX, SWIPE_MAX_REVEAL_PX} from "../src/components/todo-tree-item";
 import {LONG_PRESS_MS, type TodoItem} from "../src/models";
 
 function makeItem(overrides: Partial<TodoItem> = {}): TodoItem {
@@ -364,6 +365,196 @@ describe("todo-overlay-tree-item", () => {
             expect(preventDefaultSpy).not.toHaveBeenCalled();
 
             window.dispatchEvent(new PointerEvent("pointerup", {clientX: 0, clientY: 0, pointerType: "mouse"}));
+        });
+    });
+
+    // Touch-only, mobile replacement for the desktop-only per-row +/x
+    // toggles (see the class's own @media (pointer: coarse) CSS) - a
+    // plain press-and-drag on the row itself (never the reorder-mode
+    // handle, and never while reorder mode is on - that's covered by
+    // its own describe block above). Same onWindowPointerMove call
+    // pattern as the drag tests above: a real pointerdown dispatched on
+    // ".row" (to attach the window listeners for real), then the
+    // private onWindowPointerMove called directly for precise control
+    // over dx/dy, then a real window pointerup/pointercancel to release.
+    describe("touch swipe on the plain row", () => {
+        function touchPress(el: TodoTreeItem): void {
+            (el.shadowRoot?.querySelector(".row") as HTMLElement).dispatchEvent(
+                new PointerEvent("pointerdown", {clientX: 0, clientY: 0, pointerType: "touch", bubbles: true}),
+            );
+        }
+
+        function move(el: TodoTreeItem, dx: number, dy: number): PointerEvent {
+            const draggable = el as unknown as {onWindowPointerMove: (e: PointerEvent) => void};
+            const e = new PointerEvent("pointermove", {clientX: dx, clientY: dy, pointerType: "touch"});
+
+            draggable.onWindowPointerMove(e);
+
+            return e;
+        }
+
+        function touchRelease(): void {
+            window.dispatchEvent(new PointerEvent("pointerup", {clientX: 0, clientY: 0, pointerType: "touch"}));
+        }
+
+        it("reveals the delete panel, armed, once a leftward swipe clears the action threshold", async () => {
+            const el = await renderItem(makeItem({id: "1"}));
+            touchPress(el);
+
+            move(el, -(SWIPE_ACTION_THRESHOLD_PX + 10), 0);
+            await el.updateComplete;
+
+            const panel = el.shadowRoot?.querySelector(".swipe-action") as HTMLElement;
+            expect(panel).not.toBeNull();
+            expect(panel.classList.contains("delete")).toBe(true);
+            expect(panel.classList.contains("armed")).toBe(true);
+
+            touchRelease();
+        });
+
+        it("dispatches tree-delete-item on release once a leftward swipe passed the action threshold", async () => {
+            const el = await renderItem(makeItem({id: "1"}));
+
+            let detail: {id: string} | undefined;
+            el.addEventListener("tree-delete-item", (e) => {
+                detail = (e as CustomEvent<{id: string}>).detail;
+            });
+
+            touchPress(el);
+            move(el, -(SWIPE_ACTION_THRESHOLD_PX + 10), 0);
+            touchRelease();
+
+            expect(detail).toEqual({id: "1"});
+        });
+
+        it("dispatches tree-toggle-child-quick-add on release once a rightward swipe passed the action threshold", async () => {
+            const el = await renderItem(makeItem({id: "1"}));
+
+            let detail: {id: string} | undefined;
+            el.addEventListener("tree-toggle-child-quick-add", (e) => {
+                detail = (e as CustomEvent<{id: string}>).detail;
+            });
+
+            touchPress(el);
+            move(el, SWIPE_ACTION_THRESHOLD_PX + 10, 0);
+            touchRelease();
+
+            expect(detail).toEqual({id: "1"});
+        });
+
+        it("springs back with no action when released short of the threshold", async () => {
+            const el = await renderItem(makeItem({id: "1"}));
+
+            let deleted = false;
+            let toggled = false;
+            el.addEventListener("tree-delete-item", () => { deleted = true; });
+            el.addEventListener("tree-toggle-child-quick-add", () => { toggled = true; });
+
+            touchPress(el);
+            move(el, -(SWIPE_ACTION_THRESHOLD_PX - 20), 0);
+            await el.updateComplete;
+            expect(el.shadowRoot?.querySelector(".swipe-action")).not.toBeNull();
+
+            touchRelease();
+            await el.updateComplete;
+
+            expect(deleted).toBe(false);
+            expect(toggled).toBe(false);
+            expect(el.shadowRoot?.querySelector(".swipe-action-layer")).toBeNull();
+        });
+
+        it("clamps the live offset to SWIPE_MAX_REVEAL_PX for a swipe far past the threshold", async () => {
+            const el = await renderItem(makeItem({id: "1"}));
+            touchPress(el);
+
+            move(el, -(SWIPE_MAX_REVEAL_PX + 200), 0);
+            await el.updateComplete;
+
+            const row = el.shadowRoot?.querySelector(".row") as HTMLElement;
+            expect(row.style.transform).toBe(`translateX(-${SWIPE_MAX_REVEAL_PX}px)`);
+
+            touchRelease();
+        });
+
+        it("does not engage swipe at all for a mostly-vertical gesture - native scroll owns it", async () => {
+            const el = await renderItem(makeItem({id: "1"}));
+            touchPress(el);
+
+            const e = move(el, 5, 60);
+            const preventDefaultSpy = vi.spyOn(e, "preventDefault");
+            await el.updateComplete;
+
+            expect(el.shadowRoot?.querySelector(".swipe-action-layer")).toBeNull();
+            expect(preventDefaultSpy).not.toHaveBeenCalled();
+
+            touchRelease();
+        });
+
+        it("calls preventDefault once a horizontal swipe locks in", async () => {
+            const el = await renderItem(makeItem({id: "1"}));
+            touchPress(el);
+
+            const draggable = el as unknown as {onWindowPointerMove: (e: PointerEvent) => void};
+            const e = new PointerEvent("pointermove", {clientX: -40, clientY: 0, pointerType: "touch"});
+            const preventDefaultSpy = vi.spyOn(e, "preventDefault");
+            draggable.onWindowPointerMove(e);
+
+            expect(preventDefaultSpy).toHaveBeenCalled();
+
+            touchRelease();
+        });
+
+        it("is ignored entirely while reorder mode is active", async () => {
+            const el = await renderItem(makeItem({id: "1"}), {reorderModeActive: true});
+
+            let deleted = false;
+            el.addEventListener("tree-delete-item", () => { deleted = true; });
+
+            touchPress(el);
+            move(el, -(SWIPE_ACTION_THRESHOLD_PX + 10), 0);
+            await el.updateComplete;
+
+            expect(el.shadowRoot?.querySelector(".swipe-action-layer")).toBeNull();
+
+            touchRelease();
+
+            expect(deleted).toBe(false);
+        });
+
+        it("never engages for a mouse pointer - mouse has its own hold-then-move drag instead", async () => {
+            const el = await renderItem(makeItem({id: "1"}));
+            (el.shadowRoot?.querySelector(".row") as HTMLElement).dispatchEvent(
+                new PointerEvent("pointerdown", {clientX: 0, clientY: 0, pointerType: "mouse", bubbles: true}),
+            );
+
+            const draggable = el as unknown as {onWindowPointerMove: (e: PointerEvent) => void};
+            // dragDisabled makes a mouse move fall to the same
+            // "cancel-only" branch touch would otherwise reach, without
+            // needing a live tree-drag-start to also be asserted here.
+            (el as unknown as {dragDisabled: boolean}).dragDisabled = true;
+            draggable.onWindowPointerMove(new PointerEvent("pointermove", {clientX: -100, clientY: 0, pointerType: "mouse"}));
+            await el.updateComplete;
+
+            expect(el.shadowRoot?.querySelector(".swipe-action-layer")).toBeNull();
+
+            window.dispatchEvent(new PointerEvent("pointerup", {clientX: 0, clientY: 0, pointerType: "mouse"}));
+        });
+
+        it("swiping right on a row whose add-child field is already open closes it (toggle, not a second open)", async () => {
+            const el = await renderItem(makeItem({id: "1"}), {childQuickAddParentIds: new Set(["1"])});
+
+            let toggleCount = 0;
+            el.addEventListener("tree-toggle-child-quick-add", () => { toggleCount += 1; });
+
+            touchPress(el);
+            move(el, SWIPE_ACTION_THRESHOLD_PX + 10, 0);
+            touchRelease();
+
+            // The list owns actually flipping childQuickAddParentIds
+            // (see todo-overlay-list.ts's onToggleChildQuickAdd) - this
+            // row only ever dispatches the same toggle event regardless
+            // of current state, exactly once per qualifying swipe.
+            expect(toggleCount).toBe(1);
         });
     });
 
