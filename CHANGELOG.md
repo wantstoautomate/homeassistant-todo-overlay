@@ -3,6 +3,53 @@
 All notable changes to this project are documented here. Versions follow the
 integration's `manifest.json`/card's `package.json` (kept in lockstep).
 
+## 1.1.0
+
+A full rework of how items get added and deleted, driven by a live-reported
+design flaw: the old per-parent "+" only ever showed up on rows that
+*already* had children, so a root-level or leaf item had no way to gain one.
+Several approaches were tried and discarded along the way (lifting the drag
+ghost clear of the pointer to keep a touch drop-target visible underneath
+it) before landing on what's below - only the final, kept behavior is
+described here.
+
+- **Desktop: add-mode and delete-mode**, toggled from the toolbar. Tapping
+  the "+" puts every row - parent or leaf - into add-mode, showing its own
+  "+" that opens an inline, indented quick-add field for a child of that
+  item. Tapping the trash button clears completed items if there are any;
+  with nothing to clear, it enters delete-mode instead, showing an "x" on
+  every leaf row (tap to arm, tap again to confirm). Add-mode, delete-mode,
+  and reorder-mode are mutually exclusive - entering one turns the other two
+  off. Holding the trash button and releasing still prompts to delete
+  everything in the list, unchanged.
+- **Mobile: swipe replaces the per-row crosses entirely.** Swipe left on a
+  row to delete it - swiping reveals a red delete panel, and releasing past
+  the reveal threshold confirms immediately, no separate confirm tap needed.
+  Swipe right to open that row's own add-child field, indented to the child
+  level exactly like the desktop version. Both gestures are ignored outright
+  while reorder-mode is active (that mode's touch drag has its own dedicated
+  handle), and don't interfere with normal vertical scrolling.
+- **New: drop-target treatment while dragging onto a parent**, configurable
+  from the card editor's Advanced section (`drag_ghost_style`). The dragged
+  item's floating "ghost" always stays pinned exactly to the pointer - an
+  earlier attempt that lifted it clear of the pointer to keep the target row
+  visible underneath was live-reported as feeling visually disconnected from
+  what was actually being dragged, on both touch and mouse. Instead, while
+  hovering a valid reparent target: **"label"** (the default) shows a small
+  pill directly under the ghost naming the parent ("Add to: X"); **"shrink"**
+  collapses the ghost to a small chip so the target row is visible around
+  it; **"translucent"** fades the ghost so the target shows through it.
+  "none" keeps the ghost's original, untreated appearance. All four remain
+  selectable for anyone who prefers a different one.
+- **New: hold the clear-completed button and release to delete every item**
+  in the list (parents and children, completed or not), with a confirmation
+  prompt first - available on both desktop and mobile.
+- **Fixed: the item-action confirm dialog** (used by delete-all, among
+  others) rendered with no message and an oddly small/large size - a Lit
+  property bound as a plain HTML attribute (`heading="..."`) instead of a
+  property binding (`.heading=${...}`) never reached a component declared
+  with `attribute: false`, so the value silently never arrived.
+
 ## 1.0.5
 
 A round of drag-and-drop reorder refinements, driven entirely by real
