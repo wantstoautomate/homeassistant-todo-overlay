@@ -3565,7 +3565,7 @@ var REORDER_TOGGLE_ICON = b2`
 `;
 var ITEM_CHANGED_EVENT = "todo_overlay_item_event";
 var HOVER_DEAD_ZONE_PX = 12;
-var TOUCH_DRAG_GHOST_LIFT_PX = 60;
+var DRAG_GHOST_LIFT_PX = 60;
 function collectAllRows(root, currentEntity, currentDepth = 0) {
   const rows = [];
   for (const el of Array.from(root.querySelectorAll("*"))) {
@@ -3758,16 +3758,6 @@ var TodoOverlayList = class extends i4 {
     this.dragGhostOffset = { x: 0, y: 0 };
     this.rowSnapshot = [];
     this.dragStartPointerPos = { x: 0, y: 0 };
-    // Live-reported: reparenting on a touchscreen is hard to judge
-    // because the ghost sits right under the finger, which is ALREADY
-    // covering that same spot - the row you're trying to drop onto is
-    // invisible at the exact moment you need to see it. Mouse users
-    // don't have this problem (nothing about a cursor blocks the view),
-    // so the extra vertical offset in renderDragGhost() below only ever
-    // applies for a touch-originated drag - tracked here from
-    // tree-drag-start's own pointerType, since a mouse's own drag ghost
-    // should keep tracking the cursor exactly like it always has.
-    this.isTouchDrag = false;
     this.dialogFormValue = EMPTY_FORM_VALUE;
     this.quickAddValue = "";
     this.saveLoadValue = EMPTY_SAVE_LOAD_VALUE;
@@ -4041,12 +4031,11 @@ var TodoOverlayList = class extends i4 {
     this.rowSnapshot = collectAllRows(document).filter((row) => row.id === void 0 || !excluded.has(row.id)).map((row) => excluded.size > 0 && row.children.some((child) => excluded.has(child.id)) ? { ...row, children: row.children.filter((child) => !excluded.has(child.id)) } : row);
   }
   onDragStart(e7) {
-    const { rect, pointerX, pointerY, grabOffsetX, grabOffsetY, pointerType } = e7.detail;
+    const { rect, pointerX, pointerY, grabOffsetX, grabOffsetY } = e7.detail;
     this.dragGhostOffset = { x: grabOffsetX ?? 0, y: grabOffsetY ?? 0 };
     this.dragGhostSize = rect ? { width: rect.width, height: rect.height } : void 0;
     this.ghostPosition = { x: pointerX, y: pointerY };
     this.dragStartPointerPos = { x: pointerX, y: pointerY };
-    this.isTouchDrag = pointerType !== "mouse";
     this.snapshotRows();
     requestAnimationFrame(() => this.snapshotRows());
     window.addEventListener("pointermove", this.onGlobalPointerMove, { capture: true });
@@ -4559,8 +4548,7 @@ var TodoOverlayList = class extends i4 {
       return "";
     }
     const left = this.ghostPosition.x - this.dragGhostOffset.x;
-    const touchLift = this.isTouchDrag ? TOUCH_DRAG_GHOST_LIFT_PX : 0;
-    const top = this.ghostPosition.y - this.dragGhostOffset.y - touchLift;
+    const top = this.ghostPosition.y - this.dragGhostOffset.y - DRAG_GHOST_LIFT_PX;
     return b2`
             <div
                 class="drag-ghost"

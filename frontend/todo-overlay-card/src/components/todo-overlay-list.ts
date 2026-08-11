@@ -120,12 +120,16 @@ const ITEM_CHANGED_EVENT = "todo_overlay_item_event";
 // forgiving one.
 const HOVER_DEAD_ZONE_PX = 12;
 
-// How far above the actual touch point a touch drag's ghost is lifted
-// (see isTouchDrag's own comment) - roughly one and a half rows, enough
-// that the row under the finger (the actual drop target) isn't ALSO
-// covered by the ghost stacked on top of it, matching the same idea
-// iOS's own drag-to-reorder uses.
-const TOUCH_DRAG_GHOST_LIFT_PX = 60;
+// How far above the actual pointer a drag's ghost is lifted - roughly
+// one and a half rows, enough that the row under the pointer (the
+// actual drop target) isn't ALSO covered by the ghost stacked on top
+// of it, matching the same idea iOS's own drag-to-reorder uses.
+// Originally touch-only (a mouse cursor is thin enough that it never
+// blocked the view the way a finger does), applied unconditionally now
+// so a mouse drag previews the exact same behavior a touch drag gets -
+// there was no actual downside to it for mouse, just no upside either
+// until this became something worth testing without a touchscreen.
+const DRAG_GHOST_LIFT_PX = 60;
 
 interface TreeItemElement extends Element {
     item?: TodoItem;
@@ -1076,17 +1080,6 @@ export class TodoOverlayList extends LitElement {
     private rowSnapshot: RowSnapshot[] = [];
     private dragStartPointerPos = {x: 0, y: 0};
 
-    // Live-reported: reparenting on a touchscreen is hard to judge
-    // because the ghost sits right under the finger, which is ALREADY
-    // covering that same spot - the row you're trying to drop onto is
-    // invisible at the exact moment you need to see it. Mouse users
-    // don't have this problem (nothing about a cursor blocks the view),
-    // so the extra vertical offset in renderDragGhost() below only ever
-    // applies for a touch-originated drag - tracked here from
-    // tree-drag-start's own pointerType, since a mouse's own drag ghost
-    // should keep tracking the cursor exactly like it always has.
-    private isTouchDrag = false;
-
     @state()
     private dialogMode?: "create" | "edit";
 
@@ -1298,7 +1291,7 @@ export class TodoOverlayList extends LitElement {
     }
 
     private onDragStart(e: CustomEvent) {
-        const {rect, pointerX, pointerY, grabOffsetX, grabOffsetY, pointerType} = e.detail;
+        const {rect, pointerX, pointerY, grabOffsetX, grabOffsetY} = e.detail;
 
         // grabOffsetX/Y come from the original press position, not this
         // event's - see the dispatch site in todo-tree-item.ts for why
@@ -1307,7 +1300,6 @@ export class TodoOverlayList extends LitElement {
         this.dragGhostSize = rect ? {width: rect.width, height: rect.height} : undefined;
         this.ghostPosition = {x: pointerX, y: pointerY};
         this.dragStartPointerPos = {x: pointerX, y: pointerY};
-        this.isTouchDrag = pointerType !== "mouse";
 
         // Captured twice: immediately (approximate - the dragged row's own
         // collapse to its lifted placeholder hasn't rendered yet, since
@@ -2187,12 +2179,9 @@ export class TodoOverlayList extends LitElement {
         }
 
         const left = this.ghostPosition.x - this.dragGhostOffset.x;
-        // Lifted clear of the touch point for a touch drag (see
-        // isTouchDrag's own comment) - a mouse's own cursor never
-        // blocks the view, so this stays 0 for one, matching the
-        // ghost's pre-existing behavior exactly.
-        const touchLift = this.isTouchDrag ? TOUCH_DRAG_GHOST_LIFT_PX : 0;
-        const top = this.ghostPosition.y - this.dragGhostOffset.y - touchLift;
+        // Lifted clear of the pointer regardless of input type - see
+        // DRAG_GHOST_LIFT_PX's own comment.
+        const top = this.ghostPosition.y - this.dragGhostOffset.y - DRAG_GHOST_LIFT_PX;
 
         return html`
             <div
