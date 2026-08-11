@@ -604,6 +604,21 @@ export class TodoTreeItem extends LitElement {
             cursor: pointer;
         }
 
+        /* Desktop-only, unconditionally - (pointer: coarse) is the
+           reliable "primary input is imprecise" signal (same one
+           todo-overlay-list.ts's own .reorder-toggle uses), not a
+           viewport-width breakpoint. Touch relies on swipe instead of
+           either of these: swipe right to add a child, swipe left to
+           delete (see the swipe handling below) - removed entirely
+           rather than left as a smaller/harder-to-hit tap target, which
+           is what "remove the crosses from mobile entirely" asked for. */
+        @media (pointer: coarse) {
+            .child-quick-add-toggle,
+            .delete-button {
+                display: none;
+            }
+        }
+
         /* Shown instead of the delete button (see the template) while
            reorderModeActive, for every row regardless of hasChildren -
            dragging needs to work on parents too, unlike delete.
@@ -727,12 +742,25 @@ export class TodoTreeItem extends LitElement {
     @property({attribute: false})
     reorderModeActive = false;
 
-    // Which parent items currently have their own inline "add a child"
-    // field open - see todo-overlay-list.ts's own childQuickAddParentIds
-    // for the full picture (independent per-parent toggles, only ever
-    // bulk-cleared by closing the root quick add).
+    // Which items currently have their own inline "add a child" field
+    // open - see todo-overlay-list.ts's own childQuickAddParentIds for
+    // the full picture (independent per-item toggles, only ever
+    // bulk-cleared by turning add-mode off entirely).
     @property({attribute: false})
     childQuickAddParentIds: Set<string> = new Set();
+
+    // Desktop-only modes (see todo-overlay-list.ts's own
+    // addModeActive/deleteModeActive) - while active, EVERY row shows
+    // its own "+" (add-mode) or leaf rows show "x" (delete-mode) in the
+    // trailing icon slot, instead of only rows that already had
+    // children ever offering a way to gain one. Mutually exclusive with
+    // each other and with reorderModeActive - see rowClasses below for
+    // how the slot picks between all three.
+    @property({attribute: false})
+    addModeActive = false;
+
+    @property({attribute: false})
+    deleteModeActive = false;
 
     @state()
     private holdRippleOrigin?: {x: number; y: number};
@@ -1038,6 +1066,7 @@ export class TodoTreeItem extends LitElement {
                         grabOffsetY: grabOffset.y,
                         pointerX: e.clientX,
                         pointerY: e.clientY,
+                        pointerType: e.pointerType,
                     },
                     bubbles: true,
                     composed: true,
@@ -1255,7 +1284,7 @@ export class TodoTreeItem extends LitElement {
                                                 ${DRAG_HANDLE_ICON}
                                             </button>
                                         `
-                                        : this.hasChildren
+                                        : this.addModeActive
                                             ? html`
                                                 <button
                                                     class=${classMap({
@@ -1277,19 +1306,21 @@ export class TodoTreeItem extends LitElement {
                                                     }
                                                 </button>
                                             `
-                                            : html`
-                                                <button
-                                                    class=${classMap({
-                                                        "delete-button": true,
-                                                        confirming: this.confirmingDelete,
-                                                    })}
-                                                    aria-label=${this.confirmingDelete ? "Confirm delete" : "Delete"}
-                                                    @click=${this.onDeleteClick}
-                                                    @pointerdown=${(e: Event) => e.stopPropagation()}
-                                                >
-                                                    ${CROSS_ICON}
-                                                </button>
-                                            `
+                                            : this.deleteModeActive && !this.hasChildren
+                                                ? html`
+                                                    <button
+                                                        class=${classMap({
+                                                            "delete-button": true,
+                                                            confirming: this.confirmingDelete,
+                                                        })}
+                                                        aria-label=${this.confirmingDelete ? "Confirm delete" : "Delete"}
+                                                        @click=${this.onDeleteClick}
+                                                        @pointerdown=${(e: Event) => e.stopPropagation()}
+                                                    >
+                                                        ${CROSS_ICON}
+                                                    </button>
+                                                `
+                                                : ""
                                 }
 
                                 ${
@@ -1310,7 +1341,7 @@ export class TodoTreeItem extends LitElement {
                 </div>
 
                 ${
-                    this.hasChildren && this.childQuickAddParentIds.has(this.item.id)
+                    this.childQuickAddParentIds.has(this.item.id)
                         ? html`
                             <div class="child-quick-add-row">
                                 <input
@@ -1349,6 +1380,8 @@ export class TodoTreeItem extends LitElement {
                                             .dimmedByAncestorDrag=${isBeingDragged || this.dimmedByAncestorDrag}
                                             .reorderModeActive=${this.reorderModeActive}
                                             .childQuickAddParentIds=${this.childQuickAddParentIds}
+                                            .addModeActive=${this.addModeActive}
+                                            .deleteModeActive=${this.deleteModeActive}
                                         ></todo-overlay-tree-item>
                                     `,
                                 )}

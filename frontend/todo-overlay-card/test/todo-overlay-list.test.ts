@@ -438,6 +438,14 @@ describe("todo-overlay-list per-parent quick add", () => {
             .find(r => (r as unknown as {item?: {id: string}}).item?.id === id) as Element & {shadowRoot: ShadowRoot};
     }
 
+    // Add-mode - the per-row "+" toggle only exists once this is active
+    // (see todo-overlay-list.ts's own addModeActive) - entered the same
+    // way a real user would, via the toolbar's own "+".
+    async function enterAddMode(el: TodoOverlayList): Promise<void> {
+        (el.shadowRoot?.querySelector("button[aria-label='Add item']") as HTMLElement).click();
+        await settle(el);
+    }
+
     it("opens that parent's own inline field when its plus icon is clicked, leaving others untouched", async () => {
         const {el} = await renderList({
             entity_id: ENTITY_ID,
@@ -446,6 +454,7 @@ describe("todo-overlay-list per-parent quick add", () => {
                 makeItem({id: "other", title: "Groceries"}),
             ],
         });
+        await enterAddMode(el);
 
         childQuickAddToggle(el, "parent").click();
         await settle(el);
@@ -454,11 +463,25 @@ describe("todo-overlay-list per-parent quick add", () => {
         expect(findRow(el, "other").shadowRoot.querySelector(".child-quick-add-row")).toBeNull();
     });
 
+    it("shows the add-child toggle on a LEAF item too, once add-mode is active - not just existing parents", async () => {
+        // Live-reported: an earlier version only ever showed a per-row
+        // "+" on items that ALREADY had children - nothing that wasn't
+        // already a parent had any way to become one.
+        const {el} = await renderList({
+            entity_id: ENTITY_ID,
+            items: [makeItem({id: "leaf", title: "Groceries"})],
+        });
+        await enterAddMode(el);
+
+        expect(childQuickAddToggle(el, "leaf")).not.toBeNull();
+    });
+
     it("adding under a parent whose only existing child is 'Firewall' positions the new item before it", async () => {
         const {el, hass} = await renderList({
             entity_id: ENTITY_ID,
             items: [makeItem({id: "parent", title: "Home Assistant", children: [makeItem({id: "child", title: "Firewall"})]})],
         });
+        await enterAddMode(el);
 
         childQuickAddToggle(el, "parent").click();
         await settle(el);
@@ -483,6 +506,30 @@ describe("todo-overlay-list per-parent quick add", () => {
         }));
     });
 
+    it("adding a first child under a LEAF item positions it 'inside' that item directly", async () => {
+        const {el, hass} = await renderList({
+            entity_id: ENTITY_ID,
+            items: [makeItem({id: "leaf", title: "Groceries"})],
+        });
+        await enterAddMode(el);
+
+        childQuickAddToggle(el, "leaf").click();
+        await settle(el);
+
+        const input = findRow(el, "leaf").shadowRoot.querySelector(".child-quick-add-row input") as HTMLInputElement;
+        input.value = "Milk";
+        input.dispatchEvent(new Event("input"));
+        input.dispatchEvent(new KeyboardEvent("keydown", {key: "Enter", bubbles: true, composed: true}));
+        await flushAsync();
+
+        expect(hass.connection.sent).toContainEqual(expect.objectContaining({
+            type: "todo_overlay/create_item",
+            title: "Milk",
+            reference_id: "leaf",
+            placement: "inside",
+        }));
+    });
+
     it("auto-expands a collapsed parent when its quick-add field is opened", async () => {
         const {el} = await renderList({
             entity_id: ENTITY_ID,
@@ -493,32 +540,29 @@ describe("todo-overlay-list per-parent quick add", () => {
         await settle(el);
         expect(summaryTexts(el)).toEqual(["Home Assistant"]);
 
+        await enterAddMode(el);
         childQuickAddToggle(el, "parent").click();
         await settle(el);
 
         expect(summaryTexts(el)).toEqual(["Home Assistant", "Firewall"]);
     });
 
-    it("closing the root quick add also closes every open per-parent field", async () => {
-        const {el} = await renderList(
-            {
-                entity_id: ENTITY_ID,
-                items: [makeItem({id: "parent", title: "Home Assistant", children: [makeItem({id: "child", title: "Firewall"})]})],
-            },
-            {showQuickAdd: true},
-        );
+    it("closing the root quick add (add-mode) also closes every open per-parent field", async () => {
+        const {el} = await renderList({
+            entity_id: ENTITY_ID,
+            items: [makeItem({id: "parent", title: "Home Assistant", children: [makeItem({id: "child", title: "Firewall"})]})],
+        });
+        await enterAddMode(el);
 
         childQuickAddToggle(el, "parent").click();
         await settle(el);
         expect(findRow(el, "parent").shadowRoot.querySelector(".child-quick-add-row")).not.toBeNull();
 
-        // Open, then close, the ROOT quick add - the "close everything" action.
-        (el.shadowRoot?.querySelector("button[aria-label='Add item']") as HTMLElement).click();
-        await settle(el);
-        (el.shadowRoot?.querySelector("button[aria-label='Add item']") as HTMLElement).click();
-        await settle(el);
+        // Close add-mode itself - the "close everything" action.
+        await enterAddMode(el); // toggling again closes it
 
         expect(findRow(el, "parent").shadowRoot.querySelector(".child-quick-add-row")).toBeNull();
+        expect(findRow(el, "parent").shadowRoot.querySelector(".child-quick-add-toggle")).toBeNull();
     });
 
     it("clicking a parent's own toggle again closes just that one field", async () => {
@@ -526,6 +570,7 @@ describe("todo-overlay-list per-parent quick add", () => {
             entity_id: ENTITY_ID,
             items: [makeItem({id: "parent", title: "Home Assistant", children: [makeItem({id: "child", title: "Firewall"})]})],
         });
+        await enterAddMode(el);
 
         childQuickAddToggle(el, "parent").click();
         await settle(el);
@@ -535,6 +580,22 @@ describe("todo-overlay-list per-parent quick add", () => {
         await settle(el);
 
         expect(findRow(el, "parent").shadowRoot.querySelector(".child-quick-add-row")).toBeNull();
+    });
+
+    it("add-mode, delete-mode, and reorder-mode are mutually exclusive", async () => {
+        const {el} = await renderList(
+            {entity_id: ENTITY_ID, items: [makeItem({id: "1", title: "Milk", completed: false})]},
+            {showReorderToggle: true},
+        );
+
+        await enterAddMode(el);
+        expect((el as unknown as {addModeActive: boolean}).addModeActive).toBe(true);
+
+        (el.shadowRoot?.querySelector("button[aria-label='Reorder items']") as HTMLElement).click();
+        await settle(el);
+
+        expect((el as unknown as {addModeActive: boolean}).addModeActive).toBe(false);
+        expect((el as unknown as {reorderModeActive: boolean}).reorderModeActive).toBe(true);
     });
 });
 

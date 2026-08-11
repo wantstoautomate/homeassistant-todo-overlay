@@ -490,20 +490,29 @@ describe("todo-overlay-tree-item", () => {
     });
 
     describe("delete button", () => {
-        it("shows a delete button on a leaf row", async () => {
-            const el = await renderItem(makeItem());
+        it("shows a delete button on a leaf row while delete-mode is active", async () => {
+            const el = await renderItem(makeItem(), {deleteModeActive: true});
 
             expect(el.shadowRoot?.querySelector(".delete-button")).not.toBeNull();
         });
 
-        it("does not show a delete button on a parent row", async () => {
-            const el = await renderItem(makeItem({children: [makeItem({id: "2"})]}));
+        it("shows no delete button at all outside delete-mode", async () => {
+            const el = await renderItem(makeItem());
+
+            expect(el.shadowRoot?.querySelector(".delete-button")).toBeNull();
+        });
+
+        it("does not show a delete button on a parent row, even in delete-mode", async () => {
+            const el = await renderItem(
+                makeItem({children: [makeItem({id: "2"})]}),
+                {deleteModeActive: true},
+            );
 
             expect(el.shadowRoot?.querySelector(".delete-button")).toBeNull();
         });
 
         it("deletes immediately (one click) when confirmDelete is off", async () => {
-            const el = await renderItem(makeItem(), {confirmDelete: false});
+            const el = await renderItem(makeItem(), {confirmDelete: false, deleteModeActive: true});
 
             let detail: {id: string} | undefined;
             el.addEventListener("tree-delete-item", (e) => {
@@ -516,7 +525,7 @@ describe("todo-overlay-tree-item", () => {
         });
 
         it("requires a second click to confirm when confirmDelete is on (the default)", async () => {
-            const el = await renderItem(makeItem());
+            const el = await renderItem(makeItem(), {deleteModeActive: true});
 
             let fired = false;
             el.addEventListener("tree-delete-item", () => { fired = true; });
@@ -537,7 +546,7 @@ describe("todo-overlay-tree-item", () => {
             vi.useFakeTimers();
 
             try {
-                const el = await renderItem(makeItem());
+                const el = await renderItem(makeItem(), {deleteModeActive: true});
 
                 let fired = false;
                 el.addEventListener("tree-delete-item", () => { fired = true; });
@@ -589,22 +598,35 @@ describe("todo-overlay-tree-item :hover suppressed while dragging", () => {
 // leaves empty for a parent (see hasChildren in the template) - a leaf
 // row is unaffected.
 describe("todo-overlay-tree-item per-parent quick add", () => {
-    it("shows the add-child toggle instead of a delete button for a parent row", async () => {
-        const el = await renderItem(makeItem({id: "parent", children: [makeItem({id: "child"})]}));
+    it("shows the add-child toggle on a parent row while add-mode is active", async () => {
+        const el = await renderItem(
+            makeItem({id: "parent", children: [makeItem({id: "child"})]}),
+            {addModeActive: true},
+        );
 
         expect(el.shadowRoot?.querySelector(".child-quick-add-toggle")).not.toBeNull();
         expect(el.shadowRoot?.querySelector(".delete-button")).toBeNull();
     });
 
-    it("still shows the normal delete button for a leaf row", async () => {
-        const el = await renderItem(makeItem({id: "leaf", children: []}));
+    it("shows the add-child toggle on a LEAF row too, while add-mode is active - not just existing parents", async () => {
+        const el = await renderItem(makeItem({id: "leaf", children: []}), {addModeActive: true});
 
-        expect(el.shadowRoot?.querySelector(".delete-button")).not.toBeNull();
-        expect(el.shadowRoot?.querySelector(".child-quick-add-toggle")).toBeNull();
+        expect(el.shadowRoot?.querySelector(".child-quick-add-toggle")).not.toBeNull();
+    });
+
+    it("shows no add-child toggle at all outside add-mode, on a leaf or a parent", async () => {
+        const leaf = await renderItem(makeItem({id: "leaf", children: []}));
+        const parent = await renderItem(makeItem({id: "parent", children: [makeItem({id: "child"})]}));
+
+        expect(leaf.shadowRoot?.querySelector(".child-quick-add-toggle")).toBeNull();
+        expect(parent.shadowRoot?.querySelector(".child-quick-add-toggle")).toBeNull();
     });
 
     it("dispatches tree-toggle-child-quick-add with this item's id when the toggle is clicked", async () => {
-        const el = await renderItem(makeItem({id: "parent", children: [makeItem({id: "child"})]}));
+        const el = await renderItem(
+            makeItem({id: "parent", children: [makeItem({id: "child"})]}),
+            {addModeActive: true},
+        );
 
         let detail: {id: string} | undefined;
         el.addEventListener("tree-toggle-child-quick-add", (e) => {
@@ -619,7 +641,7 @@ describe("todo-overlay-tree-item per-parent quick add", () => {
     it("shows the inline quick-add field, indented, directly below the row and above its children, once open", async () => {
         const el = await renderItem(
             makeItem({id: "parent", children: [makeItem({id: "child", title: "Child"})]}),
-            {childQuickAddParentIds: new Set(["parent"])},
+            {addModeActive: true, childQuickAddParentIds: new Set(["parent"])},
         );
 
         const toggle = el.shadowRoot?.querySelector(".child-quick-add-toggle");
@@ -705,10 +727,10 @@ describe("todo-overlay-tree-item per-parent quick add", () => {
         expect(fired).toBe(false);
     });
 
-    it("hides the add-child toggle in favor of the drag handle while reorder mode is active", async () => {
+    it("reorder mode wins over add-mode for the trailing icon slot, even if both were somehow true at once", async () => {
         const el = await renderItem(
             makeItem({id: "parent", children: [makeItem({id: "child"})]}),
-            {reorderModeActive: true},
+            {reorderModeActive: true, addModeActive: true},
         );
 
         expect(el.shadowRoot?.querySelector(".child-quick-add-toggle")).toBeNull();

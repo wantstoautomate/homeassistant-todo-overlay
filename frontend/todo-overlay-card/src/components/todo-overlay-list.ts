@@ -120,6 +120,13 @@ const ITEM_CHANGED_EVENT = "todo_overlay_item_event";
 // forgiving one.
 const HOVER_DEAD_ZONE_PX = 12;
 
+// How far above the actual touch point a touch drag's ghost is lifted
+// (see isTouchDrag's own comment) - roughly one and a half rows, enough
+// that the row under the finger (the actual drop target) isn't ALSO
+// covered by the ghost stacked on top of it, matching the same idea
+// iOS's own drag-to-reorder uses.
+const TOUCH_DRAG_GHOST_LIFT_PX = 60;
+
 interface TreeItemElement extends Element {
     item?: TodoItem;
 }
@@ -909,18 +916,37 @@ export class TodoOverlayList extends LitElement {
     @state()
     private filterMode: FilterMode = "all";
 
+    // Whether add-mode is active - see this class's own "mode
+    // exclusivity" note above enterAddMode/enterDeleteMode/
+    // enterReorderMode for how this relates to deleteModeActive and
+    // reorderModeActive. Live-reported: an earlier version only ever
+    // showed a per-row "+" on items that ALREADY had children - nothing
+    // that wasn't already a parent had any way to become one. Add-mode
+    // fixes that: every row gets its own "+" (see todo-tree-item.ts's
+    // per-row plus toggle) for the duration this is true, desktop only -
+    // touch relies on the swipe-right gesture for the exact same thing
+    // instead (see todo-tree-item.ts's own swipe handling).
     @state()
-    private quickAddExpanded = false;
+    private addModeActive = false;
 
-    // Which parent items currently have their own inline "add a child"
-    // field open (see todo-tree-item.ts's per-row plus toggle) -
-    // independent of quickAddExpanded (the root-level one) and of each
-    // other; any number can be open at once. Only ever cleared in bulk
-    // when the ROOT quick-add is closed (see onToggleQuickAdd) - closing
-    // one specific parent's own field happens via toggling it again,
-    // handled the same way opening it did (see onToggleChildQuickAdd).
+    // Which items currently have their own inline "add a child" field
+    // open - independent of each other; any number can be open at once.
+    // Only ever cleared in bulk when add-mode itself is turned off (see
+    // enterAddMode's else-branch) - closing one specific item's own
+    // field happens via toggling it again, handled the same way opening
+    // it did (see onToggleChildQuickAdd).
     @state()
     private childQuickAddParentIds: Set<string> = new Set();
+
+    // Desktop-only per-row delete crosses, toggled by the clear-completed
+    // button itself when there's nothing left to clear (see
+    // onClearButtonPointerUp) - see this class's own "mode exclusivity"
+    // note for how this relates to the other two modes. Touch never
+    // shows these at all (crosses are removed entirely from mobile -
+    // see todo-tree-item.ts's own CSS) - swipe-left is the mobile
+    // equivalent instead.
+    @state()
+    private deleteModeActive = false;
 
     // Touch-only reorder mode - see TodoOverlayCardConfig's
     // show_reorder_toggle comment for why this exists as a separate
@@ -929,8 +955,51 @@ export class TodoOverlayList extends LitElement {
     @state()
     private reorderModeActive = false;
 
+    // add-mode, delete-mode, and reorder-mode all want the same per-row
+    // trailing-icon slot (see todo-tree-item.ts's rowClasses) - only one
+    // can sensibly occupy it at a time, so turning any one of them on
+    // turns the other two off. Each enter* method is the single place
+    // that transition happens, including whatever cleanup turning a mode
+    // OFF needs (childQuickAddParentIds for add-mode; nothing extra for
+    // the other two, which have no per-row draft state of their own).
+    private enterAddMode() {
+        this.deleteModeActive = false;
+        this.reorderModeActive = false;
+        this.addModeActive = true;
+    }
+
+    private exitAddMode() {
+        this.addModeActive = false;
+
+        if (this.childQuickAddParentIds.size > 0) {
+            this.childQuickAddParentIds = new Set();
+        }
+    }
+
+    private enterDeleteMode() {
+        this.addModeActive = false;
+        this.reorderModeActive = false;
+        this.deleteModeActive = true;
+
+        if (this.childQuickAddParentIds.size > 0) {
+            this.childQuickAddParentIds = new Set();
+        }
+    }
+
     private onToggleReorderMode = () => {
-        this.reorderModeActive = !this.reorderModeActive;
+        if (this.reorderModeActive) {
+            this.reorderModeActive = false;
+            return;
+        }
+
+        this.addModeActive = false;
+        this.deleteModeActive = false;
+
+        if (this.childQuickAddParentIds.size > 0) {
+            this.childQuickAddParentIds = new Set();
+        }
+
+        this.reorderModeActive = true;
     };
 
     @state()
@@ -1006,6 +1075,17 @@ export class TodoOverlayList extends LitElement {
     private dragGhostSize?: {width: number; height: number};
     private rowSnapshot: RowSnapshot[] = [];
     private dragStartPointerPos = {x: 0, y: 0};
+
+    // Live-reported: reparenting on a touchscreen is hard to judge
+    // because the ghost sits right under the finger, which is ALREADY
+    // covering that same spot - the row you're trying to drop onto is
+    // invisible at the exact moment you need to see it. Mouse users
+    // don't have this problem (nothing about a cursor blocks the view),
+    // so the extra vertical offset in renderDragGhost() below only ever
+    // applies for a touch-originated drag - tracked here from
+    // tree-drag-start's own pointerType, since a mouse's own drag ghost
+    // should keep tracking the cursor exactly like it always has.
+    private isTouchDrag = false;
 
     @state()
     private dialogMode?: "create" | "edit";
@@ -1218,7 +1298,7 @@ export class TodoOverlayList extends LitElement {
     }
 
     private onDragStart(e: CustomEvent) {
-        const {rect, pointerX, pointerY, grabOffsetX, grabOffsetY} = e.detail;
+        const {rect, pointerX, pointerY, grabOffsetX, grabOffsetY, pointerType} = e.detail;
 
         // grabOffsetX/Y come from the original press position, not this
         // event's - see the dispatch site in todo-tree-item.ts for why
@@ -1227,6 +1307,7 @@ export class TodoOverlayList extends LitElement {
         this.dragGhostSize = rect ? {width: rect.width, height: rect.height} : undefined;
         this.ghostPosition = {x: pointerX, y: pointerY};
         this.dragStartPointerPos = {x: pointerX, y: pointerY};
+        this.isTouchDrag = pointerType !== "mouse";
 
         // Captured twice: immediately (approximate - the dragged row's own
         // collapse to its lifted placeholder hasn't rendered yet, since
@@ -1479,20 +1560,15 @@ export class TodoOverlayList extends LitElement {
     }
 
     private onToggleQuickAdd() {
-        if (this.showQuickAdd) {
-            const wasExpanded = this.quickAddExpanded;
-            this.quickAddExpanded = !wasExpanded;
-
-            // Closing the root quick add is the one "close everything"
-            // action - any per-parent fields left open elsewhere in the
-            // list (see childQuickAddParentIds) get cleaned up right
-            // along with it, rather than being left open with no single
-            // control still pointing at them all.
-            if (wasExpanded && this.childQuickAddParentIds.size > 0) {
-                this.childQuickAddParentIds = new Set();
-            }
-        } else {
+        if (!this.showQuickAdd) {
             this.openCreateDialog();
+            return;
+        }
+
+        if (this.addModeActive) {
+            this.exitAddMode();
+        } else {
+            this.enterAddMode();
         }
     }
 
@@ -1557,14 +1633,34 @@ export class TodoOverlayList extends LitElement {
         }
     }
 
-    // A plain tap on the clear-completed button still does exactly what
-    // it always did (see onClearCompleted); HOLDING it (past
-    // LONG_PRESS_MS, same threshold a row's own hold-to-edit uses) and
-    // then releasing offers the much more destructive "delete literally
-    // everything" instead - gated behind both the hold itself and the
-    // confirm dialog below, since there's no undo for this one (see
-    // clear_all's own docstring - same no-undo precedent as
-    // clear_completed already has).
+    // A plain tap's behavior depends on what's actually true right now:
+    // - delete-mode already active -> exit it (the crosses it revealed
+    //   are the one thing a tap can always turn back off).
+    // - otherwise, any top-level item currently complete -> clear them,
+    //   exactly like this button always used to (see onClearCompleted).
+    // - otherwise (nothing to clear) -> there's nothing useful a plain
+    //   clear-completed tap could DO, so it enters delete-mode instead,
+    //   revealing per-row crosses (desktop only - see deleteModeActive's
+    //   own comment) so individual items can still be removed by hand.
+    private onClearButtonTap() {
+        if (this.deleteModeActive) {
+            this.deleteModeActive = false;
+            return;
+        }
+
+        if (this.list?.items.some(item => item.completed)) {
+            this.onClearCompleted();
+        } else {
+            this.enterDeleteMode();
+        }
+    }
+
+    // HOLDING the clear-completed button (past LONG_PRESS_MS, same
+    // threshold a row's own hold-to-edit uses) and then releasing offers
+    // the much more destructive "delete literally everything" instead -
+    // gated behind both the hold itself and the confirm dialog below,
+    // since there's no undo for this one (see clear_all's own docstring
+    // - same no-undo precedent as clear_completed already has).
     //
     // clearButtonPressedAt/clearButtonHoldTimer are deliberately plain
     // fields, not @state - mirrors todo-tree-item.ts's own row hold
@@ -1594,7 +1690,7 @@ export class TodoOverlayList extends LitElement {
         }, LONG_PRESS_MS);
     };
 
-    private onClearButtonPointerUp = async () => {
+    private onClearButtonPointerUp = () => {
         if (this.clearButtonPressedAt === 0) {
             return;
         }
@@ -1607,7 +1703,7 @@ export class TodoOverlayList extends LitElement {
         if (pressDurationMs >= LONG_PRESS_MS) {
             this.confirmingClearAll = true;
         } else {
-            await this.onClearCompleted();
+            this.onClearButtonTap();
         }
     };
 
@@ -1965,6 +2061,8 @@ export class TodoOverlayList extends LitElement {
                     .dragDisabled=${this.dragDisabled}
                     .collapsedIds=${this.collapsedIds}
                     .childQuickAddParentIds=${this.childQuickAddParentIds}
+                    .addModeActive=${this.addModeActive}
+                    .deleteModeActive=${this.deleteModeActive}
                     .reorderModeActive=${this.reorderModeActive}
 
                     @tree-pointer-down=${this.onPointerDown}
@@ -1996,6 +2094,8 @@ export class TodoOverlayList extends LitElement {
                     .dragDisabled=${this.dragDisabled}
                     .collapsedIds=${this.collapsedIds}
                     .childQuickAddParentIds=${this.childQuickAddParentIds}
+                    .addModeActive=${this.addModeActive}
+                    .deleteModeActive=${this.deleteModeActive}
                     .reorderModeActive=${this.reorderModeActive}
 
                     @tree-pointer-down=${this.onPointerDown}
@@ -2029,6 +2129,8 @@ export class TodoOverlayList extends LitElement {
                             .dragDisabled=${this.dragDisabled}
                             .collapsedIds=${this.collapsedIds}
                             .childQuickAddParentIds=${this.childQuickAddParentIds}
+                            .addModeActive=${this.addModeActive}
+                            .deleteModeActive=${this.deleteModeActive}
                     .reorderModeActive=${this.reorderModeActive}
 
                             @tree-pointer-down=${this.onPointerDown}
@@ -2057,6 +2159,8 @@ export class TodoOverlayList extends LitElement {
                 .dragDisabled=${this.dragDisabled}
                 .collapsedIds=${this.collapsedIds}
                 .childQuickAddParentIds=${this.childQuickAddParentIds}
+                .addModeActive=${this.addModeActive}
+                .deleteModeActive=${this.deleteModeActive}
                 .reorderModeActive=${this.reorderModeActive}
 
                 @tree-pointer-down=${this.onPointerDown}
@@ -2083,7 +2187,12 @@ export class TodoOverlayList extends LitElement {
         }
 
         const left = this.ghostPosition.x - this.dragGhostOffset.x;
-        const top = this.ghostPosition.y - this.dragGhostOffset.y;
+        // Lifted clear of the touch point for a touch drag (see
+        // isTouchDrag's own comment) - a mouse's own cursor never
+        // blocks the view, so this stays 0 for one, matching the
+        // ghost's pre-existing behavior exactly.
+        const touchLift = this.isTouchDrag ? TOUCH_DRAG_GHOST_LIFT_PX : 0;
+        const top = this.ghostPosition.y - this.dragGhostOffset.y - touchLift;
 
         return html`
             <div
@@ -2145,7 +2254,7 @@ export class TodoOverlayList extends LitElement {
                                                 class=${classMap({
                                                     "toolbar-icon": true,
                                                     "quick-add-toggle": true,
-                                                    expanded: this.quickAddExpanded,
+                                                    expanded: this.addModeActive,
                                                 })}
                                                 aria-label="Add item"
                                                 title="Add item"
@@ -2213,9 +2322,12 @@ export class TodoOverlayList extends LitElement {
                                                 this.showClearButton
                                                     ? html`
                                                         <button
-                                                            class="toolbar-icon"
-                                                            aria-label="Clear completed"
-                                                            title="Tap: clear completed. Hold: delete all."
+                                                            class=${classMap({
+                                                                "toolbar-icon": true,
+                                                                active: this.deleteModeActive,
+                                                            })}
+                                                            aria-label=${this.deleteModeActive ? "Done deleting" : "Clear completed"}
+                                                            title="Tap: clear completed (or delete items). Hold: delete all."
                                                             @pointerdown=${this.onClearButtonPointerDown}
                                                             @pointerup=${this.onClearButtonPointerUp}
                                                             @pointercancel=${this.onClearButtonPointerCancel}
@@ -2274,7 +2386,7 @@ export class TodoOverlayList extends LitElement {
             }
 
             ${
-                this.quickAddExpanded
+                this.addModeActive
                     ? html`
                         <div class="quick-add-panel">
                             <div class="quick-add-row">

@@ -2094,6 +2094,8 @@ var TodoTreeItem = class extends i4 {
     this.dimmedByAncestorDrag = false;
     this.reorderModeActive = false;
     this.childQuickAddParentIds = /* @__PURE__ */ new Set();
+    this.addModeActive = false;
+    this.deleteModeActive = false;
     this.dragEngaged = false;
     this.confirmingDelete = false;
     this.childQuickAddValue = "";
@@ -2147,7 +2149,8 @@ var TodoTreeItem = class extends i4 {
               grabOffsetX: grabOffset.x,
               grabOffsetY: grabOffset.y,
               pointerX: e7.clientX,
-              pointerY: e7.clientY
+              pointerY: e7.clientY,
+              pointerType: e7.pointerType
             },
             bubbles: true,
             composed: true
@@ -2446,7 +2449,7 @@ var TodoTreeItem = class extends i4 {
                                             >
                                                 ${DRAG_HANDLE_ICON}
                                             </button>
-                                        ` : this.hasChildren ? b2`
+                                        ` : this.addModeActive ? b2`
                                                 <button
                                                     class=${e6({
       "child-quick-add-toggle": true,
@@ -2458,19 +2461,19 @@ var TodoTreeItem = class extends i4 {
                                                 >
                                                     ${this.childQuickAddParentIds.has(this.item.id) ? CROSS_ICON : PLUS_ICON}
                                                 </button>
-                                            ` : b2`
-                                                <button
-                                                    class=${e6({
+                                            ` : this.deleteModeActive && !this.hasChildren ? b2`
+                                                    <button
+                                                        class=${e6({
       "delete-button": true,
       confirming: this.confirmingDelete
     })}
-                                                    aria-label=${this.confirmingDelete ? "Confirm delete" : "Delete"}
-                                                    @click=${this.onDeleteClick}
-                                                    @pointerdown=${(e7) => e7.stopPropagation()}
-                                                >
-                                                    ${CROSS_ICON}
-                                                </button>
-                                            `}
+                                                        aria-label=${this.confirmingDelete ? "Confirm delete" : "Delete"}
+                                                        @click=${this.onDeleteClick}
+                                                        @pointerdown=${(e7) => e7.stopPropagation()}
+                                                    >
+                                                        ${CROSS_ICON}
+                                                    </button>
+                                                ` : ""}
 
                                 ${this.holdRippleOrigin ? b2`
                                             <div
@@ -2484,7 +2487,7 @@ var TodoTreeItem = class extends i4 {
                             `}
                 </div>
 
-                ${this.hasChildren && this.childQuickAddParentIds.has(this.item.id) ? b2`
+                ${this.childQuickAddParentIds.has(this.item.id) ? b2`
                             <div class="child-quick-add-row">
                                 <input
                                     type="text"
@@ -2518,6 +2521,8 @@ var TodoTreeItem = class extends i4 {
                                             .dimmedByAncestorDrag=${isBeingDragged || this.dimmedByAncestorDrag}
                                             .reorderModeActive=${this.reorderModeActive}
                                             .childQuickAddParentIds=${this.childQuickAddParentIds}
+                                            .addModeActive=${this.addModeActive}
+                                            .deleteModeActive=${this.deleteModeActive}
                                         ></todo-overlay-tree-item>
                                     `
     )}
@@ -2969,6 +2974,21 @@ TodoTreeItem.styles = i`
             cursor: pointer;
         }
 
+        /* Desktop-only, unconditionally - (pointer: coarse) is the
+           reliable "primary input is imprecise" signal (same one
+           todo-overlay-list.ts's own .reorder-toggle uses), not a
+           viewport-width breakpoint. Touch relies on swipe instead of
+           either of these: swipe right to add a child, swipe left to
+           delete (see the swipe handling below) - removed entirely
+           rather than left as a smaller/harder-to-hit tap target, which
+           is what "remove the crosses from mobile entirely" asked for. */
+        @media (pointer: coarse) {
+            .child-quick-add-toggle,
+            .delete-button {
+                display: none;
+            }
+        }
+
         /* Shown instead of the delete button (see the template) while
            reorderModeActive, for every row regardless of hasChildren -
            dragging needs to work on parents too, unlike delete.
@@ -3060,6 +3080,12 @@ __decorateClass([
   n4({ attribute: false })
 ], TodoTreeItem.prototype, "childQuickAddParentIds", 2);
 __decorateClass([
+  n4({ attribute: false })
+], TodoTreeItem.prototype, "addModeActive", 2);
+__decorateClass([
+  n4({ attribute: false })
+], TodoTreeItem.prototype, "deleteModeActive", 2);
+__decorateClass([
   r5()
 ], TodoTreeItem.prototype, "holdRippleOrigin", 2);
 __decorateClass([
@@ -3089,6 +3115,8 @@ var TodoTree = class extends i4 {
     this.collapsedIds = /* @__PURE__ */ new Set();
     this.reorderModeActive = false;
     this.childQuickAddParentIds = /* @__PURE__ */ new Set();
+    this.addModeActive = false;
+    this.deleteModeActive = false;
   }
   render() {
     return b2`
@@ -3117,6 +3145,8 @@ var TodoTree = class extends i4 {
                                     .collapsedIds=${this.collapsedIds}
                                     .reorderModeActive=${this.reorderModeActive}
                                     .childQuickAddParentIds=${this.childQuickAddParentIds}
+                                    .addModeActive=${this.addModeActive}
+                                    .deleteModeActive=${this.deleteModeActive}
                                 ></todo-overlay-tree-item>
                             `
     )}
@@ -3197,6 +3227,12 @@ __decorateClass([
 __decorateClass([
   n4({ attribute: false })
 ], TodoTree.prototype, "childQuickAddParentIds", 2);
+__decorateClass([
+  n4({ attribute: false })
+], TodoTree.prototype, "addModeActive", 2);
+__decorateClass([
+  n4({ attribute: false })
+], TodoTree.prototype, "deleteModeActive", 2);
 TodoTree = __decorateClass([
   t3("todo-overlay-tree")
 ], TodoTree);
@@ -3331,6 +3367,7 @@ var REORDER_TOGGLE_ICON = b2`
 `;
 var ITEM_CHANGED_EVENT = "todo_overlay_item_event";
 var HOVER_DEAD_ZONE_PX = 12;
+var TOUCH_DRAG_GHOST_LIFT_PX = 60;
 function collectAllRows(root, currentEntity, currentDepth = 0) {
   const rows = [];
   for (const el of Array.from(root.querySelectorAll("*"))) {
@@ -3493,11 +3530,21 @@ var TodoOverlayList = class extends i4 {
     this.moveCompletedItems = false;
     this.collapsedIds = /* @__PURE__ */ new Set();
     this.filterMode = "all";
-    this.quickAddExpanded = false;
+    this.addModeActive = false;
     this.childQuickAddParentIds = /* @__PURE__ */ new Set();
+    this.deleteModeActive = false;
     this.reorderModeActive = false;
     this.onToggleReorderMode = () => {
-      this.reorderModeActive = !this.reorderModeActive;
+      if (this.reorderModeActive) {
+        this.reorderModeActive = false;
+        return;
+      }
+      this.addModeActive = false;
+      this.deleteModeActive = false;
+      if (this.childQuickAddParentIds.size > 0) {
+        this.childQuickAddParentIds = /* @__PURE__ */ new Set();
+      }
+      this.reorderModeActive = true;
     };
     this.hoverDepth = 0;
     this.foreignDragActive = false;
@@ -3513,6 +3560,16 @@ var TodoOverlayList = class extends i4 {
     this.dragGhostOffset = { x: 0, y: 0 };
     this.rowSnapshot = [];
     this.dragStartPointerPos = { x: 0, y: 0 };
+    // Live-reported: reparenting on a touchscreen is hard to judge
+    // because the ghost sits right under the finger, which is ALREADY
+    // covering that same spot - the row you're trying to drop onto is
+    // invisible at the exact moment you need to see it. Mouse users
+    // don't have this problem (nothing about a cursor blocks the view),
+    // so the extra vertical offset in renderDragGhost() below only ever
+    // applies for a touch-originated drag - tracked here from
+    // tree-drag-start's own pointerType, since a mouse's own drag ghost
+    // should keep tracking the cursor exactly like it always has.
+    this.isTouchDrag = false;
     this.dialogFormValue = EMPTY_FORM_VALUE;
     this.quickAddValue = "";
     this.saveLoadValue = EMPTY_SAVE_LOAD_VALUE;
@@ -3590,14 +3647,12 @@ var TodoOverlayList = class extends i4 {
         }
       }
     };
-    // A plain tap on the clear-completed button still does exactly what
-    // it always did (see onClearCompleted); HOLDING it (past
-    // LONG_PRESS_MS, same threshold a row's own hold-to-edit uses) and
-    // then releasing offers the much more destructive "delete literally
-    // everything" instead - gated behind both the hold itself and the
-    // confirm dialog below, since there's no undo for this one (see
-    // clear_all's own docstring - same no-undo precedent as
-    // clear_completed already has).
+    // HOLDING the clear-completed button (past LONG_PRESS_MS, same
+    // threshold a row's own hold-to-edit uses) and then releasing offers
+    // the much more destructive "delete literally everything" instead -
+    // gated behind both the hold itself and the confirm dialog below,
+    // since there's no undo for this one (see clear_all's own docstring
+    // - same no-undo precedent as clear_completed already has).
     //
     // clearButtonPressedAt/clearButtonHoldTimer are deliberately plain
     // fields, not @state - mirrors todo-tree-item.ts's own row hold
@@ -3615,7 +3670,7 @@ var TodoOverlayList = class extends i4 {
         this.requestUpdate();
       }, LONG_PRESS_MS);
     };
-    this.onClearButtonPointerUp = async () => {
+    this.onClearButtonPointerUp = () => {
       if (this.clearButtonPressedAt === 0) {
         return;
       }
@@ -3626,7 +3681,7 @@ var TodoOverlayList = class extends i4 {
       if (pressDurationMs >= LONG_PRESS_MS) {
         this.confirmingClearAll = true;
       } else {
-        await this.onClearCompleted();
+        this.onClearButtonTap();
       }
     };
     this.onClearButtonPointerCancel = () => {
@@ -3637,6 +3692,32 @@ var TodoOverlayList = class extends i4 {
     this.closeClearAllConfirm = () => {
       this.confirmingClearAll = false;
     };
+  }
+  // add-mode, delete-mode, and reorder-mode all want the same per-row
+  // trailing-icon slot (see todo-tree-item.ts's rowClasses) - only one
+  // can sensibly occupy it at a time, so turning any one of them on
+  // turns the other two off. Each enter* method is the single place
+  // that transition happens, including whatever cleanup turning a mode
+  // OFF needs (childQuickAddParentIds for add-mode; nothing extra for
+  // the other two, which have no per-row draft state of their own).
+  enterAddMode() {
+    this.deleteModeActive = false;
+    this.reorderModeActive = false;
+    this.addModeActive = true;
+  }
+  exitAddMode() {
+    this.addModeActive = false;
+    if (this.childQuickAddParentIds.size > 0) {
+      this.childQuickAddParentIds = /* @__PURE__ */ new Set();
+    }
+  }
+  enterDeleteMode() {
+    this.addModeActive = false;
+    this.reorderModeActive = false;
+    this.deleteModeActive = true;
+    if (this.childQuickAddParentIds.size > 0) {
+      this.childQuickAddParentIds = /* @__PURE__ */ new Set();
+    }
   }
   // Native hass.states-based reloading (below) only fires for changes
   // that touch the native entity itself - a same-list reorder is purely
@@ -3762,11 +3843,12 @@ var TodoOverlayList = class extends i4 {
     this.rowSnapshot = collectAllRows(document).filter((row) => row.id === void 0 || !excluded.has(row.id)).map((row) => excluded.size > 0 && row.children.some((child) => excluded.has(child.id)) ? { ...row, children: row.children.filter((child) => !excluded.has(child.id)) } : row);
   }
   onDragStart(e7) {
-    const { rect, pointerX, pointerY, grabOffsetX, grabOffsetY } = e7.detail;
+    const { rect, pointerX, pointerY, grabOffsetX, grabOffsetY, pointerType } = e7.detail;
     this.dragGhostOffset = { x: grabOffsetX ?? 0, y: grabOffsetY ?? 0 };
     this.dragGhostSize = rect ? { width: rect.width, height: rect.height } : void 0;
     this.ghostPosition = { x: pointerX, y: pointerY };
     this.dragStartPointerPos = { x: pointerX, y: pointerY };
+    this.isTouchDrag = pointerType !== "mouse";
     this.snapshotRows();
     requestAnimationFrame(() => this.snapshotRows());
     window.addEventListener("pointermove", this.onGlobalPointerMove, { capture: true });
@@ -3837,14 +3919,14 @@ var TodoOverlayList = class extends i4 {
     this.filterMode = e7.target.value;
   }
   onToggleQuickAdd() {
-    if (this.showQuickAdd) {
-      const wasExpanded = this.quickAddExpanded;
-      this.quickAddExpanded = !wasExpanded;
-      if (wasExpanded && this.childQuickAddParentIds.size > 0) {
-        this.childQuickAddParentIds = /* @__PURE__ */ new Set();
-      }
-    } else {
+    if (!this.showQuickAdd) {
       this.openCreateDialog();
+      return;
+    }
+    if (this.addModeActive) {
+      this.exitAddMode();
+    } else {
+      this.enterAddMode();
     }
   }
   // --- completion + cascade undo --------------------------------------
@@ -3894,6 +3976,26 @@ var TodoOverlayList = class extends i4 {
       await this.load();
     } catch (err) {
       this.reportError("clearing completed items", err);
+    }
+  }
+  // A plain tap's behavior depends on what's actually true right now:
+  // - delete-mode already active -> exit it (the crosses it revealed
+  //   are the one thing a tap can always turn back off).
+  // - otherwise, any top-level item currently complete -> clear them,
+  //   exactly like this button always used to (see onClearCompleted).
+  // - otherwise (nothing to clear) -> there's nothing useful a plain
+  //   clear-completed tap could DO, so it enters delete-mode instead,
+  //   revealing per-row crosses (desktop only - see deleteModeActive's
+  //   own comment) so individual items can still be removed by hand.
+  onClearButtonTap() {
+    if (this.deleteModeActive) {
+      this.deleteModeActive = false;
+      return;
+    }
+    if (this.list?.items.some((item) => item.completed)) {
+      this.onClearCompleted();
+    } else {
+      this.enterDeleteMode();
     }
   }
   get clearButtonHoldReady() {
@@ -4145,6 +4247,8 @@ var TodoOverlayList = class extends i4 {
                     .dragDisabled=${this.dragDisabled}
                     .collapsedIds=${this.collapsedIds}
                     .childQuickAddParentIds=${this.childQuickAddParentIds}
+                    .addModeActive=${this.addModeActive}
+                    .deleteModeActive=${this.deleteModeActive}
                     .reorderModeActive=${this.reorderModeActive}
 
                     @tree-pointer-down=${this.onPointerDown}
@@ -4174,6 +4278,8 @@ var TodoOverlayList = class extends i4 {
                     .dragDisabled=${this.dragDisabled}
                     .collapsedIds=${this.collapsedIds}
                     .childQuickAddParentIds=${this.childQuickAddParentIds}
+                    .addModeActive=${this.addModeActive}
+                    .deleteModeActive=${this.deleteModeActive}
                     .reorderModeActive=${this.reorderModeActive}
 
                     @tree-pointer-down=${this.onPointerDown}
@@ -4203,6 +4309,8 @@ var TodoOverlayList = class extends i4 {
                             .dragDisabled=${this.dragDisabled}
                             .collapsedIds=${this.collapsedIds}
                             .childQuickAddParentIds=${this.childQuickAddParentIds}
+                            .addModeActive=${this.addModeActive}
+                            .deleteModeActive=${this.deleteModeActive}
                     .reorderModeActive=${this.reorderModeActive}
 
                             @tree-pointer-down=${this.onPointerDown}
@@ -4229,6 +4337,8 @@ var TodoOverlayList = class extends i4 {
                 .dragDisabled=${this.dragDisabled}
                 .collapsedIds=${this.collapsedIds}
                 .childQuickAddParentIds=${this.childQuickAddParentIds}
+                .addModeActive=${this.addModeActive}
+                .deleteModeActive=${this.deleteModeActive}
                 .reorderModeActive=${this.reorderModeActive}
 
                 @tree-pointer-down=${this.onPointerDown}
@@ -4251,7 +4361,8 @@ var TodoOverlayList = class extends i4 {
       return "";
     }
     const left = this.ghostPosition.x - this.dragGhostOffset.x;
-    const top = this.ghostPosition.y - this.dragGhostOffset.y;
+    const touchLift = this.isTouchDrag ? TOUCH_DRAG_GHOST_LIFT_PX : 0;
+    const top = this.ghostPosition.y - this.dragGhostOffset.y - touchLift;
     return b2`
             <div
                 class="drag-ghost"
@@ -4289,7 +4400,7 @@ var TodoOverlayList = class extends i4 {
                                                 class=${e6({
       "toolbar-icon": true,
       "quick-add-toggle": true,
-      expanded: this.quickAddExpanded
+      expanded: this.addModeActive
     })}
                                                 aria-label="Add item"
                                                 title="Add item"
@@ -4343,9 +4454,12 @@ var TodoOverlayList = class extends i4 {
 
                                             ${this.showClearButton ? b2`
                                                         <button
-                                                            class="toolbar-icon"
-                                                            aria-label="Clear completed"
-                                                            title="Tap: clear completed. Hold: delete all."
+                                                            class=${e6({
+      "toolbar-icon": true,
+      active: this.deleteModeActive
+    })}
+                                                            aria-label=${this.deleteModeActive ? "Done deleting" : "Clear completed"}
+                                                            title="Tap: clear completed (or delete items). Hold: delete all."
                                                             @pointerdown=${this.onClearButtonPointerDown}
                                                             @pointerup=${this.onClearButtonPointerUp}
                                                             @pointercancel=${this.onClearButtonPointerCancel}
@@ -4381,7 +4495,7 @@ var TodoOverlayList = class extends i4 {
                         </div>
                     ` : ""}
 
-            ${this.quickAddExpanded ? b2`
+            ${this.addModeActive ? b2`
                         <div class="quick-add-panel">
                             <div class="quick-add-row">
                                 <input
@@ -4862,10 +4976,13 @@ __decorateClass([
 ], TodoOverlayList.prototype, "filterMode", 2);
 __decorateClass([
   r5()
-], TodoOverlayList.prototype, "quickAddExpanded", 2);
+], TodoOverlayList.prototype, "addModeActive", 2);
 __decorateClass([
   r5()
 ], TodoOverlayList.prototype, "childQuickAddParentIds", 2);
+__decorateClass([
+  r5()
+], TodoOverlayList.prototype, "deleteModeActive", 2);
 __decorateClass([
   r5()
 ], TodoOverlayList.prototype, "reorderModeActive", 2);
