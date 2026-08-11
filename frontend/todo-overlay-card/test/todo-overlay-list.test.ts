@@ -1966,3 +1966,120 @@ describe("todo-overlay-list row delete button", () => {
                 .filter(m => m.type === "todo_overlay/get_list").length);
     });
 });
+
+// Live-reported: an earlier version lifted the drag ghost clear of the
+// pointer entirely (to keep a touch drag's target row visible under
+// it), and it looked visually disconnected from what was actually
+// being dragged - on both touch AND mouse. Replaced with three opt-in,
+// A/B-testable treatments (see DragGhostStyle in models.ts) that only
+// ever change the ghost's own size/opacity, or add a separate satellite
+// element near it - never its position, which always stays pinned
+// exactly to the pointer regardless of which (if any) style is active.
+describe("todo-overlay-list drag ghost styles", () => {
+    function setDragState(el: TodoOverlayList, overrides: Record<string, unknown>) {
+        Object.assign(el as unknown as Record<string, unknown>, overrides);
+    }
+
+    async function renderHoveringParent(dragGhostStyle?: "none" | "label" | "shrink" | "translucent") {
+        const {el} = await renderList(
+            {
+                entity_id: ENTITY_ID,
+                items: [
+                    makeItem({id: "parent", title: "Home Assistant", children: []}),
+                    makeItem({id: "leaf", title: "Groceries"}),
+                ],
+            },
+            dragGhostStyle ? {dragGhostStyle} : {},
+        );
+
+        setDragState(el, {
+            draggedId: "leaf",
+            ghostPosition: {x: 100, y: 200},
+            dragGhostOffset: {x: 10, y: 15},
+            dragGhostSize: {width: 300, height: 40},
+            hoverId: "parent",
+            hoverPlacement: "inside",
+        });
+        await settle(el);
+
+        return el;
+    }
+
+    it("keeps the ghost's own position pinned exactly to the pointer minus the grab offset, regardless of style", async () => {
+        const el = await renderHoveringParent("shrink");
+
+        const ghost = el.shadowRoot?.querySelector(".drag-ghost") as HTMLElement;
+        expect(ghost.style.left).toBe("90px");
+        expect(ghost.style.top).toBe("185px");
+    });
+
+    it("applies no special treatment at all while style is 'none', even hovering a parent", async () => {
+        const el = await renderHoveringParent();
+
+        const ghost = el.shadowRoot?.querySelector(".drag-ghost") as HTMLElement;
+        expect(ghost.classList.contains("shrink")).toBe(false);
+        expect(ghost.classList.contains("translucent")).toBe(false);
+        expect(ghost.style.width).toBe("300px");
+        expect(el.shadowRoot?.querySelector(".drag-ghost-label")).toBeNull();
+    });
+
+    it("'shrink' collapses the ghost's width only while hovering a valid parent ('inside')", async () => {
+        const el = await renderHoveringParent("shrink");
+
+        const ghost = el.shadowRoot?.querySelector(".drag-ghost") as HTMLElement;
+        expect(ghost.classList.contains("shrink")).toBe(true);
+        expect(parseInt(ghost.style.width, 10)).toBeLessThan(100);
+
+        // Switching to a before/after (reorder) target is NOT a
+        // reparent - the ghost never obscures anything a shadow-box gap
+        // doesn't already show elsewhere, so no treatment applies.
+        setDragState(el, {hoverPlacement: "before"});
+        await settle(el);
+
+        expect(el.shadowRoot?.querySelector(".drag-ghost")?.classList.contains("shrink")).toBe(false);
+    });
+
+    it("'translucent' fades the ghost only while hovering a valid parent", async () => {
+        const el = await renderHoveringParent("translucent");
+
+        expect(el.shadowRoot?.querySelector(".drag-ghost")?.classList.contains("translucent")).toBe(true);
+    });
+
+    it("'label' renders a floating pill naming the parent, offset near - not on top of - the pointer", async () => {
+        const el = await renderHoveringParent("label");
+
+        const label = el.shadowRoot?.querySelector(".drag-ghost-label") as HTMLElement;
+        expect(label).not.toBeNull();
+        expect(label.textContent?.trim()).toBe("Add to: Home Assistant");
+
+        // Anchored to the raw pointer position (ghostPosition), not the
+        // ghost's own grab-offset-adjusted top-left - a small, fixed
+        // satellite offset, never the ghost's own position.
+        expect(label.style.left).toBe("116px");
+        expect(label.style.top).toBe("220px");
+    });
+
+    it("shows no label while hovering a before/after target, even with 'label' selected", async () => {
+        const {el} = await renderList(
+            {
+                entity_id: ENTITY_ID,
+                items: [
+                    makeItem({id: "parent", title: "Home Assistant", children: [makeItem({id: "child", title: "Firewall"})]}),
+                    makeItem({id: "leaf", title: "Groceries"}),
+                ],
+            },
+            {dragGhostStyle: "label"},
+        );
+
+        setDragState(el, {
+            draggedId: "leaf",
+            ghostPosition: {x: 100, y: 200},
+            dragGhostOffset: {x: 0, y: 0},
+            hoverId: "child",
+            hoverPlacement: "before",
+        });
+        await settle(el);
+
+        expect(el.shadowRoot?.querySelector(".drag-ghost-label")).toBeNull();
+    });
+});

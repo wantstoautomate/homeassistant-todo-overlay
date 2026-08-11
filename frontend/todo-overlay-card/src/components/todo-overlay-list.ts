@@ -28,6 +28,7 @@ import type {FilterMode} from "../filter";
 import {filterTree} from "../filter";
 import type {HassLike} from "../hass";
 import {
+    type DragGhostStyle,
     LONG_PRESS_MS,
     type Placement,
     type TodoItem,
@@ -120,16 +121,19 @@ const ITEM_CHANGED_EVENT = "todo_overlay_item_event";
 // forgiving one.
 const HOVER_DEAD_ZONE_PX = 12;
 
-// How far above the actual pointer a drag's ghost is lifted - roughly
-// one and a half rows, enough that the row under the pointer (the
-// actual drop target) isn't ALSO covered by the ghost stacked on top
-// of it, matching the same idea iOS's own drag-to-reorder uses.
-// Originally touch-only (a mouse cursor is thin enough that it never
-// blocked the view the way a finger does), applied unconditionally now
-// so a mouse drag previews the exact same behavior a touch drag gets -
-// there was no actual downside to it for mouse, just no upside either
-// until this became something worth testing without a touchscreen.
-const DRAG_GHOST_LIFT_PX = 60;
+// How far below-right of the actual pointer the "label" drag-ghost
+// style's floating pill sits (see renderDragGhost/DragGhostStyle) - a
+// small, deliberate offset so it reads as its own satellite element
+// near the pointer rather than looking like it's trying to align with
+// anything, not an attempt to dodge the ghost or the target row.
+const DRAG_GHOST_LABEL_OFFSET_PX = {x: 16, y: 20};
+
+// How narrow the "shrink" drag-ghost style's ghost collapses to while
+// hovering a valid reparent target (see renderDragGhost) - small enough
+// that the target row is visible around it, without changing the
+// ghost's own top-left anchor (still the pointer minus the original
+// grab offset, exactly like the ghost's normal, non-shrunk width).
+const DRAG_GHOST_SHRINK_WIDTH_PX = 44;
 
 interface TreeItemElement extends Element {
     item?: TodoItem;
@@ -850,6 +854,55 @@ export class TodoOverlayList extends LitElement {
             padding: 1px 7px;
             border-radius: 10px;
         }
+
+        /* "shrink" drag-ghost style only (see DragGhostStyle/
+           renderDragGhost) - width is set inline per-instance (see
+           DRAG_GHOST_SHRINK_WIDTH_PX), this just hides the content that
+           no longer fits so nothing overflows or wraps oddly inside the
+           collapsed box. */
+        .drag-ghost.shrink {
+            padding: 8px;
+            justify-content: center;
+            gap: 0;
+        }
+
+        .drag-ghost.shrink .drag-ghost-title,
+        .drag-ghost.shrink .drag-ghost-quantity,
+        .drag-ghost.shrink ha-checkbox {
+            display: none;
+        }
+
+        /* "translucent" drag-ghost style only - lets the highlighted
+           target row show through well enough to read while still
+           fully covering it, unlike shrink (smaller box) or label (an
+           entirely separate element). */
+        .drag-ghost.translucent {
+            opacity: 0.4;
+        }
+
+        /* "label" drag-ghost style only - a small satellite pill near
+           (not on top of) the pointer, naming the parent a release
+           right now would nest under. Never requires seeing the target
+           row at all, which is what makes it work identically on touch
+           (a finger blocks far more of the view than a mouse cursor
+           does) and mouse alike. */
+        .drag-ghost-label {
+            position: fixed;
+            z-index: 11;
+            pointer-events: none;
+            background: var(--accent-color, var(--primary-color));
+            color: #fff;
+            font-family: Roboto, "Noto Sans", sans-serif;
+            font-size: 12px;
+            font-weight: 600;
+            padding: 4px 10px;
+            border-radius: 12px;
+            max-width: 220px;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+            box-shadow: 0 2px 6px rgba(0, 0, 0, 0.25);
+        }
     `;
 
     @property({attribute: false})
@@ -910,6 +963,11 @@ export class TodoOverlayList extends LitElement {
     // the bottom, uncompleted rise back up" behavior end to end.
     @property({type: Boolean})
     public moveCompletedItems = false;
+
+    // See DragGhostStyle's own comment - "none" (the default) leaves
+    // the drag ghost exactly as it's always behaved.
+    @property()
+    public dragGhostStyle: DragGhostStyle = "none";
 
     @state()
     private list?: TodoList;
@@ -2178,18 +2236,40 @@ export class TodoOverlayList extends LitElement {
             return "";
         }
 
+        // The ghost's own top-left anchor is ALWAYS just the pointer
+        // minus the original grab offset, regardless of dragGhostStyle -
+        // an earlier attempt lifted this clear of the pointer entirely
+        // and was live-reported as feeling visually disconnected from
+        // what was actually being dragged. Every style below only ever
+        // changes the ghost's own SIZE/opacity, or adds a separate
+        // satellite element near it - never its position.
         const left = this.ghostPosition.x - this.dragGhostOffset.x;
-        // Lifted clear of the pointer regardless of input type - see
-        // DRAG_GHOST_LIFT_PX's own comment.
-        const top = this.ghostPosition.y - this.dragGhostOffset.y - DRAG_GHOST_LIFT_PX;
+        const top = this.ghostPosition.y - this.dragGhostOffset.y;
+
+        // Only while actually hovering a valid reparent ("inside")
+        // target - that's the one case the ghost (sitting right at the
+        // pointer, by design) can fully cover the very row being
+        // judged. Before/after reordering already shows its own
+        // always-visible shadow-box gap elsewhere in the list, so none
+        // of this ever applies to it.
+        const hoveringParent = this.hoverPlacement === "inside" && this.hoverId !== undefined;
+        const targetItem = hoveringParent ? findItem(this.list.items, this.hoverId!) : undefined;
+        const applyTreatment = hoveringParent && targetItem !== undefined && this.dragGhostStyle !== "none";
+        const shrinking = applyTreatment && this.dragGhostStyle === "shrink";
 
         return html`
             <div
-                class="drag-ghost"
+                class=${classMap({
+                    "drag-ghost": true,
+                    shrink: shrinking,
+                    translucent: applyTreatment && this.dragGhostStyle === "translucent",
+                })}
                 style=${styleMap({
                     left: `${left}px`,
                     top: `${top}px`,
-                    width: this.dragGhostSize ? `${this.dragGhostSize.width}px` : undefined,
+                    width: shrinking
+                        ? `${DRAG_GHOST_SHRINK_WIDTH_PX}px`
+                        : (this.dragGhostSize ? `${this.dragGhostSize.width}px` : undefined),
                 })}
             >
                 <ha-checkbox .checked=${item.completed}></ha-checkbox>
@@ -2200,6 +2280,21 @@ export class TodoOverlayList extends LitElement {
                         : ""
                 }
             </div>
+            ${
+                applyTreatment && this.dragGhostStyle === "label"
+                    ? html`
+                        <div
+                            class="drag-ghost-label"
+                            style=${styleMap({
+                                left: `${this.ghostPosition.x + DRAG_GHOST_LABEL_OFFSET_PX.x}px`,
+                                top: `${this.ghostPosition.y + DRAG_GHOST_LABEL_OFFSET_PX.y}px`,
+                            })}
+                        >
+                            Add to: ${targetItem!.title}
+                        </div>
+                    `
+                    : ""
+            }
         `;
     }
 

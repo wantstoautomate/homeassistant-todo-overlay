@@ -25,6 +25,18 @@ export type Placement = "before" | "after" | "inside";
 
 export type LoadMode = "replace" | "merge" | "full_merge";
 
+// Purely cosmetic - how the floating "ghost" that follows the pointer
+// during a drag handles the one moment it's a genuine problem: hovering
+// a valid reparent ("inside") target, where the ghost sits right at the
+// pointer (deliberately - an earlier attempt lifted it clear of the
+// pointer entirely and was live-reported as feeling visually
+// disconnected from what was actually being dragged) and so can fully
+// cover the very row being judged. "none" leaves the ghost exactly as
+// it's always been, full stop. The other three are live A/B options,
+// not a settled design yet - see todo-overlay-list.ts's
+// renderDragGhost for what each one actually does.
+export type DragGhostStyle = "none" | "label" | "shrink" | "translucent";
+
 // How long a press must be held before release opens the edit dialog
 // instead of toggling completion. Matches Home Assistant's own hold
 // threshold (see homeassistant/frontend's action-handler-directive.ts).
