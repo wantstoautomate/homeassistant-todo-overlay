@@ -31,10 +31,13 @@ export type LoadMode = "replace" | "merge" | "full_merge";
 // pointer (deliberately - an earlier attempt lifted it clear of the
 // pointer entirely and was live-reported as feeling visually
 // disconnected from what was actually being dragged) and so can fully
-// cover the very row being judged. "none" leaves the ghost exactly as
-// it's always been, full stop. The other three are live A/B options,
-// not a settled design yet - see todo-overlay-list.ts's
-// renderDragGhost for what each one actually does.
+// cover the very row being judged. "label" (the default) puts a small
+// pill naming the parent directly under the ghost; "shrink" and
+// "translucent" solve the same problem by changing the ghost itself
+// instead; "none" leaves the ghost exactly as it's always been, full
+// stop. All three non-default options remain available (card editor's
+// Advanced section) for anyone who prefers a different one - see
+// todo-overlay-list.ts's renderDragGhost for what each actually does.
 export type DragGhostStyle = "none" | "label" | "shrink" | "translucent";
 
 // How long a press must be held before release opens the edit dialog

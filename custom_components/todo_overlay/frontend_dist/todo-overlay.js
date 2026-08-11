@@ -3565,7 +3565,8 @@ var REORDER_TOGGLE_ICON = b2`
 `;
 var ITEM_CHANGED_EVENT = "todo_overlay_item_event";
 var HOVER_DEAD_ZONE_PX = 12;
-var DRAG_GHOST_LABEL_OFFSET_PX = { x: 16, y: 20 };
+var DRAG_GHOST_LABEL_GAP_PX = 8;
+var DRAG_GHOST_FALLBACK_HEIGHT_PX = 40;
 var DRAG_GHOST_SHRINK_WIDTH_PX = 44;
 function collectAllRows(root, currentEntity, currentDepth = 0) {
   const rows = [];
@@ -3727,7 +3728,7 @@ var TodoOverlayList = class extends i4 {
     this.showFilterMenu = false;
     this.showReorderToggle = true;
     this.moveCompletedItems = false;
-    this.dragGhostStyle = "none";
+    this.dragGhostStyle = "label";
     this.collapsedIds = /* @__PURE__ */ new Set();
     this.filterMode = "all";
     this.addModeActive = false;
@@ -4576,8 +4577,8 @@ var TodoOverlayList = class extends i4 {
                         <div
                             class="drag-ghost-label"
                             style=${o6({
-      left: `${this.ghostPosition.x + DRAG_GHOST_LABEL_OFFSET_PX.x}px`,
-      top: `${this.ghostPosition.y + DRAG_GHOST_LABEL_OFFSET_PX.y}px`
+      left: `${left}px`,
+      top: `${top + (this.dragGhostSize?.height ?? DRAG_GHOST_FALLBACK_HEIGHT_PX) + DRAG_GHOST_LABEL_GAP_PX}px`
     })}
                         >
                             Add to: ${targetItem.title}
@@ -5161,22 +5162,40 @@ TodoOverlayList.styles = i`
            row at all, which is what makes it work identically on touch
            (a finger blocks far more of the view than a mouse cursor
            does) and mouse alike. */
+        /* Anchored directly under the ghost's own box (same left edge,
+           see renderDragGhost) with a small upward-pointing arrow (see
+           ::before below) so it reads as clearly attached to the thing
+           being dragged, not as an independent floating chip with no
+           obvious connection to it - the exact "dissociated" look
+           live-reported against the first version, which anchored this
+           near the raw pointer instead. */
         .drag-ghost-label {
             position: fixed;
             z-index: 11;
             pointer-events: none;
+            display: inline-block;
             background: var(--accent-color, var(--primary-color));
             color: #fff;
             font-family: Roboto, "Noto Sans", sans-serif;
-            font-size: 12px;
+            font-size: 14px;
             font-weight: 600;
-            padding: 4px 10px;
-            border-radius: 12px;
-            max-width: 220px;
+            padding: 7px 14px;
+            border-radius: 8px;
+            max-width: 260px;
             overflow: hidden;
             text-overflow: ellipsis;
             white-space: nowrap;
-            box-shadow: 0 2px 6px rgba(0, 0, 0, 0.25);
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+        }
+
+        .drag-ghost-label::before {
+            content: "";
+            position: absolute;
+            top: -6px;
+            left: 16px;
+            border-left: 6px solid transparent;
+            border-right: 6px solid transparent;
+            border-bottom: 6px solid var(--accent-color, var(--primary-color));
         }
     `;
 __decorateClass([
@@ -5348,7 +5367,7 @@ var TodoOverlayCardEditor = class extends i4 {
   }
   onDragGhostStyleChanged(e7) {
     const value = e7.target.value;
-    this.emitConfigChanged({ ...this._config, drag_ghost_style: value === "none" ? void 0 : value });
+    this.emitConfigChanged({ ...this._config, drag_ghost_style: value === "label" ? void 0 : value });
   }
   onSwitchChanged(field, defaultValue) {
     return (e7) => {
@@ -5482,17 +5501,17 @@ var TodoOverlayCardEditor = class extends i4 {
 
                     <div class="field select-field">
                         <label for="todo-overlay-drag-ghost-style">
-                            Drag ghost style while hovering a parent (experimental - A/B testing)
+                            Drag ghost style while hovering a parent
                         </label>
                         <select
                             id="todo-overlay-drag-ghost-style"
-                            .value=${this._config.drag_ghost_style ?? "none"}
+                            .value=${this._config.drag_ghost_style ?? "label"}
                             @change=${this.onDragGhostStyleChanged}
                         >
-                            <option value="none">None (default)</option>
-                            <option value="label">Floating label naming the parent</option>
+                            <option value="label">Floating label naming the parent (default)</option>
                             <option value="shrink">Shrink the ghost</option>
                             <option value="translucent">Make the ghost translucent</option>
+                            <option value="none">None</option>
                         </select>
                     </div>
                 </div>
@@ -5637,7 +5656,7 @@ var TodoOverlayCard = class extends i4 {
                             .showFilterMenu=${this.config.show_filter_menu ?? false}
                             .showReorderToggle=${this.config.show_reorder_toggle ?? true}
                             .moveCompletedItems=${this.config.move_completed_items ?? false}
-                            .dragGhostStyle=${this.config.drag_ghost_style ?? "none"}
+                            .dragGhostStyle=${this.config.drag_ghost_style ?? "label"}
                         ></todo-overlay-list>
                     </div>
                 `)}

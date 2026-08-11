@@ -2014,7 +2014,7 @@ describe("todo-overlay-list drag ghost styles", () => {
     });
 
     it("applies no special treatment at all while style is 'none', even hovering a parent", async () => {
-        const el = await renderHoveringParent();
+        const el = await renderHoveringParent("none");
 
         const ghost = el.shadowRoot?.querySelector(".drag-ghost") as HTMLElement;
         expect(ghost.classList.contains("shrink")).toBe(false);
@@ -2045,18 +2045,20 @@ describe("todo-overlay-list drag ghost styles", () => {
         expect(el.shadowRoot?.querySelector(".drag-ghost")?.classList.contains("translucent")).toBe(true);
     });
 
-    it("'label' renders a floating pill naming the parent, offset near - not on top of - the pointer", async () => {
+    it("'label' renders a floating pill naming the parent, directly under the ghost - not near the raw pointer", async () => {
         const el = await renderHoveringParent("label");
 
         const label = el.shadowRoot?.querySelector(".drag-ghost-label") as HTMLElement;
         expect(label).not.toBeNull();
         expect(label.textContent?.trim()).toBe("Add to: Home Assistant");
 
-        // Anchored to the raw pointer position (ghostPosition), not the
-        // ghost's own grab-offset-adjusted top-left - a small, fixed
-        // satellite offset, never the ghost's own position.
-        expect(label.style.left).toBe("116px");
-        expect(label.style.top).toBe("220px");
+        // Same left edge as the ghost itself (90 = 100 - 10 grab
+        // offset), directly beneath it (185 ghost-top + 40 ghost height
+        // + 8 gap) - anchored to the GHOST's own box, not the raw
+        // pointer, so it always reads as attached to what's being
+        // dragged regardless of where on the row it was grabbed.
+        expect(label.style.left).toBe("90px");
+        expect(label.style.top).toBe("233px");
     });
 
     it("shows no label while hovering a before/after target, even with 'label' selected", async () => {

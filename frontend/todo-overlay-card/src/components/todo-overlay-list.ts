@@ -121,12 +121,19 @@ const ITEM_CHANGED_EVENT = "todo_overlay_item_event";
 // forgiving one.
 const HOVER_DEAD_ZONE_PX = 12;
 
-// How far below-right of the actual pointer the "label" drag-ghost
-// style's floating pill sits (see renderDragGhost/DragGhostStyle) - a
-// small, deliberate offset so it reads as its own satellite element
-// near the pointer rather than looking like it's trying to align with
-// anything, not an attempt to dodge the ghost or the target row.
-const DRAG_GHOST_LABEL_OFFSET_PX = {x: 16, y: 20};
+// Gap between the ghost's own box and the "label" drag-ghost style's
+// floating pill (see renderDragGhost/DragGhostStyle) - anchored
+// directly beneath the ghost itself (same left edge, plus the ghost's
+// own height) rather than near the raw pointer, so it reads as clearly
+// attached to the thing being dragged instead of an independent
+// floating element with no obvious connection to it (see the label's
+// own CSS arrow, which points straight up at the ghost above it).
+const DRAG_GHOST_LABEL_GAP_PX = 8;
+
+// Only used when dragGhostSize is unset (rare - see onDragStart) as a
+// stand-in for "the ghost's own height", to place the label directly
+// under it anyway rather than not rendering at all.
+const DRAG_GHOST_FALLBACK_HEIGHT_PX = 40;
 
 // How narrow the "shrink" drag-ghost style's ghost collapses to while
 // hovering a valid reparent target (see renderDragGhost) - small enough
@@ -886,22 +893,40 @@ export class TodoOverlayList extends LitElement {
            row at all, which is what makes it work identically on touch
            (a finger blocks far more of the view than a mouse cursor
            does) and mouse alike. */
+        /* Anchored directly under the ghost's own box (same left edge,
+           see renderDragGhost) with a small upward-pointing arrow (see
+           ::before below) so it reads as clearly attached to the thing
+           being dragged, not as an independent floating chip with no
+           obvious connection to it - the exact "dissociated" look
+           live-reported against the first version, which anchored this
+           near the raw pointer instead. */
         .drag-ghost-label {
             position: fixed;
             z-index: 11;
             pointer-events: none;
+            display: inline-block;
             background: var(--accent-color, var(--primary-color));
             color: #fff;
             font-family: Roboto, "Noto Sans", sans-serif;
-            font-size: 12px;
+            font-size: 14px;
             font-weight: 600;
-            padding: 4px 10px;
-            border-radius: 12px;
-            max-width: 220px;
+            padding: 7px 14px;
+            border-radius: 8px;
+            max-width: 260px;
             overflow: hidden;
             text-overflow: ellipsis;
             white-space: nowrap;
-            box-shadow: 0 2px 6px rgba(0, 0, 0, 0.25);
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+        }
+
+        .drag-ghost-label::before {
+            content: "";
+            position: absolute;
+            top: -6px;
+            left: 16px;
+            border-left: 6px solid transparent;
+            border-right: 6px solid transparent;
+            border-bottom: 6px solid var(--accent-color, var(--primary-color));
         }
     `;
 
@@ -964,10 +989,9 @@ export class TodoOverlayList extends LitElement {
     @property({type: Boolean})
     public moveCompletedItems = false;
 
-    // See DragGhostStyle's own comment - "none" (the default) leaves
-    // the drag ghost exactly as it's always behaved.
+    // See DragGhostStyle's own comment for what each option does.
     @property()
-    public dragGhostStyle: DragGhostStyle = "none";
+    public dragGhostStyle: DragGhostStyle = "label";
 
     @state()
     private list?: TodoList;
@@ -2286,8 +2310,8 @@ export class TodoOverlayList extends LitElement {
                         <div
                             class="drag-ghost-label"
                             style=${styleMap({
-                                left: `${this.ghostPosition.x + DRAG_GHOST_LABEL_OFFSET_PX.x}px`,
-                                top: `${this.ghostPosition.y + DRAG_GHOST_LABEL_OFFSET_PX.y}px`,
+                                left: `${left}px`,
+                                top: `${top + (this.dragGhostSize?.height ?? DRAG_GHOST_FALLBACK_HEIGHT_PX) + DRAG_GHOST_LABEL_GAP_PX}px`,
                             })}
                         >
                             Add to: ${targetItem!.title}

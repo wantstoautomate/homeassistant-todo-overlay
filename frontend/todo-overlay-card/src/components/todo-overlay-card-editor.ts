@@ -166,7 +166,7 @@ export class TodoOverlayCardEditor extends LitElement {
     private onDragGhostStyleChanged(e: Event) {
         const value = (e.target as HTMLSelectElement).value as DragGhostStyle;
 
-        this.emitConfigChanged({...this._config, drag_ghost_style: value === "none" ? undefined : value});
+        this.emitConfigChanged({...this._config, drag_ghost_style: value === "label" ? undefined : value});
     }
 
     private onSwitchChanged(field: keyof TodoOverlayCardConfig, defaultValue: boolean) {
@@ -308,17 +308,17 @@ export class TodoOverlayCardEditor extends LitElement {
 
                     <div class="field select-field">
                         <label for="todo-overlay-drag-ghost-style">
-                            Drag ghost style while hovering a parent (experimental - A/B testing)
+                            Drag ghost style while hovering a parent
                         </label>
                         <select
                             id="todo-overlay-drag-ghost-style"
-                            .value=${this._config.drag_ghost_style ?? "none"}
+                            .value=${this._config.drag_ghost_style ?? "label"}
                             @change=${this.onDragGhostStyleChanged}
                         >
-                            <option value="none">None (default)</option>
-                            <option value="label">Floating label naming the parent</option>
+                            <option value="label">Floating label naming the parent (default)</option>
                             <option value="shrink">Shrink the ghost</option>
                             <option value="translucent">Make the ghost translucent</option>
+                            <option value="none">None</option>
                         </select>
                     </div>
                 </div>
