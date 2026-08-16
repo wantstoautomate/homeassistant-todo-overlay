@@ -1475,7 +1475,22 @@ export class TodoOverlayList extends LitElement {
             e.preventDefault();
         }
 
-        this.ghostPosition = {x: e.clientX, y: e.clientY};
+        // Reorder-mode drags (touch's only path to a drag at all - see
+        // the class docstring) are frozen to purely vertical ghost
+        // movement - findDropTarget below only ever reads e.clientY, so
+        // horizontal pointer position has zero effect on WHERE anything
+        // drops. Live-reported: because touch can only start a drag
+        // from the handle at the row's far-right edge, a natural thumb
+        // drag curving even slightly left dragged the ghost along with
+        // it, which read as the ghost (and the target row/label under
+        // it) drifting or vanishing. A mouse drag (never reorder-mode -
+        // it holds anywhere on the row instead) keeps full 2D tracking,
+        // since it has no equivalent edge-anchoring problem to guard
+        // against.
+        this.ghostPosition = {
+            x: this.reorderModeActive ? this.dragStartPointerPos.x : e.clientX,
+            y: e.clientY,
+        };
 
         // See HOVER_DEAD_ZONE_PX's own comment - skip hit-testing
         // entirely until the pointer has actually moved, rather than

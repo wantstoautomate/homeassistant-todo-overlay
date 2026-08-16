@@ -3798,7 +3798,10 @@ var TodoOverlayList = class extends i4 {
       if (e7.pointerType !== "mouse") {
         e7.preventDefault();
       }
-      this.ghostPosition = { x: e7.clientX, y: e7.clientY };
+      this.ghostPosition = {
+        x: this.reorderModeActive ? this.dragStartPointerPos.x : e7.clientX,
+        y: e7.clientY
+      };
       const distanceFromStart = Math.hypot(
         e7.clientX - this.dragStartPointerPos.x,
         e7.clientY - this.dragStartPointerPos.y
