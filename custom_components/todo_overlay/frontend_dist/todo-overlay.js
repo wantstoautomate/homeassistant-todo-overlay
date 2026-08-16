@@ -2116,6 +2116,20 @@ var TodoTreeItem = class extends i4 {
     // the jitter threshold, same as pointerIsMouse, since the handle has
     // no "quick swipe = scroll" ambiguity to wait out in the first place.
     this.initiatedFromHandle = false;
+    // Gates onWindowTouchTail - deliberately a SEPARATE flag from
+    // swipeAxis, not a re-read of it, because pointerup and this same
+    // gesture's own trailing touchend are two independent events for
+    // one physical release, and pointerup's own handling (see
+    // pointerUp/resolveSwipe) can finish running - clearing swipeAxis
+    // in the process - before the browser has even dispatched that
+    // touchend yet (confirmed live, via real Chrome touch simulation,
+    // not assumed: swipe-navigation's own touchend listener still ran
+    // once out of every real gesture tested, despite swipeAxis already
+    // being "horizontal" throughout). This flag instead stays true for
+    // exactly as long as the touch-tail listeners themselves stay
+    // attached (see detachWindowListeners' own deferred cleanup),
+    // spanning past that gap on purpose.
+    this.touchTailArmed = false;
     // .drag-handle's own pointerdown - stops propagation so the row's own
     // pointerDown (bound on .row) doesn't ALSO fire for the same press
     // (it would otherwise, since the handle is a child of .row). Runs the
@@ -2183,9 +2197,10 @@ var TodoTreeItem = class extends i4 {
     // entirely for anything that isn't a locked-in horizontal swipe on
     // THIS row (an ambiguous press, a vertical scroll, a reorder-handle
     // drag) - swiping to navigate everywhere else on the dashboard is
-    // completely unaffected.
+    // completely unaffected. Gated on touchTailArmed, not swipeAxis
+    // directly - see that field's own comment for why.
     this.onWindowTouchTail = (e7) => {
-      if (this.swipeAxis === "horizontal") {
+      if (this.touchTailArmed) {
         e7.stopPropagation();
       }
     };
@@ -2301,6 +2316,7 @@ var TodoTreeItem = class extends i4 {
     this.dragEngaged = false;
     this.initiatedFromHandle = false;
     this.swipeAxis = void 0;
+    this.touchTailArmed = false;
     this.pointerIsMouse = e7.pointerType === "mouse";
     const rect = this.shadowRoot?.querySelector(".row")?.getBoundingClientRect() ?? e7.currentTarget.getBoundingClientRect();
     this.holdRippleOrigin = { x: e7.clientX - rect.left, y: e7.clientY - rect.top };
@@ -2355,6 +2371,7 @@ var TodoTreeItem = class extends i4 {
       this.swipeAxis = Math.abs(dx) > Math.abs(dy) ? "horizontal" : "vertical";
       if (this.swipeAxis === "horizontal") {
         this.swipeDragging = true;
+        this.touchTailArmed = true;
       }
     }
     if (this.swipeAxis !== "horizontal") {
@@ -2367,9 +2384,12 @@ var TodoTreeItem = class extends i4 {
     window.removeEventListener("pointermove", this.onWindowPointerMove, { capture: true });
     window.removeEventListener("pointerup", this.onWindowPointerUp, { capture: true });
     window.removeEventListener("pointercancel", this.onWindowPointerUp, { capture: true });
-    window.removeEventListener("touchmove", this.onWindowTouchTail, { capture: true });
-    window.removeEventListener("touchend", this.onWindowTouchTail, { capture: true });
-    window.removeEventListener("touchcancel", this.onWindowTouchTail, { capture: true });
+    window.setTimeout(() => {
+      this.touchTailArmed = false;
+      window.removeEventListener("touchmove", this.onWindowTouchTail, { capture: true });
+      window.removeEventListener("touchend", this.onWindowTouchTail, { capture: true });
+      window.removeEventListener("touchcancel", this.onWindowTouchTail, { capture: true });
+    }, 0);
   }
   emitPointerUp(pressDurationMs, moved = false) {
     this.dispatchEvent(

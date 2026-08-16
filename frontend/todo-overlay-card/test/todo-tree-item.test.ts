@@ -33,7 +33,16 @@ async function renderItem(item: TodoItem, props: Partial<TodoTreeItem> = {}): Pr
     return el;
 }
 
-afterEach(() => {
+afterEach(async () => {
+    // A real (not faked) one-task wait, not just a microtask flush -
+    // detachWindowListeners' own touch-tail cleanup is deliberately
+    // deferred by one real task (see its own comment), so a test that
+    // released a horizontal swipe without waiting for that to run yet
+    // would otherwise leave a lingering window-level, capture-phase
+    // listener attached past the end of its own test - not scoped to
+    // its row at all, so it's able to affect a LATER, unrelated test's
+    // own touchmove/touchend dispatch if that gap isn't closed here.
+    await new Promise(r => setTimeout(r, 0));
     document.body.innerHTML = "";
 });
 
@@ -568,6 +577,21 @@ describe("todo-overlay-tree-item", () => {
         // CAPTURE-phase listener runs before any such bubble listener
         // ever sees the event at all.
         describe("touch-tail propagation guard (page-level swipe-nav add-ons)", () => {
+            // detachWindowListeners' own cleanup of these listeners is
+            // deliberately deferred by one real task (see its own
+            // comment - a same-gesture touchend can still arrive AFTER
+            // pointerup has already been fully handled), so every test
+            // here that releases must let that task actually run before
+            // either asserting on it OR letting a later test start -
+            // otherwise a still-pending previous row's listener (a
+            // window-level, capture-phase one - not scoped to its own
+            // row at all) can intercept an unrelated later test's own
+            // dispatch, exactly the cross-test pollution a synchronous
+            // "release then immediately assert" would hit.
+            function flushDeferredCleanup(): Promise<void> {
+                return new Promise(r => setTimeout(r, 0));
+            }
+
             it("stops a locked-in horizontal swipe's touchmove from reaching a bubble-phase listener higher up the page", async () => {
                 const el = await renderItem(makeItem({id: "1"}));
                 touchPress(el);
@@ -584,6 +608,38 @@ describe("todo-overlay-tree-item", () => {
                 } finally {
                     document.removeEventListener("touchmove", onDocumentTouchMove);
                     touchRelease();
+                    await flushDeferredCleanup();
+                }
+            });
+
+            it("still intercepts this SAME gesture's own trailing touchend, even after pointerup has already fully run", async () => {
+                // Live-reproduced via real Chrome touch simulation
+                // (github.com/zanna-37/hass-swipe-navigation, whose own
+                // touchend listener still fired once per real gesture
+                // despite swipeAxis already reading "horizontal"
+                // throughout) - pointerup and this same gesture's own
+                // touchend are two independent events for one physical
+                // release. A gate that reads swipeAxis directly (already
+                // reset by resolveSwipe, itself called from pointerUp,
+                // by the time this fires) would miss this entirely -
+                // see touchTailArmed's own comment for why this uses a
+                // separate flag instead.
+                const el = await renderItem(makeItem({id: "1"}));
+                touchPress(el);
+                move(el, -(SWIPE_AXIS_LOCK_PX + 5), 0);
+                await el.updateComplete;
+                touchRelease();
+
+                let sawItOnDocument = false;
+                const onDocumentTouchEnd = () => { sawItOnDocument = true; };
+                document.addEventListener("touchend", onDocumentTouchEnd);
+
+                try {
+                    document.body.dispatchEvent(new Event("touchend", {bubbles: true, cancelable: true}));
+                    expect(sawItOnDocument).toBe(false);
+                } finally {
+                    document.removeEventListener("touchend", onDocumentTouchEnd);
+                    await flushDeferredCleanup();
                 }
             });
 
@@ -603,15 +659,17 @@ describe("todo-overlay-tree-item", () => {
                 } finally {
                     document.removeEventListener("touchmove", onDocumentTouchMove);
                     touchRelease();
+                    await flushDeferredCleanup();
                 }
             });
 
-            it("no longer intercepts touchmove once the gesture has ended", async () => {
+            it("no longer intercepts touchmove once the gesture's own deferred cleanup has run", async () => {
                 const el = await renderItem(makeItem({id: "1"}));
                 touchPress(el);
                 move(el, -(SWIPE_AXIS_LOCK_PX + 5), 0);
                 await el.updateComplete;
                 touchRelease();
+                await flushDeferredCleanup();
 
                 let sawItOnDocument = false;
                 const onDocumentTouchMove = () => { sawItOnDocument = true; };
