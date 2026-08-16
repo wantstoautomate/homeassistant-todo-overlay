@@ -8,6 +8,7 @@ def build_tree(
     tags: dict[str, list[str]] | None = None,
     trigger_on_due: set[str] | None = None,
     group_completed: bool = False,
+    pin_types: dict[str, str] | None = None,
 ) -> list[TodoItem]:
     """Build a hierarchy from a flat list of TodoItems.
 
@@ -37,6 +38,7 @@ def build_tree(
         item.quantity = (quantities or {}).get(item.id)
         item.tags = (tags or {}).get(item.id, [])
         item.trigger_on_due = item.id in (trigger_on_due or set())
+        item.pin_type = (pin_types or {}).get(item.id)
 
     for item in items:
         position = positions.get(item.id)

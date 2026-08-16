@@ -22,6 +22,7 @@ from .const import (
     WS_TYPE_RESTORE_COMPLETED,
     WS_TYPE_SAVE_LIST,
     WS_TYPE_SET_COMPLETED,
+    WS_TYPE_SET_PIN_TYPE,
     WS_TYPE_SET_QUANTITY,
     WS_TYPE_SET_TAGS,
     WS_TYPE_SET_TRIGGER_ON_DUE,
@@ -32,6 +33,7 @@ from .errors import (
     CycleError,
     DueTimeRequiredError,
     EntityNotFoundError,
+    InvalidPinTypeError,
     ItemNotFoundError,
     SnapshotNotFoundError,
 )
@@ -51,6 +53,7 @@ _ERROR_CODES: dict[type[Exception], str] = {
     ItemNotFoundError: "not_found",
     SnapshotNotFoundError: "not_found",
     DueTimeRequiredError: "due_time_required",
+    InvalidPinTypeError: "invalid_pin_type",
 }
 
 WebSocketHandler = Callable[
@@ -409,6 +412,7 @@ async def websocket_delete_saved_list(
         vol.Optional("trigger_on_due"): bool,
         vol.Optional("reference_id"): str,
         vol.Optional("placement"): vol.In(["before", "after", "inside"]),
+        vol.Optional("pin_type"): vol.In(["category", "person"]),
     }
 )
 @websocket_api.async_response
@@ -436,6 +440,7 @@ async def websocket_create_item(
         trigger_on_due=msg.get("trigger_on_due", False),
         reference_id=msg.get("reference_id"),
         placement=msg.get("placement"),
+        pin_type=msg.get("pin_type"),
     )
 
     connection.send_result(msg["id"], {"id": item_id})
@@ -524,6 +529,34 @@ async def websocket_set_quantity(
         entity_id=msg["entity_id"],
         item_id=msg["item_id"],
         quantity=msg.get("quantity"),
+    )
+
+    connection.send_result(msg["id"])
+
+
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): WS_TYPE_SET_PIN_TYPE,
+        vol.Required("entity_id"): cv.entity_id,
+        vol.Required("item_id"): str,
+        vol.Optional("pin_type"): vol.In(["category", "person"]),
+    }
+)
+@websocket_api.async_response
+@_handle_manager_errors
+async def websocket_set_pin_type(
+    hass: HomeAssistant,
+    connection: websocket_api.ActiveConnection,
+    msg,
+) -> None:
+    """Set (or clear) an item's pin type."""
+
+    manager = get_manager(hass)
+
+    await manager.set_pin_type(
+        entity_id=msg["entity_id"],
+        item_id=msg["item_id"],
+        pin_type=msg.get("pin_type"),
     )
 
     connection.send_result(msg["id"])
@@ -658,6 +691,7 @@ def async_register_websocket(hass: HomeAssistant) -> None:
         websocket_update_item,
         websocket_delete_item,
         websocket_set_quantity,
+        websocket_set_pin_type,
         websocket_set_tags,
         websocket_add_tag,
         websocket_remove_tag,

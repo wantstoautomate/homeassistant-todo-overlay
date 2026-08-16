@@ -145,6 +145,7 @@ class FakeMetadataStore:
         self._snapshots: dict[str, dict] = {}
         self._quantities: dict[str, str] = {}
         self._tags: dict[str, list[str]] = {}
+        self._pin_types: dict[str, str] = {}
         self._trigger_on_due: set[str] = set()
         self._due_fired: dict[str, str] = {}
         self._instance_id: str | None = None
@@ -175,6 +176,28 @@ class FakeMetadataStore:
     ) -> None:
         for item_id in item_ids:
             self._quantities.pop(item_id, None)
+
+    async def get_pin_types(self, entity_id: str) -> dict[str, str]:
+        return dict(self._pin_types)
+
+    async def set_pin_type(
+        self,
+        entity_id: str,
+        item_id: str,
+        pin_type: str | None,
+    ) -> None:
+        if pin_type:
+            self._pin_types[item_id] = pin_type
+        else:
+            self._pin_types.pop(item_id, None)
+
+    async def remove_pin_types(
+        self,
+        entity_id: str,
+        item_ids: list[str],
+    ) -> None:
+        for item_id in item_ids:
+            self._pin_types.pop(item_id, None)
 
     async def get_tags(self, entity_id: str) -> dict[str, list[str]]:
         return {k: list(v) for k, v in self._tags.items()}
@@ -441,6 +464,7 @@ class FakeMultiEntityMetadataStore:
         self._positions: dict[str, dict[str, ItemPosition]] = positions_by_entity or {}
         self._quantities: dict[str, dict[str, str]] = {}
         self._tags: dict[str, dict[str, list[str]]] = {}
+        self._pin_types: dict[str, dict[str, str]] = {}
         self._trigger_on_due: dict[str, set[str]] = {}
         self._due_fired: dict[str, dict[str, str]] = {}
         self.set_positions_calls: list[tuple[str, dict[str, ItemPosition]]] = []
@@ -461,6 +485,23 @@ class FakeMultiEntityMetadataStore:
 
     async def remove_quantities(self, entity_id: str, item_ids: list[str]) -> None:
         bucket = self._quantities.get(entity_id, {})
+
+        for item_id in item_ids:
+            bucket.pop(item_id, None)
+
+    async def get_pin_types(self, entity_id: str) -> dict[str, str]:
+        return dict(self._pin_types.get(entity_id, {}))
+
+    async def set_pin_type(self, entity_id: str, item_id: str, pin_type: str | None) -> None:
+        bucket = self._pin_types.setdefault(entity_id, {})
+
+        if pin_type:
+            bucket[item_id] = pin_type
+        else:
+            bucket.pop(item_id, None)
+
+    async def remove_pin_types(self, entity_id: str, item_ids: list[str]) -> None:
+        bucket = self._pin_types.get(entity_id, {})
 
         for item_id in item_ids:
             bucket.pop(item_id, None)

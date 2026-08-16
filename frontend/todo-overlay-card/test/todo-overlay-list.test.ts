@@ -18,6 +18,7 @@ function makeItem(overrides: Partial<TodoItem> = {}): TodoItem {
         quantity: null,
         tags: [],
         trigger_on_due: false,
+        pin_type: null,
         children: [],
         ...overrides,
     };
@@ -1745,6 +1746,69 @@ describe("todo-overlay-list edit-dialog delete (diagnostic)", () => {
             title: "Oat milk",
         }));
         expect(hass.serviceCalls).not.toContainEqual(expect.objectContaining({domain: "todo", service: "update_item"}));
+    });
+
+    it("saving an edit with a pin type sends todo_overlay/set_pin_type", async () => {
+        const {el, hass} = await renderList({
+            entity_id: ENTITY_ID,
+            items: [makeItem({id: "1", title: "Brodie"})],
+        });
+
+        const treeItem = deepQueryAll(el.shadowRoot!, "todo-overlay-tree-item")[0];
+        treeItem.dispatchEvent(new CustomEvent("tree-pointer-down", {
+            detail: {id: "1"}, bubbles: true, composed: true,
+        }));
+        treeItem.dispatchEvent(new CustomEvent("tree-pointer-up", {
+            detail: {id: "1", pressDurationMs: 600, moved: false}, bubbles: true, composed: true,
+        }));
+        await el.updateComplete;
+
+        const dialog = el.shadowRoot?.querySelector("todo-overlay-item-dialog");
+
+        dialog!.dispatchEvent(new CustomEvent("dialog-save", {
+            detail: {
+                title: "Brodie", quantity: "", tags: "", description: "",
+                dueDate: "", dueTime: "", triggerOnDue: false, pinType: "person",
+            },
+            bubbles: true, composed: true,
+        }));
+        await flushAsync();
+
+        expect(hass.connection.sent).toContainEqual(expect.objectContaining({
+            type: "todo_overlay/set_pin_type",
+            entity_id: ENTITY_ID,
+            item_id: "1",
+            pin_type: "person",
+        }));
+    });
+
+    it("creating an item with a pin type sends it as part of todo_overlay/create_item", async () => {
+        const {el, hass} = await renderList(
+            {entity_id: ENTITY_ID, items: []},
+            {showQuickAdd: false},
+        );
+
+        (el.shadowRoot?.querySelector("button[aria-label='Add item']") as HTMLElement).click();
+        await settle(el);
+
+        const dialog = el.shadowRoot?.querySelector("todo-overlay-item-dialog");
+        expect(dialog, "create dialog should be open").not.toBeNull();
+
+        dialog!.dispatchEvent(new CustomEvent("dialog-save", {
+            detail: {
+                title: "Anna", quantity: "", tags: "", description: "",
+                dueDate: "", dueTime: "", triggerOnDue: false, pinType: "person",
+            },
+            bubbles: true, composed: true,
+        }));
+        await flushAsync();
+
+        expect(hass.connection.sent).toContainEqual(expect.objectContaining({
+            type: "todo_overlay/create_item",
+            entity_id: ENTITY_ID,
+            title: "Anna",
+            pin_type: "person",
+        }));
     });
 
     it("does not clobber an in-progress unsaved edit when a live-sync reload fires while the dialog is open", async () => {

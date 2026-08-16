@@ -731,7 +731,8 @@ async function createItem(hass, entityId, fields) {
     tags: fields.tags,
     trigger_on_due: fields.triggerOnDue,
     reference_id: fields.referenceId,
-    placement: fields.placement
+    placement: fields.placement,
+    pin_type: fields.pinType
   });
   return result.id;
 }
@@ -767,6 +768,14 @@ async function setTriggerOnDue(hass, entityId, itemId, enabled) {
     entity_id: entityId,
     item_id: itemId,
     enabled
+  });
+}
+async function setPinType(hass, entityId, itemId, pinType) {
+  await hass.connection.sendMessagePromise({
+    type: "todo_overlay/set_pin_type",
+    entity_id: entityId,
+    item_id: itemId,
+    pin_type: pinType
   });
 }
 async function setTags(hass, entityId, itemId, tags) {
@@ -956,7 +965,8 @@ var EMPTY_FORM_VALUE = {
   description: "",
   dueDate: "",
   dueTime: "",
-  triggerOnDue: false
+  triggerOnDue: false,
+  pinType: ""
 };
 function digitsOnly(raw, maxLen) {
   return raw.replace(/\D/g, "").slice(0, maxLen);
@@ -1281,6 +1291,25 @@ var TodoItemDialog = class extends i4 {
                     />
                 </div>
 
+                <div class="field">
+                    <label for="todo-item-pin-type">Show as</label>
+                    <select
+                        id="todo-item-pin-type"
+                        class="pin-type-select"
+                        .value=${this.draftValue.pinType}
+                        @change=${(e7) => this.updateField("pinType", e7.target.value)}
+                    >
+                        <option value="">Normal item</option>
+                        <option value="category">Category (e.g. "Groceries")</option>
+                        <option value="person">Person (e.g. "Brodie")</option>
+                    </select>
+                    ${this.draftValue.pinType ? b2`
+                                <div class="field-hint pin-type-hint">
+                                    Always shown as a section header, even with nothing under it yet.
+                                </div>
+                            ` : ""}
+                </div>
+
                 ${showDue ? b2`
                             <div class="due-row">
                                 <div class="field">
@@ -1485,6 +1514,28 @@ TodoItemDialog.styles = i`
         textarea:focus {
             border-bottom: 2px solid var(--primary-color);
             padding-bottom: 7px;
+        }
+
+        select.pin-type-select {
+            box-sizing: border-box;
+            width: 100%;
+            font-family: inherit;
+            font-size: 16px;
+            color: var(--primary-text-color);
+            background: none;
+            border: none;
+            border-bottom: 1px solid var(--divider-color);
+            padding: 8px 0;
+            outline: none;
+        }
+
+        select.pin-type-select:focus {
+            border-bottom: 2px solid var(--primary-color);
+            padding-bottom: 7px;
+        }
+
+        .field-hint.pin-type-hint {
+            margin-top: 2px;
         }
 
         /* Day/month/year and hour/minute, always in that fixed order
@@ -4378,7 +4429,8 @@ var TodoOverlayList = class extends i4 {
       description: item.description ?? "",
       dueDate: due.date,
       dueTime: due.time,
-      triggerOnDue: item.trigger_on_due
+      triggerOnDue: item.trigger_on_due,
+      pinType: item.pin_type ?? ""
     };
   }
   async onDialogSave(e7) {
@@ -4394,6 +4446,7 @@ var TodoOverlayList = class extends i4 {
     }
     const quantity = value.quantity.trim() || void 0;
     const tags = value.tags.split(",").map((tag) => tag.trim()).filter((tag) => tag.length > 0);
+    const pinType = value.pinType || void 0;
     try {
       if (this.dialogMode === "edit" && this.dialogItem) {
         await updateItem(this.hass, this.entity, this.dialogItem.id, {
@@ -4405,6 +4458,7 @@ var TodoOverlayList = class extends i4 {
         await setQuantity(this.hass, this.entity, this.dialogItem.id, quantity);
         await setTags(this.hass, this.entity, this.dialogItem.id, tags);
         await setTriggerOnDue(this.hass, this.entity, this.dialogItem.id, value.triggerOnDue);
+        await setPinType(this.hass, this.entity, this.dialogItem.id, pinType);
       } else {
         await createItem(this.hass, this.entity, {
           title: value.title,
@@ -4413,7 +4467,8 @@ var TodoOverlayList = class extends i4 {
           dueDatetime,
           quantity,
           tags,
-          triggerOnDue: value.triggerOnDue
+          triggerOnDue: value.triggerOnDue,
+          pinType
         });
       }
       await this.load();

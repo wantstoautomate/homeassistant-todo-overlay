@@ -17,6 +17,7 @@ import {
     restoreCompleted,
     saveList,
     setCompleted,
+    setPinType,
     setQuantity,
     setTags,
     setTriggerOnDue,
@@ -1972,6 +1973,7 @@ export class TodoOverlayList extends LitElement {
             dueDate: due.date,
             dueTime: due.time,
             triggerOnDue: item.trigger_on_due,
+            pinType: item.pin_type ?? "",
         };
     }
 
@@ -1995,6 +1997,7 @@ export class TodoOverlayList extends LitElement {
             .split(",")
             .map(tag => tag.trim())
             .filter(tag => tag.length > 0);
+        const pinType = value.pinType || undefined;
 
         try {
             if (this.dialogMode === "edit" && this.dialogItem) {
@@ -2013,6 +2016,7 @@ export class TodoOverlayList extends LitElement {
                 await setQuantity(this.hass, this.entity, this.dialogItem.id, quantity);
                 await setTags(this.hass, this.entity, this.dialogItem.id, tags);
                 await setTriggerOnDue(this.hass, this.entity, this.dialogItem.id, value.triggerOnDue);
+                await setPinType(this.hass, this.entity, this.dialogItem.id, pinType);
             } else {
                 await createItem(this.hass, this.entity, {
                     title: value.title,
@@ -2022,6 +2026,7 @@ export class TodoOverlayList extends LitElement {
                     quantity,
                     tags,
                     triggerOnDue: value.triggerOnDue,
+                    pinType,
                 });
             }
 

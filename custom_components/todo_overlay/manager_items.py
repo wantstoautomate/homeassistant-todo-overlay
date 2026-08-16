@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from .errors import ItemNotFoundError
-from .manager_types import Placement
+from .errors import InvalidPinTypeError, ItemNotFoundError
+from .manager_types import PIN_TYPES, Placement
 from .models import TodoItem
 
 
@@ -24,9 +24,10 @@ class ItemMixin:
         trigger_on_due: bool = False,
         reference_id: str | None = None,
         placement: Placement | None = None,
+        pin_type: str | None = None,
     ) -> str:
         """Create an item, including overlay-only fields (quantity,
-        tags, trigger_on_due) that Home Assistant's native
+        tags, trigger_on_due, pin_type) that Home Assistant's native
         todo.add_item has no concept of.
 
         trigger_on_due=True is silently ignored if the target entity
@@ -50,6 +51,15 @@ class ItemMixin:
         Returns the new item's id.
         """
 
+        # Validated up front, before add_item ever runs - failing after
+        # the native item already exists would leave an orphan item
+        # behind with no pin_type set, a partial failure the caller
+        # never asked for.
+        if pin_type is not None and pin_type not in PIN_TYPES:
+            raise InvalidPinTypeError(
+                f"pin_type must be one of {sorted(PIN_TYPES)} or None, got {pin_type!r}"
+            )
+
         async with self._lock_for(entity_id):
             item_id = await self._adapter.add_item(
                 entity_id,
@@ -65,6 +75,9 @@ class ItemMixin:
             if tags:
                 await self._metadata_store.set_tags(entity_id, item_id, tags)
 
+            if pin_type is not None:
+                await self._metadata_store.set_pin_type(entity_id, item_id, pin_type)
+
             if trigger_on_due:
                 created = await self._adapter.get_items(entity_id)
                 created_item = next((c for c in created if c.id == item_id), None)
@@ -75,7 +88,10 @@ class ItemMixin:
             if reference_id is not None and placement is not None:
                 await self._reposition(entity_id, item_id, reference_id, placement)
 
-        self._fire_event(entity_id, item_id, title, "created", quantity=quantity, tags=tags or [])
+        self._fire_event(
+            entity_id, item_id, title, "created",
+            quantity=quantity, tags=tags or [], pin_type=pin_type,
+        )
 
         return item_id
 
@@ -178,6 +194,35 @@ class ItemMixin:
         async with self._lock_for(entity_id):
             resolved = await self._resolve_item(entity_id, item)
             await self._set_quantity_impl(entity_id, resolved.id, quantity)
+
+    async def set_pin_type(
+        self,
+        entity_id: str,
+        item_id: str,
+        pin_type: str | None,
+    ) -> None:
+        """Set (or clear) an item's pin type - overlay-only metadata that
+        marks it as always rendering/behaving like a parent (bold title,
+        no checkbox, collapsible) regardless of whether it currently has
+        any children. "category" and "person" are the only valid non-None
+        values (see manager_types.PIN_TYPES) - a purely presentational
+        distinction the frontend uses to decide between a plain section
+        header and one with a person's initial avatar; nothing here
+        treats them differently."""
+
+        if pin_type is not None and pin_type not in PIN_TYPES:
+            raise InvalidPinTypeError(
+                f"pin_type must be one of {sorted(PIN_TYPES)} or None, got {pin_type!r}"
+            )
+
+        async with self._lock_for(entity_id):
+            await self._metadata_store.set_pin_type(entity_id, item_id, pin_type)
+
+        items = await self._adapter.get_items(entity_id)
+        item = next((candidate for candidate in items if candidate.id == item_id), None)
+
+        if item is not None:
+            self._fire_event(entity_id, item_id, item.title, "pin_type_changed", pin_type=pin_type)
 
     async def set_tags(
         self,

@@ -1,5 +1,5 @@
 import type { HassLike } from "./hass";
-import type { LoadMode, Placement, TodoList } from "./models";
+import type { LoadMode, PinType, Placement, TodoList } from "./models";
 
 export async function getList(
     hass: HassLike,
@@ -113,6 +113,7 @@ export interface CreateItemFields {
     // parent's own row, above its existing children.
     referenceId?: string;
     placement?: Placement;
+    pinType?: PinType;
 }
 
 export async function createItem(
@@ -133,6 +134,7 @@ export async function createItem(
         trigger_on_due: fields.triggerOnDue,
         reference_id: fields.referenceId,
         placement: fields.placement,
+        pin_type: fields.pinType,
     });
 
     return result.id;
@@ -207,6 +209,22 @@ export async function setTriggerOnDue(
         entity_id: entityId,
         item_id: itemId,
         enabled,
+    });
+
+}
+
+export async function setPinType(
+    hass: HassLike,
+    entityId: string,
+    itemId: string,
+    pinType: PinType | undefined,
+): Promise<void> {
+
+    await hass.connection.sendMessagePromise<void>({
+        type: "todo_overlay/set_pin_type",
+        entity_id: entityId,
+        item_id: itemId,
+        pin_type: pinType,
     });
 
 }

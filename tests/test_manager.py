@@ -5,6 +5,7 @@ import pytest
 from custom_components.todo_overlay.const import EVENT_ITEM_CHANGED
 from custom_components.todo_overlay.errors import (
     CycleError,
+    InvalidPinTypeError,
     ItemNotFoundError,
     SnapshotNotFoundError,
 )
@@ -64,6 +65,7 @@ async def test_manager_returns_serialisable_list():
                 "quantity": None,
                 "tags": [],
                 "trigger_on_due": False,
+                "pin_type": None,
                 "children": [
                     {
                         "id": "2",
@@ -75,6 +77,7 @@ async def test_manager_returns_serialisable_list():
                         "quantity": None,
                         "tags": [],
                         "trigger_on_due": False,
+                        "pin_type": None,
                         "children": [],
                     }
                 ],
@@ -997,6 +1000,62 @@ async def test_manager_set_quantity_updates_and_clears():
 
 
 @pytest.mark.asyncio
+async def test_manager_set_pin_type_updates_and_clears():
+
+    adapter = FakeAdapter(items=[TodoItem(id="1", title="Brodie", completed=False)])
+    metadata_store = FakeMetadataStore({"1": ItemPosition(parent_id=None, order=0)})
+    manager = TodoManager(adapter=adapter, metadata_store=metadata_store)
+
+    await manager.set_pin_type("todo.household", "1", "person")
+    todo_list = await manager.get_list("todo.household")
+    assert todo_list.items[0].pin_type == "person"
+
+    await manager.set_pin_type("todo.household", "1", None)
+    todo_list_after = await manager.get_list("todo.household")
+    assert todo_list_after.items[0].pin_type is None
+
+
+@pytest.mark.asyncio
+async def test_manager_set_pin_type_accepts_category_too():
+
+    adapter = FakeAdapter(items=[TodoItem(id="1", title="Groceries", completed=False)])
+    metadata_store = FakeMetadataStore({"1": ItemPosition(parent_id=None, order=0)})
+    manager = TodoManager(adapter=adapter, metadata_store=metadata_store)
+
+    await manager.set_pin_type("todo.household", "1", "category")
+    todo_list = await manager.get_list("todo.household")
+    assert todo_list.items[0].pin_type == "category"
+
+
+@pytest.mark.asyncio
+async def test_manager_set_pin_type_rejects_an_invalid_value():
+
+    adapter = FakeAdapter(items=[TodoItem(id="1", title="Brodie", completed=False)])
+    manager = TodoManager(adapter=adapter, metadata_store=FakeMetadataStore())
+
+    with pytest.raises(InvalidPinTypeError):
+        await manager.set_pin_type("todo.household", "1", "not-a-real-type")
+
+
+@pytest.mark.asyncio
+async def test_manager_set_pin_type_fires_pin_type_changed_event():
+
+    hass = _FakeEventHass()
+    adapter = FakeAdapter(items=[TodoItem(id="1", title="Anna", completed=False)])
+    manager = TodoManager(adapter=adapter, metadata_store=FakeMetadataStore(), hass=hass)
+
+    await manager.set_pin_type(entity_id="todo.household", item_id="1", pin_type="person")
+
+    assert len(hass.calls) == 1
+    event, data = hass.calls[0]
+    assert event == EVENT_ITEM_CHANGED
+    assert data == {
+        "entity_id": "todo.household", "item_id": "1", "title": "Anna",
+        "action": "pin_type_changed", "pin_type": "person",
+    }
+
+
+@pytest.mark.asyncio
 async def test_manager_save_and_load_list_round_trips_quantity():
 
     # full_merge itself never dedupes at creation time, but get_list()'s
@@ -1299,6 +1358,37 @@ async def test_manager_create_item_with_initial_tags():
     todo_list = await manager.get_list("todo.shopping")
     assert todo_list.items[0].id == item_id
     assert todo_list.items[0].tags == ["deli", "urgent"]
+
+
+@pytest.mark.asyncio
+async def test_manager_create_item_with_initial_pin_type():
+
+    adapter = FakeAdapter(items=[])
+    metadata_store = FakeMetadataStore()
+    manager = TodoManager(adapter=adapter, metadata_store=metadata_store)
+
+    item_id = await manager.create_item(
+        entity_id="todo.household", title="Anna", pin_type="person",
+    )
+
+    todo_list = await manager.get_list("todo.household")
+    assert todo_list.items[0].id == item_id
+    assert todo_list.items[0].pin_type == "person"
+
+
+@pytest.mark.asyncio
+async def test_manager_create_item_rejects_an_invalid_pin_type_without_creating_anything():
+
+    adapter = FakeAdapter(items=[])
+    manager = TodoManager(adapter=adapter, metadata_store=FakeMetadataStore())
+
+    with pytest.raises(InvalidPinTypeError):
+        await manager.create_item(
+            entity_id="todo.household", title="Anna", pin_type="not-a-real-type",
+        )
+
+    todo_list = await manager.get_list("todo.household")
+    assert todo_list.items == []
 
 
 @pytest.mark.asyncio

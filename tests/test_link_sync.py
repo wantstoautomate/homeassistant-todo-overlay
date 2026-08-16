@@ -945,3 +945,85 @@ async def test_incoming_position_does_not_trigger_a_runaway_echo_loop():
 
     assert transport.published == []
     assert all(data["action"] == "synced" for _event_type, data in hass.bus.fired)
+
+
+# --- pin_type sync -------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_local_pin_type_change_publishes_it_even_though_other_content_is_unchanged():
+    """Mirrors the "moved" fix: pinning/unpinning an item changes no
+    other content field, so it needs the same fields+position
+    comparison (not fields alone) to avoid being silently swallowed as
+    "unchanged"."""
+
+    hass, adapter, store, manager, transport, sync = make_sync_manager(
+        items=[TodoItem(id="1", title="Anna", completed=False)],
+    )
+    await sync.async_setup()
+    await store.set_link(ENTITY_ID, LINK_ID)
+    await sync.async_start_link(ENTITY_ID)
+
+    await sync.async_handle_local_change(ENTITY_ID, "1", "created")
+    transport.published.clear()
+
+    await store.set_pin_type(ENTITY_ID, "1", "person")
+    await sync.async_handle_local_change(ENTITY_ID, "1", "pin_type_changed")
+
+    assert len(transport.published) == 1
+    _, payload = transport.published[0]
+    assert payload["fields"]["pin_type"] == "person"
+
+
+@pytest.mark.asyncio
+async def test_incoming_pin_type_is_applied_locally():
+    hass, adapter, store, manager, transport, sync = make_sync_manager(items=[])
+    await sync.async_setup()
+    await store.set_link(ENTITY_ID, LINK_ID)
+    await sync.async_start_link(ENTITY_ID)
+
+    transport.deliver(f"todo_overlay/link/{LINK_ID}/item/sync-1", {
+        "origin": "some-other-instance",
+        "sync_id": "sync-1",
+        "updated_at": "2026-01-01T00:00:00+00:00",
+        "deleted": False,
+        "fields": {"title": "Brodie", "completed": False, "description": None,
+                    "due_date": None, "due_datetime": None, "quantity": None, "tags": [],
+                    "pin_type": "person"},
+    })
+    await _flush(hass)
+
+    items = await adapter.get_items(ENTITY_ID)
+    new_item = next(item for item in items if item.title == "Brodie")
+
+    pin_types = await store.get_pin_types(ENTITY_ID)
+    assert pin_types[new_item.id] == "person"
+
+
+@pytest.mark.asyncio
+async def test_incoming_message_with_an_invalid_pin_type_falls_back_to_none_without_crashing():
+    """Same "arbitrary JSON from the wire" defensiveness as every other
+    incoming field - an invalid pin_type must not be applied verbatim,
+    and must not crash the fire-and-forget task."""
+
+    hass, adapter, store, manager, transport, sync = make_sync_manager(items=[])
+    await sync.async_setup()
+    await store.set_link(ENTITY_ID, LINK_ID)
+    await sync.async_start_link(ENTITY_ID)
+
+    transport.deliver(f"todo_overlay/link/{LINK_ID}/item/sync-1", {
+        "origin": "some-other-instance",
+        "sync_id": "sync-1",
+        "updated_at": "2026-01-01T00:00:00+00:00",
+        "deleted": False,
+        "fields": {"title": "Bread", "completed": False, "description": None,
+                    "due_date": None, "due_datetime": None, "quantity": None, "tags": [],
+                    "pin_type": "not-a-real-type"},
+    })
+    await _flush(hass)
+
+    items = await adapter.get_items(ENTITY_ID)
+    new_item = next(item for item in items if item.title == "Bread")
+
+    pin_types = await store.get_pin_types(ENTITY_ID)
+    assert pin_types.get(new_item.id) is None

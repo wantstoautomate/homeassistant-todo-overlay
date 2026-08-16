@@ -29,6 +29,13 @@ class TodoItem:
     # wanting to be triggered on it. Only meaningful alongside a real
     # due_datetime (not a date-only due_date) - see DueTimeRequiredError.
     trigger_on_due: bool = False
+    # "category" | "person" | None - marks an item as always rendering
+    # like a parent (bold title, no checkbox, collapsible) regardless of
+    # whether it currently has any children. The two non-None values are
+    # a purely presentational distinction for the frontend (a "person"
+    # gets an initial avatar); nothing on the backend treats them
+    # differently - see manager_items.py's set_pin_type.
+    pin_type: str | None = None
     children: list["TodoItem"] = field(default_factory=list)
 
     def to_dict(self) -> dict:
@@ -42,6 +49,7 @@ class TodoItem:
             "quantity": self.quantity,
             "tags": self.tags,
             "trigger_on_due": self.trigger_on_due,
+            "pin_type": self.pin_type,
             "children": [child.to_dict() for child in self.children],
         }
 
