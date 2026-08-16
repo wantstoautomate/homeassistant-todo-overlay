@@ -218,7 +218,15 @@ function collectAllRows(
         if (isTreeItem && currentEntity) {
             const rowEl = itemEl.shadowRoot?.querySelector(".row");
 
-            if (rowEl) {
+            // The synthetic "Other" row (see grouping.ts) never becomes a
+            // drop target itself - it's a rendering fiction with no real
+            // item_id behind it, so there's nothing a drag could actually
+            // reparent onto. Its real children are collected completely
+            // normally regardless: the recursive descent into its own
+            // shadow root below doesn't gate on this at all, so skipping
+            // the push here only removes Other's OWN row from `rows`,
+            // never anything nested under it.
+            if (rowEl && !rowEl.hasAttribute("data-synthetic")) {
                 // Deliberately NOT itemEl.item.children unconditionally -
                 // that's the raw DATA, populated regardless of whether
                 // this item is currently collapsed. A collapsed parent's

@@ -848,6 +848,75 @@ describe("todo-overlay-list dragging onto a collapsed parent", () => {
     });
 });
 
+// The synthetic Other row (see grouping.ts) has no real item behind it at
+// all, so it must never be offered as a drop target itself - collectAllRows
+// skips its own row entry while still collecting its real children
+// completely normally (see collectAllRows' own comment).
+describe("todo-overlay-list drag hit-testing skips the synthetic Other row", () => {
+    it("never resolves Other's own header as a target - the nearest REAL row wins instead", async () => {
+        const {el, hass} = await renderList({
+            entity_id: ENTITY_ID,
+            items: [
+                makeItem({id: "brodie", title: "Brodie", pin_type: "person"}),
+                makeItem({id: "anna", title: "Anna", pin_type: "person"}),
+                makeItem({id: "bins", title: "Take out bins"}),
+            ],
+        });
+
+        const rows = deepQueryAll(el.shadowRoot!, "todo-overlay-tree-item") as (Element & {
+            shadowRoot: ShadowRoot;
+            item: {id: string};
+        })[];
+
+        const annaRow = rows.find(r => r.item.id === "anna")!;
+        const otherRow = rows.find(r => r.item.id.startsWith("__other__"))!;
+        const binsRow = rows.find(r => r.item.id === "bins")!;
+        expect(otherRow, "Other should actually be swept together here for this test to mean anything").toBeDefined();
+        expect(binsRow, "Other's own real child should still be in the DOM, just nested under it").toBeDefined();
+
+        mockRect(rows.find(r => r.item.id === "brodie")!.shadowRoot.querySelector(".row")!, {top: 0, bottom: 40, height: 40});
+        mockRect(annaRow.shadowRoot.querySelector(".row")!, {top: 40, bottom: 80, height: 40});
+        // Other's own header sits right here visually - mocked purely so
+        // a bug that DIDN'T exclude it would have something to wrongly
+        // land on; the real hit-testing has nothing of its own here at
+        // all once excluded.
+        mockRect(otherRow.shadowRoot.querySelector(".row")!, {top: 80, bottom: 120, height: 40});
+        mockRect(binsRow.shadowRoot.querySelector(".row")!, {top: 120, bottom: 160, height: 40});
+
+        const draggable = el as unknown as DraggableList & {hoverId?: string};
+
+        draggable.draggedId = "brodie";
+        draggable.onDragStart(new CustomEvent("tree-drag-start", {
+            detail: {rect: undefined, pointerX: 20, pointerY: 20, grabOffsetX: 0, grabOffsetY: 0},
+        }));
+
+        // Well inside Other's own (mocked) header rect, close to its
+        // bottom edge - clearly nearer to bins (its real child, sitting
+        // right below it) than to anna, so there's no ambiguity about
+        // which real row "nearest" should resolve to once Other itself
+        // is out of the running.
+        draggable.onGlobalPointerMove(new PointerEvent("pointermove", {clientX: 20, clientY: 115}));
+
+        expect(draggable.hoverId).toBe("bins");
+        await settle(el);
+
+        // Never a highlight on Other's own row - it isn't a valid target
+        // to highlight in the first place.
+        expect(otherRow.shadowRoot.querySelector(".row")?.classList.contains("drop-inside")).toBe(false);
+
+        await draggable.onGlobalPointerUp();
+
+        expect(hass.connection.sent).toContainEqual(expect.objectContaining({
+            type: "todo_overlay/move_item",
+            child_id: "brodie",
+            reference_id: "bins",
+        }));
+        expect(
+            hass.connection.sent.some(m => typeof m.reference_id === "string" && m.reference_id.startsWith("__other__")),
+        ).toBe(false);
+    });
+});
+
 // Live-reported: dragging a child that's directly below its own parent
 // - i.e. the parent's own first VISIBLE child - up toward roughly its
 // original position glitched a lot, and hovering the parent's own row

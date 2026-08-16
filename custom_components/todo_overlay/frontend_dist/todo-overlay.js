@@ -2061,6 +2061,45 @@ TodoSaveLoadDialog = __decorateClass([
   t3("todo-overlay-save-load-dialog")
 ], TodoSaveLoadDialog);
 
+// src/grouping.ts
+var OTHER_TITLE = "Other";
+var OTHER_BUCKET_THRESHOLD = 2;
+function isStructural(item) {
+  return item.children.length > 0 || item.pin_type != null;
+}
+function otherGroupId(parentId) {
+  return `__other__:${parentId ?? "root"}`;
+}
+function groupSiblingsForDisplay(items, parentId) {
+  const structuralCount = items.reduce((count, item) => count + (isStructural(item) ? 1 : 0), 0);
+  if (structuralCount < OTHER_BUCKET_THRESHOLD) {
+    return items;
+  }
+  const structural = [];
+  const plain = [];
+  for (const item of items) {
+    (isStructural(item) ? structural : plain).push(item);
+  }
+  if (plain.length === 0) {
+    return items;
+  }
+  const other = {
+    id: otherGroupId(parentId),
+    title: OTHER_TITLE,
+    completed: plain.every((item) => item.completed),
+    description: null,
+    due_date: null,
+    due_datetime: null,
+    quantity: null,
+    tags: [],
+    trigger_on_due: false,
+    pin_type: null,
+    children: plain,
+    synthetic: true
+  };
+  return [...structural, other];
+}
+
 // src/components/todo-tree-item.ts
 var BEFORE_AFTER_ZONE = 0.3;
 var ROW_INDENT_PX = 20;
@@ -2272,11 +2311,44 @@ var TodoTreeItem = class extends i4 {
   // checkbox at all; completing it becomes a deliberate action via the
   // edit dialog instead (see todo-overlay.ts's onPointerUp and
   // todo-item-dialog.ts's complete toggle).
+  //
+  // A pinned item (see isPinned) or the synthetic Other row (see
+  // isSynthetic) never shows a checkbox at all, unconditionally - not
+  // gated by hideCompleteForParents/showCheckboxes the way a REAL
+  // parent's is. Both are a deliberate structural declaration ("this
+  // is a category/person", "this is a grouping, not a real item"),
+  // categorically different from "this happens to have accumulated
+  // children" - the one case the existing toggle is actually about.
   get checkboxHidden() {
+    if (this.isPinned || this.isSynthetic) {
+      return true;
+    }
     if (!this.showCheckboxes) {
       return true;
     }
     return this.hideCompleteForParents && this.item.children.length > 0;
+  }
+  get isPinned() {
+    return this.item.pin_type != null;
+  }
+  // True only for the one synthetic "Other" row groupSiblingsForDisplay
+  // generates when a level's plain siblings get swept up (see
+  // grouping.ts) - never a real item, so every interactive affordance
+  // a normal row has (edit, delete, add-child, drag, swipe) is
+  // suppressed for it; only collapse/expand still works, exactly like
+  // any other structural row.
+  get isSynthetic() {
+    return Boolean(this.item.synthetic);
+  }
+  // Always shown as a section header - bold/tracked title, no
+  // checkbox, collapsible - regardless of whether it currently has
+  // any children: either because it genuinely does, or because it's
+  // pinned as a stand-in for one that will. The completed-count badge
+  // (see childStatus) and the collapse chevron deliberately stay
+  // gated on REAL children only (hasChildren) - see this getter's own
+  // call sites for why neither should react to a pin alone.
+  get isStructural() {
+    return this.hasChildren || this.isPinned;
   }
   get hasChildren() {
     return this.item.children.length > 0;
@@ -2403,6 +2475,9 @@ var TodoTreeItem = class extends i4 {
     );
   }
   pointerDown(e7) {
+    if (this.isSynthetic) {
+      return;
+    }
     this.pointerDownAt = Date.now();
     this.pointerDownScreenPos = { x: e7.clientX, y: e7.clientY };
     this.hasMoved = false;
@@ -2553,6 +2628,7 @@ var TodoTreeItem = class extends i4 {
   render() {
     const isDropTarget = this.isDropTarget;
     const isBeingDragged = this.isBeingDragged;
+    const displayChildren = groupSiblingsForDisplay(this.item.children, this.item.id);
     const rowClasses = {
       row: true,
       pressed: this.isPressed && !isBeingDragged,
@@ -2597,6 +2673,7 @@ var TodoTreeItem = class extends i4 {
                     <div
                         class=${e6({ ...rowClasses, swiping: this.swipeDragging })}
                         style=${o6({ transform: this.swipeOffsetX ? `translateX(${this.swipeOffsetX}px)` : "" })}
+                        ?data-synthetic=${this.isSynthetic}
 
                         @pointerdown=${this.pointerDown}
                     >
@@ -2630,15 +2707,26 @@ var TodoTreeItem = class extends i4 {
                                             </button>
                                         ` : b2`<span class="collapse-toggle-spacer"></span>`}
 
-                                ${this.checkboxHidden ? "" : b2`
-                                            <div class="checkbox-slot">
-                                                <ha-checkbox .checked=${this.item.completed}></ha-checkbox>
+                                ${// A person pin gets a small initial
+    // avatar in place of the checkbox
+    // slot - never for the synthetic
+    // Other row, which has no title
+    // that means anything as a "person"
+    // (and is never pinned to begin
+    // with - see isSynthetic).
+    this.item.pin_type === "person" && !this.isSynthetic ? b2`
+                                            <div class="person-avatar" aria-hidden="true">
+                                                ${this.item.title.trim().charAt(0).toUpperCase() || "?"}
                                             </div>
-                                        `}
+                                        ` : this.checkboxHidden ? "" : b2`
+                                                <div class="checkbox-slot">
+                                                    <ha-checkbox .checked=${this.item.completed}></ha-checkbox>
+                                                </div>
+                                            `}
 
                                 <div class="content">
                                     <div class="title-line">
-                                        <span class=${e6({ summary: true, "has-children": this.hasChildren })}>${this.item.title}</span>
+                                        <span class=${e6({ summary: true, structural: this.isStructural })}>${this.item.title}</span>
                                         ${this.item.quantity ? b2`<span class="quantity-chip">${this.item.quantity}</span>` : ""}
                                         ${status ? b2`
                                                     <span class=${e6({
@@ -2667,39 +2755,48 @@ var TodoTreeItem = class extends i4 {
                                             ` : ""}
                                 </div>
 
-                                ${this.reorderModeActive ? b2`
-                                            <button
-                                                class="drag-handle"
-                                                aria-label="Drag to reorder"
-                                                @pointerdown=${this.handlePointerDown}
-                                            >
-                                                ${DRAG_HANDLE_ICON}
-                                            </button>
-                                        ` : this.addModeActive ? b2`
+                                ${// The synthetic Other row (see
+    // isSynthetic) is never draggable,
+    // never gains a child, never gets
+    // deleted - it isn't a real item at
+    // all, just a view-time grouping
+    // over some of this level's real
+    // siblings. Only collapse/expand
+    // still works for it, same as any
+    // other structural row.
+    this.isSynthetic ? "" : this.reorderModeActive ? b2`
                                                 <button
-                                                    class=${e6({
+                                                    class="drag-handle"
+                                                    aria-label="Drag to reorder"
+                                                    @pointerdown=${this.handlePointerDown}
+                                                >
+                                                    ${DRAG_HANDLE_ICON}
+                                                </button>
+                                            ` : this.addModeActive ? b2`
+                                                    <button
+                                                        class=${e6({
       "child-quick-add-toggle": true,
       active: this.childQuickAddParentIds.has(this.item.id)
     })}
-                                                    aria-label=${this.childQuickAddParentIds.has(this.item.id) ? "Close add-child field" : "Add child item"}
-                                                    @click=${this.onToggleChildQuickAddClick}
-                                                    @pointerdown=${(e7) => e7.stopPropagation()}
-                                                >
-                                                    ${this.childQuickAddParentIds.has(this.item.id) ? CROSS_ICON : PLUS_ICON}
-                                                </button>
-                                            ` : this.deleteModeActive && !this.hasChildren ? b2`
-                                                    <button
-                                                        class=${e6({
+                                                        aria-label=${this.childQuickAddParentIds.has(this.item.id) ? "Close add-child field" : "Add child item"}
+                                                        @click=${this.onToggleChildQuickAddClick}
+                                                        @pointerdown=${(e7) => e7.stopPropagation()}
+                                                    >
+                                                        ${this.childQuickAddParentIds.has(this.item.id) ? CROSS_ICON : PLUS_ICON}
+                                                    </button>
+                                                ` : this.deleteModeActive && !this.hasChildren ? b2`
+                                                        <button
+                                                            class=${e6({
       "delete-button": true,
       confirming: this.confirmingDelete
     })}
-                                                        aria-label=${this.confirmingDelete ? "Confirm delete" : "Delete"}
-                                                        @click=${this.onDeleteClick}
-                                                        @pointerdown=${(e7) => e7.stopPropagation()}
-                                                    >
-                                                        ${CROSS_ICON}
-                                                    </button>
-                                                ` : ""}
+                                                            aria-label=${this.confirmingDelete ? "Confirm delete" : "Delete"}
+                                                            @click=${this.onDeleteClick}
+                                                            @pointerdown=${(e7) => e7.stopPropagation()}
+                                                        >
+                                                            ${CROSS_ICON}
+                                                        </button>
+                                                    ` : ""}
 
                                 ${this.holdRippleOrigin ? b2`
                                             <div
@@ -2732,7 +2829,7 @@ var TodoTreeItem = class extends i4 {
 
                 ${this.hasChildren && !this.isCollapsed ? b2`
                             <ul>
-                                ${this.item.children.map(
+                                ${displayChildren.map(
       (child) => b2`
                                         <todo-overlay-tree-item
                                             .item=${child}
@@ -2941,17 +3038,27 @@ TodoTreeItem.styles = i`
             color: var(--secondary-text-color);
         }
 
-        /* A row with children needs to read as a group header at a
-           glance - it never shows a checkbox at all (see the template's
-           checkboxHidden branch, which drops .checkbox-slot from the
-           layout entirely rather than reserving empty space for it), so
-           bold + very slightly larger text carries that signal on its
-           own instead, the same way the reference card this design
-           was inspired by distinguishes a single level of nesting with
-           no indentation at all. */
-        .summary.has-children {
-            font-weight: 600;
-            font-size: 15px;
+        /* A structural row (see isStructural - real children, or
+           pinned) needs to read as a section header at a glance, not
+           just a heavier task - it never shows a checkbox at all (see
+           checkboxHidden, which drops the checkbox slot from the
+           layout entirely rather than reserving empty space for it),
+           so a small uppercase, letter-spaced label carries that
+           signal on its own instead - the same treatment already used
+           for the Active/Completed section headers elsewhere in this
+           card (see todo-overlay-list.ts's own .section-header), so a
+           category reads as "the same KIND of thing" as those rather
+           than an unrelated new visual language. */
+        .summary.structural {
+            font-size: 11.5px;
+            font-weight: 700;
+            letter-spacing: 0.06em;
+            text-transform: uppercase;
+            color: var(--secondary-text-color);
+        }
+
+        .row.completed .summary.structural {
+            text-decoration: none;
         }
 
         ha-checkbox {
@@ -2977,6 +3084,24 @@ TodoTreeItem.styles = i`
             display: flex;
             align-items: center;
             justify-content: center;
+        }
+
+        /* Same slot width as .checkbox-slot (see the template, which
+           renders one or the other, never both) so a person row's
+           title lines up with every other row's, pinned or not. */
+        .person-avatar {
+            flex-shrink: 0;
+            width: 22px;
+            height: 22px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-family: Roboto, "Noto Sans", sans-serif;
+            font-size: 11px;
+            font-weight: 700;
+            color: #fff;
+            background: var(--accent-color, var(--primary-color));
         }
 
         .collapse-toggle {
@@ -3447,6 +3572,7 @@ var TodoTree = class extends i4 {
     this.deleteModeActive = false;
   }
   render() {
+    const displayItems = groupSiblingsForDisplay(this.items, void 0);
     return b2`
             <ul>
                 ${this.items.length === 0 ? b2`
@@ -3458,7 +3584,7 @@ var TodoTree = class extends i4 {
                                     ${this.emptyDropHighlight ? "Drop here" : "No items"}
                                 </div>
                             </li>
-                        ` : this.items.map(
+                        ` : displayItems.map(
       (item) => b2`
                                 <todo-overlay-tree-item
                                     .item=${item}
@@ -3709,7 +3835,7 @@ function collectAllRows(root, currentEntity, currentDepth = 0) {
     const isTreeItem = el.localName === "todo-overlay-tree-item" && Boolean(itemEl.item);
     if (isTreeItem && currentEntity) {
       const rowEl = itemEl.shadowRoot?.querySelector(".row");
-      if (rowEl) {
+      if (rowEl && !rowEl.hasAttribute("data-synthetic")) {
         const hasVisibleChildren = itemEl.shadowRoot?.querySelector("ul") != null;
         rows.push({
           id: itemEl.item.id,

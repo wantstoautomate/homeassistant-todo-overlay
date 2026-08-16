@@ -3,6 +3,8 @@ import {customElement, property, state} from "lit/decorators.js";
 import {classMap} from "lit/directives/class-map.js";
 import {styleMap} from "lit/directives/style-map.js";
 
+import type {DisplayItem} from "../grouping";
+import {groupSiblingsForDisplay} from "../grouping";
 import {LONG_PRESS_MS, type Placement, type TodoItem, isOverdue} from "../models";
 
 // How far into a row's top/bottom the pointer needs to be to count as
@@ -380,17 +382,27 @@ export class TodoTreeItem extends LitElement {
             color: var(--secondary-text-color);
         }
 
-        /* A row with children needs to read as a group header at a
-           glance - it never shows a checkbox at all (see the template's
-           checkboxHidden branch, which drops .checkbox-slot from the
-           layout entirely rather than reserving empty space for it), so
-           bold + very slightly larger text carries that signal on its
-           own instead, the same way the reference card this design
-           was inspired by distinguishes a single level of nesting with
-           no indentation at all. */
-        .summary.has-children {
-            font-weight: 600;
-            font-size: 15px;
+        /* A structural row (see isStructural - real children, or
+           pinned) needs to read as a section header at a glance, not
+           just a heavier task - it never shows a checkbox at all (see
+           checkboxHidden, which drops the checkbox slot from the
+           layout entirely rather than reserving empty space for it),
+           so a small uppercase, letter-spaced label carries that
+           signal on its own instead - the same treatment already used
+           for the Active/Completed section headers elsewhere in this
+           card (see todo-overlay-list.ts's own .section-header), so a
+           category reads as "the same KIND of thing" as those rather
+           than an unrelated new visual language. */
+        .summary.structural {
+            font-size: 11.5px;
+            font-weight: 700;
+            letter-spacing: 0.06em;
+            text-transform: uppercase;
+            color: var(--secondary-text-color);
+        }
+
+        .row.completed .summary.structural {
+            text-decoration: none;
         }
 
         ha-checkbox {
@@ -416,6 +428,24 @@ export class TodoTreeItem extends LitElement {
             display: flex;
             align-items: center;
             justify-content: center;
+        }
+
+        /* Same slot width as .checkbox-slot (see the template, which
+           renders one or the other, never both) so a person row's
+           title lines up with every other row's, pinned or not. */
+        .person-avatar {
+            flex-shrink: 0;
+            width: 22px;
+            height: 22px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-family: Roboto, "Noto Sans", sans-serif;
+            font-size: 11px;
+            font-weight: 700;
+            color: #fff;
+            background: var(--accent-color, var(--primary-color));
         }
 
         .collapse-toggle {
@@ -803,7 +833,7 @@ export class TodoTreeItem extends LitElement {
     `;
 
     @property({attribute: false})
-    item!: TodoItem;
+    item!: DisplayItem;
 
     @property({attribute: false})
     draggedId?: string;
@@ -992,12 +1022,49 @@ export class TodoTreeItem extends LitElement {
     // checkbox at all; completing it becomes a deliberate action via the
     // edit dialog instead (see todo-overlay.ts's onPointerUp and
     // todo-item-dialog.ts's complete toggle).
+    //
+    // A pinned item (see isPinned) or the synthetic Other row (see
+    // isSynthetic) never shows a checkbox at all, unconditionally - not
+    // gated by hideCompleteForParents/showCheckboxes the way a REAL
+    // parent's is. Both are a deliberate structural declaration ("this
+    // is a category/person", "this is a grouping, not a real item"),
+    // categorically different from "this happens to have accumulated
+    // children" - the one case the existing toggle is actually about.
     private get checkboxHidden(): boolean {
+        if (this.isPinned || this.isSynthetic) {
+            return true;
+        }
+
         if (!this.showCheckboxes) {
             return true;
         }
 
         return this.hideCompleteForParents && this.item.children.length > 0;
+    }
+
+    private get isPinned(): boolean {
+        return this.item.pin_type != null;
+    }
+
+    // True only for the one synthetic "Other" row groupSiblingsForDisplay
+    // generates when a level's plain siblings get swept up (see
+    // grouping.ts) - never a real item, so every interactive affordance
+    // a normal row has (edit, delete, add-child, drag, swipe) is
+    // suppressed for it; only collapse/expand still works, exactly like
+    // any other structural row.
+    private get isSynthetic(): boolean {
+        return Boolean(this.item.synthetic);
+    }
+
+    // Always shown as a section header - bold/tracked title, no
+    // checkbox, collapsible - regardless of whether it currently has
+    // any children: either because it genuinely does, or because it's
+    // pinned as a stand-in for one that will. The completed-count badge
+    // (see childStatus) and the collapse chevron deliberately stay
+    // gated on REAL children only (hasChildren) - see this getter's own
+    // call sites for why neither should react to a pin alone.
+    private get isStructural(): boolean {
+        return this.hasChildren || this.isPinned;
     }
 
     private get hasChildren(): boolean {
@@ -1157,6 +1224,16 @@ export class TodoTreeItem extends LitElement {
     }
 
     private pointerDown(e: PointerEvent) {
+        // The synthetic Other row (see isSynthetic) has no tap-to-
+        // complete, hold-to-edit, drag, or swipe behavior at all - it
+        // isn't a real item, so none of the gestures this method sets
+        // up mean anything for it. Collapse/expand (a separate click
+        // handler on the chevron button, which stops its own
+        // propagation) is completely unaffected by this early return.
+        if (this.isSynthetic) {
+            return;
+        }
+
         this.pointerDownAt = Date.now();
         this.pointerDownScreenPos = {x: e.clientX, y: e.clientY};
         this.hasMoved = false;
@@ -1519,6 +1596,11 @@ export class TodoTreeItem extends LitElement {
     render() {
         const isDropTarget = this.isDropTarget;
         const isBeingDragged = this.isBeingDragged;
+        // See grouping.ts's own doc comment - a no-op (returns
+        // this.item.children completely unchanged) below the
+        // structural-sibling threshold, so this is cheap to always
+        // compute rather than only when it might matter.
+        const displayChildren = groupSiblingsForDisplay(this.item.children, this.item.id);
 
         const rowClasses = {
             row: true,
@@ -1574,6 +1656,7 @@ export class TodoTreeItem extends LitElement {
                     <div
                         class=${classMap({...rowClasses, swiping: this.swipeDragging})}
                         style=${styleMap({transform: this.swipeOffsetX ? `translateX(${this.swipeOffsetX}px)` : ""})}
+                        ?data-synthetic=${this.isSynthetic}
 
                         @pointerdown=${this.pointerDown}
                     >
@@ -1619,18 +1702,31 @@ export class TodoTreeItem extends LitElement {
                                 }
 
                                 ${
-                                    this.checkboxHidden
-                                        ? ""
-                                        : html`
-                                            <div class="checkbox-slot">
-                                                <ha-checkbox .checked=${this.item.completed}></ha-checkbox>
+                                    // A person pin gets a small initial
+                                    // avatar in place of the checkbox
+                                    // slot - never for the synthetic
+                                    // Other row, which has no title
+                                    // that means anything as a "person"
+                                    // (and is never pinned to begin
+                                    // with - see isSynthetic).
+                                    this.item.pin_type === "person" && !this.isSynthetic
+                                        ? html`
+                                            <div class="person-avatar" aria-hidden="true">
+                                                ${this.item.title.trim().charAt(0).toUpperCase() || "?"}
                                             </div>
                                         `
+                                        : this.checkboxHidden
+                                            ? ""
+                                            : html`
+                                                <div class="checkbox-slot">
+                                                    <ha-checkbox .checked=${this.item.completed}></ha-checkbox>
+                                                </div>
+                                            `
                                 }
 
                                 <div class="content">
                                     <div class="title-line">
-                                        <span class=${classMap({summary: true, "has-children": this.hasChildren})}>${this.item.title}</span>
+                                        <span class=${classMap({summary: true, structural: this.isStructural})}>${this.item.title}</span>
                                         ${
                                             this.item.quantity
                                                 ? html`<span class="quantity-chip">${this.item.quantity}</span>`
@@ -1680,53 +1776,64 @@ export class TodoTreeItem extends LitElement {
                                 </div>
 
                                 ${
-                                    this.reorderModeActive
-                                        ? html`
-                                            <button
-                                                class="drag-handle"
-                                                aria-label="Drag to reorder"
-                                                @pointerdown=${this.handlePointerDown}
-                                            >
-                                                ${DRAG_HANDLE_ICON}
-                                            </button>
-                                        `
-                                        : this.addModeActive
+                                    // The synthetic Other row (see
+                                    // isSynthetic) is never draggable,
+                                    // never gains a child, never gets
+                                    // deleted - it isn't a real item at
+                                    // all, just a view-time grouping
+                                    // over some of this level's real
+                                    // siblings. Only collapse/expand
+                                    // still works for it, same as any
+                                    // other structural row.
+                                    this.isSynthetic
+                                        ? ""
+                                        : this.reorderModeActive
                                             ? html`
                                                 <button
-                                                    class=${classMap({
-                                                        "child-quick-add-toggle": true,
-                                                        active: this.childQuickAddParentIds.has(this.item.id),
-                                                    })}
-                                                    aria-label=${
-                                                        this.childQuickAddParentIds.has(this.item.id)
-                                                            ? "Close add-child field"
-                                                            : "Add child item"
-                                                    }
-                                                    @click=${this.onToggleChildQuickAddClick}
-                                                    @pointerdown=${(e: Event) => e.stopPropagation()}
+                                                    class="drag-handle"
+                                                    aria-label="Drag to reorder"
+                                                    @pointerdown=${this.handlePointerDown}
                                                 >
-                                                    ${
-                                                        this.childQuickAddParentIds.has(this.item.id)
-                                                            ? CROSS_ICON
-                                                            : PLUS_ICON
-                                                    }
+                                                    ${DRAG_HANDLE_ICON}
                                                 </button>
                                             `
-                                            : this.deleteModeActive && !this.hasChildren
+                                            : this.addModeActive
                                                 ? html`
                                                     <button
                                                         class=${classMap({
-                                                            "delete-button": true,
-                                                            confirming: this.confirmingDelete,
+                                                            "child-quick-add-toggle": true,
+                                                            active: this.childQuickAddParentIds.has(this.item.id),
                                                         })}
-                                                        aria-label=${this.confirmingDelete ? "Confirm delete" : "Delete"}
-                                                        @click=${this.onDeleteClick}
+                                                        aria-label=${
+                                                            this.childQuickAddParentIds.has(this.item.id)
+                                                                ? "Close add-child field"
+                                                                : "Add child item"
+                                                        }
+                                                        @click=${this.onToggleChildQuickAddClick}
                                                         @pointerdown=${(e: Event) => e.stopPropagation()}
                                                     >
-                                                        ${CROSS_ICON}
+                                                        ${
+                                                            this.childQuickAddParentIds.has(this.item.id)
+                                                                ? CROSS_ICON
+                                                                : PLUS_ICON
+                                                        }
                                                     </button>
                                                 `
-                                                : ""
+                                                : this.deleteModeActive && !this.hasChildren
+                                                    ? html`
+                                                        <button
+                                                            class=${classMap({
+                                                                "delete-button": true,
+                                                                confirming: this.confirmingDelete,
+                                                            })}
+                                                            aria-label=${this.confirmingDelete ? "Confirm delete" : "Delete"}
+                                                            @click=${this.onDeleteClick}
+                                                            @pointerdown=${(e: Event) => e.stopPropagation()}
+                                                        >
+                                                            ${CROSS_ICON}
+                                                        </button>
+                                                    `
+                                                    : ""
                                 }
 
                                 ${
@@ -1771,7 +1878,7 @@ export class TodoTreeItem extends LitElement {
                     this.hasChildren && !this.isCollapsed
                         ? html`
                             <ul>
-                                ${this.item.children.map(
+                                ${displayChildren.map(
                                     child => html`
                                         <todo-overlay-tree-item
                                             .item=${child}

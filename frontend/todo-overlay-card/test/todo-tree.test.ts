@@ -109,4 +109,47 @@ describe("todo-overlay-tree", () => {
         };
         expect(child.hideCompleteForParents).toBe(true);
     });
+
+    // Root-level wiring of grouping.ts's own Other-bucket algorithm (see
+    // its own doc comment / grouping.test.ts for the algorithm itself) -
+    // this only needs to prove render() actually threads the grouped
+    // result, not the algorithm's own rules.
+    describe("Other-bucket grouping at the root level", () => {
+        it("renders a synthetic Other item once two root siblings are structural", async () => {
+            const el = document.createElement("todo-overlay-tree") as TodoTree;
+            el.items = [
+                makeItem({id: "brodie", pin_type: "person", title: "Brodie"}),
+                makeItem({id: "anna", pin_type: "person", title: "Anna"}),
+                makeItem({id: "bins", title: "Take out bins"}),
+            ];
+
+            document.body.appendChild(el);
+            await el.updateComplete;
+
+            const rows = [...(el.shadowRoot?.querySelectorAll("todo-overlay-tree-item") ?? [])] as (HTMLElement & {
+                item: {id: string; children: {id: string}[]};
+            })[];
+
+            expect(rows.map(row => row.item.id)).toEqual(["brodie", "anna", "__other__:root"]);
+            expect(rows[2].item.children.map(child => child.id)).toEqual(["bins"]);
+        });
+
+        it("does not group a single structural root item - below threshold", async () => {
+            const el = document.createElement("todo-overlay-tree") as TodoTree;
+            el.items = [
+                makeItem({id: "recipes", children: [makeItem({id: "lasagna"})]}),
+                makeItem({id: "milk"}),
+                makeItem({id: "eggs"}),
+            ];
+
+            document.body.appendChild(el);
+            await el.updateComplete;
+
+            const rows = [...(el.shadowRoot?.querySelectorAll("todo-overlay-tree-item") ?? [])] as (HTMLElement & {
+                item: {id: string};
+            })[];
+
+            expect(rows.map(row => row.item.id)).toEqual(["recipes", "milk", "eggs"]);
+        });
+    });
 });
