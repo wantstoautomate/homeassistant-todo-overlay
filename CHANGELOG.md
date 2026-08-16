@@ -3,6 +3,50 @@
 All notable changes to this project are documented here. Versions follow the
 integration's `manifest.json`/card's `package.json` (kept in lockstep).
 
+## 1.1.1
+
+Three fixes to 1.1.0's own new behavior, driven by live mobile testing and a
+real linked-list report.
+
+- **Fixed: touch reorder drags could drift horizontally and vanish off
+  screen.** Touch can only ever start a drag from the reorder-mode handle,
+  which sits at the row's far-right edge - a natural thumb drag curving even
+  slightly left off that screen edge (ordinary ergonomics, not user error)
+  dragged the ghost along with it. `findDropTarget` only ever reads the
+  vertical pointer coordinate, so horizontal movement during a reorder-mode
+  drag has zero effect on where anything actually drops - it only drove the
+  ghost's own visual position. The ghost is now frozen horizontally for the
+  whole drag; mouse (never reorder-mode) is unaffected.
+- **Fixed: swiping a row also navigated dashboard tabs**, for anyone running
+  the HACS "Home Assistant Swipe Navigation" add-on alongside this card.
+  Confirmed via the add-on's own real released build, run against our real
+  card in an actual browser (not just code review): it listens for raw
+  `touchmove`/`touchend` on an ancestor of every card, in the default bubble
+  phase - a separate event stream from the `pointermove` events our own
+  swipe gesture is built on, so nothing we did with pointer events could
+  ever have reached it. A window-level, capture-phase touch listener now
+  stops that propagation once a horizontal swipe locks in, verified with a
+  negative control (temporarily disabling the fix reproduced the original
+  conflict in the same test harness) - swipes that don't start on a row are
+  completely unaffected. A second, subtler bug turned up in the course of
+  proving this out with genuine touch input rather than synthetic test
+  events: `pointerup` and this same gesture's own trailing `touchend` are
+  two independent browser events, not one, and our cleanup was tearing down
+  the interception before that `touchend` had even arrived - fixed with a
+  dedicated flag that survives exactly as long as the interception itself
+  needs to.
+- **Fixed: reordering and reparenting an item in a linked list didn't sync
+  to the other side at all.** Position/hierarchy sync had been deliberately
+  out of scope in the original design - only item content (title,
+  completed, description, etc.) synced across a link. A pure reorder or
+  reparent changes no content field, so the existing echo-suppression check
+  saw nothing different from what was already recorded and silently never
+  published anything. Position now rides the same upsert message content
+  already used, described as a reference to a sibling or parent (mirroring
+  drag-and-drop's own before/after/inside model) that the other side
+  translates back to its own item ids and applies directly - never through
+  a path that could itself trigger another sync message, so it can't loop.
+
 ## 1.1.0
 
 A full rework of how items get added and deleted, driven by a live-reported

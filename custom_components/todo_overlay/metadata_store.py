@@ -665,9 +665,9 @@ class MetadataStore:
         self,
         entity_id: str,
     ) -> dict[str, dict[str, Any]]:
-        """All known (sync_id -> {"updated_at", "deleted_at", "fields"})
-        conflict-resolution state for this entity's link, including
-        tombstones for deleted items."""
+        """All known (sync_id -> {"updated_at", "deleted_at", "fields",
+        "position"}) conflict-resolution state for this entity's link,
+        including tombstones for deleted items."""
 
         await self._load()
 
@@ -683,6 +683,7 @@ class MetadataStore:
         updated_at: str,
         deleted_at: str | None,
         fields: dict[str, Any] | None,
+        position: dict[str, Any] | None = None,
     ) -> None:
         await self._load()
 
@@ -693,6 +694,7 @@ class MetadataStore:
             "updated_at": updated_at,
             "deleted_at": deleted_at,
             "fields": fields,
+            "position": position,
         }
 
         self._save()

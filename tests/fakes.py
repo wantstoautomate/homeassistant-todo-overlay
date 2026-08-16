@@ -357,11 +357,13 @@ class FakeMetadataStore:
 
     async def set_link_item_state(
         self, entity_id: str, sync_id: str, *, updated_at: str, deleted_at: str | None, fields: dict | None,
+        position: dict | None = None,
     ) -> None:
         self._link_item_state.setdefault(entity_id, {})[sync_id] = {
             "updated_at": updated_at,
             "deleted_at": deleted_at,
             "fields": fields,
+            "position": position,
         }
 
     async def prune_tombstones(self, entity_id: str, *, older_than: str) -> None:

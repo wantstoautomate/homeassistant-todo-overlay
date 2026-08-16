@@ -941,6 +941,20 @@ export class TodoTreeItem extends LitElement {
     // ended - a natural release, a cancel, or never having moved enough
     // to lock an axis at all.
     private swipeAxis?: "horizontal" | "vertical";
+    // Gates onWindowTouchTail - deliberately a SEPARATE flag from
+    // swipeAxis, not a re-read of it, because pointerup and this same
+    // gesture's own trailing touchend are two independent events for
+    // one physical release, and pointerup's own handling (see
+    // pointerUp/resolveSwipe) can finish running - clearing swipeAxis
+    // in the process - before the browser has even dispatched that
+    // touchend yet (confirmed live, via real Chrome touch simulation,
+    // not assumed: swipe-navigation's own touchend listener still ran
+    // once out of every real gesture tested, despite swipeAxis already
+    // being "horizontal" throughout). This flag instead stays true for
+    // exactly as long as the touch-tail listeners themselves stay
+    // attached (see detachWindowListeners' own deferred cleanup),
+    // spanning past that gap on purpose.
+    private touchTailArmed = false;
 
     private get isPressed(): boolean {
         return this.draggedId === this.item.id;
@@ -1081,6 +1095,11 @@ export class TodoTreeItem extends LitElement {
         this.dragEngaged = false;
         this.initiatedFromHandle = false;
         this.swipeAxis = undefined;
+        // Reset here too (not just left to the previous gesture's own
+        // deferred cleanup - see detachWindowListeners) so a fresh
+        // press never inherits a stale armed state from a prior
+        // gesture whose deferred touch-tail cleanup hasn't run yet.
+        this.touchTailArmed = false;
         this.pointerIsMouse = e.pointerType === "mouse";
 
         // Always the ROW's rect, even when this fires from the small
@@ -1111,6 +1130,16 @@ export class TodoTreeItem extends LitElement {
         // need to end the gesture the same way, or a touch drag would
         // get stuck with dangling listeners and never finalize.
         window.addEventListener("pointercancel", this.onWindowPointerUp, {capture: true});
+        // See onWindowTouchTail's own comment - these are the RAW touch
+        // events, a separate parallel stream from the pointer events
+        // above, needed only to stop a page-level swipe-navigation
+        // add-on (confirmed live: github.com/zanna-37/hass-swipe-
+        // navigation, which listens for these specifically, not
+        // Pointer Events) from also treating a row's own swipe gesture
+        // as a dashboard tab change.
+        window.addEventListener("touchmove", this.onWindowTouchTail, {capture: true});
+        window.addEventListener("touchend", this.onWindowTouchTail, {capture: true});
+        window.addEventListener("touchcancel", this.onWindowTouchTail, {capture: true});
 
         this.dispatchEvent(
             new CustomEvent("tree-pointer-down", {
@@ -1256,6 +1285,7 @@ export class TodoTreeItem extends LitElement {
 
             if (this.swipeAxis === "horizontal") {
                 this.swipeDragging = true;
+                this.touchTailArmed = true;
             }
         }
 
@@ -1278,10 +1308,52 @@ export class TodoTreeItem extends LitElement {
         this.pointerUp();
     };
 
+    // Stops a locked-in horizontal swipe's raw touch events from ever
+    // reaching a page-level gesture recognizer attached higher up the
+    // DOM (e.g. a swipe-between-tabs add-on listening on the app's own
+    // layout element, in the default bubble phase) - this listener is
+    // attached at window with {capture: true} (see pointerDown), which
+    // runs BEFORE any bubble-phase listener anywhere else on the page,
+    // so stopping propagation here reliably keeps it from ever seeing
+    // enough of the gesture to register its own swipe. Left alone
+    // entirely for anything that isn't a locked-in horizontal swipe on
+    // THIS row (an ambiguous press, a vertical scroll, a reorder-handle
+    // drag) - swiping to navigate everywhere else on the dashboard is
+    // completely unaffected. Gated on touchTailArmed, not swipeAxis
+    // directly - see that field's own comment for why.
+    private onWindowTouchTail = (e: TouchEvent) => {
+        if (this.touchTailArmed) {
+            e.stopPropagation();
+        }
+    };
+
     private detachWindowListeners() {
         window.removeEventListener("pointermove", this.onWindowPointerMove, {capture: true});
         window.removeEventListener("pointerup", this.onWindowPointerUp, {capture: true});
         window.removeEventListener("pointercancel", this.onWindowPointerUp, {capture: true});
+
+        // Deferred, not immediate: live-confirmed (real Chrome touch
+        // simulation, not assumed) that the browser can still dispatch
+        // THIS SAME gesture's own trailing touchend/touchcancel event
+        // after pointerup has already fired and finished running its
+        // own handling - pointerup and a touch gesture's own release
+        // are two independent events for one physical release, not one
+        // combined event. Removing these listeners (or clearing
+        // touchTailArmed) synchronously here could unregister
+        // onWindowTouchTail, or disarm it, before that trailing event
+        // ever reaches it - letting it leak through to a page-level
+        // bubble listener for the split second between the two.
+        // Deferring by one task lets anything already dispatched for
+        // this same gesture finish being handled first; the next
+        // press's own pointerDown() resets touchTailArmed regardless,
+        // so there's no risk of a stale true leaking into a new
+        // gesture even if this hasn't fired yet by then.
+        window.setTimeout(() => {
+            this.touchTailArmed = false;
+            window.removeEventListener("touchmove", this.onWindowTouchTail, {capture: true});
+            window.removeEventListener("touchend", this.onWindowTouchTail, {capture: true});
+            window.removeEventListener("touchcancel", this.onWindowTouchTail, {capture: true});
+        }, 0);
     }
 
     private emitPointerUp(pressDurationMs: number, moved = false) {

@@ -142,6 +142,26 @@ const DRAG_GHOST_FALLBACK_HEIGHT_PX = 40;
 // grab offset, exactly like the ghost's normal, non-shrunk width).
 const DRAG_GHOST_SHRINK_WIDTH_PX = 44;
 
+// Caps how far horizontally a TOUCH drag's ghost can sit from the
+// pointer (see onDragStart's own comment) - mouse is unaffected, and
+// keeps its exact grabbed-point offset.
+const TOUCH_DRAG_MAX_GRAB_OFFSET_X_PX = 32;
+
+// Backstop for both the ghost and the "label" style's pill (see
+// renderDragGhost/clampToViewport) - keeps either from rendering
+// partly or fully off-screen, regardless of how it was positioned.
+const GHOST_VIEWPORT_MARGIN_PX = 8;
+
+// Rough stand-in for the "label" style's own rendered height, used
+// only to keep it from clipping the bottom edge of the viewport (see
+// clampToViewport) - its exact height depends on the parent's title
+// length wrapping, which isn't known until after render.
+const DRAG_GHOST_LABEL_FALLBACK_HEIGHT_PX = 36;
+
+// Only used when dragGhostSize is unset (rare - see onDragStart), same
+// role as DRAG_GHOST_FALLBACK_HEIGHT_PX but for width.
+const DRAG_GHOST_FALLBACK_WIDTH_PX = 200;
+
 interface TreeItemElement extends Element {
     item?: TodoItem;
 }
@@ -1373,12 +1393,30 @@ export class TodoOverlayList extends LitElement {
     }
 
     private onDragStart(e: CustomEvent) {
-        const {rect, pointerX, pointerY, grabOffsetX, grabOffsetY} = e.detail;
+        const {rect, pointerX, pointerY, grabOffsetX, grabOffsetY, pointerType} = e.detail;
 
         // grabOffsetX/Y come from the original press position, not this
         // event's - see the dispatch site in todo-tree-item.ts for why
         // that distinction matters for fast drags.
-        this.dragGhostOffset = {x: grabOffsetX ?? 0, y: grabOffsetY ?? 0};
+        //
+        // Live-reported: on a phone, touch can only ever start a drag
+        // from the reorder handle (see todo-tree-item.ts's own class
+        // docstring), which sits at the row's far-right edge - so
+        // grabOffsetX ends up close to the ENTIRE row's width. Since the
+        // ghost's left is pointerX minus this offset, a natural thumb
+        // drag curving even slightly left (normal ergonomics when your
+        // hand is anchored near a screen edge) gets amplified into the
+        // ghost - and anything anchored to it, like the "label" style's
+        // pill - jumping far to the left, often off-screen entirely.
+        // Capping the offset for touch keeps the ghost tracking close
+        // to the thumb regardless of where on the row the handle sits;
+        // mouse keeps the exact grabbed point, since a cursor has no
+        // equivalent edge-anchoring problem.
+        const cappedGrabOffsetX = pointerType !== "mouse"
+            ? Math.min(grabOffsetX ?? 0, TOUCH_DRAG_MAX_GRAB_OFFSET_X_PX)
+            : (grabOffsetX ?? 0);
+
+        this.dragGhostOffset = {x: cappedGrabOffsetX, y: grabOffsetY ?? 0};
         this.dragGhostSize = rect ? {width: rect.width, height: rect.height} : undefined;
         this.ghostPosition = {x: pointerX, y: pointerY};
         this.dragStartPointerPos = {x: pointerX, y: pointerY};
@@ -1437,7 +1475,22 @@ export class TodoOverlayList extends LitElement {
             e.preventDefault();
         }
 
-        this.ghostPosition = {x: e.clientX, y: e.clientY};
+        // Reorder-mode drags (touch's only path to a drag at all - see
+        // the class docstring) are frozen to purely vertical ghost
+        // movement - findDropTarget below only ever reads e.clientY, so
+        // horizontal pointer position has zero effect on WHERE anything
+        // drops. Live-reported: because touch can only start a drag
+        // from the handle at the row's far-right edge, a natural thumb
+        // drag curving even slightly left dragged the ghost along with
+        // it, which read as the ghost (and the target row/label under
+        // it) drifting or vanishing. A mouse drag (never reorder-mode -
+        // it holds anywhere on the row instead) keeps full 2D tracking,
+        // since it has no equivalent edge-anchoring problem to guard
+        // against.
+        this.ghostPosition = {
+            x: this.reorderModeActive ? this.dragStartPointerPos.x : e.clientX,
+            y: e.clientY,
+        };
 
         // See HOVER_DEAD_ZONE_PX's own comment - skip hit-testing
         // entirely until the pointer has actually moved, rather than
@@ -2249,6 +2302,22 @@ export class TodoOverlayList extends LitElement {
         `;
     }
 
+    // Keeps a box positioned at (left, top) with the given size fully
+    // on-screen - a backstop alongside onDragStart's own grab-offset
+    // cap for touch, not a replacement for it: the cap addresses WHY
+    // the ghost drifts far from the pointer in the first place (see its
+    // own comment), this just guarantees nothing ever renders off-
+    // screen regardless of cause.
+    private clampToViewport(left: number, top: number, width: number, height: number): {left: number; top: number} {
+        const maxLeft = Math.max(GHOST_VIEWPORT_MARGIN_PX, window.innerWidth - width - GHOST_VIEWPORT_MARGIN_PX);
+        const maxTop = Math.max(GHOST_VIEWPORT_MARGIN_PX, window.innerHeight - height - GHOST_VIEWPORT_MARGIN_PX);
+
+        return {
+            left: Math.min(Math.max(left, GHOST_VIEWPORT_MARGIN_PX), maxLeft),
+            top: Math.min(Math.max(top, GHOST_VIEWPORT_MARGIN_PX), maxTop),
+        };
+    }
+
     private renderDragGhost() {
         if (!this.ghostPosition || !this.draggedId || !this.list) {
             return "";
@@ -2261,14 +2330,15 @@ export class TodoOverlayList extends LitElement {
         }
 
         // The ghost's own top-left anchor is ALWAYS just the pointer
-        // minus the original grab offset, regardless of dragGhostStyle -
-        // an earlier attempt lifted this clear of the pointer entirely
-        // and was live-reported as feeling visually disconnected from
-        // what was actually being dragged. Every style below only ever
-        // changes the ghost's own SIZE/opacity, or adds a separate
-        // satellite element near it - never its position.
-        const left = this.ghostPosition.x - this.dragGhostOffset.x;
-        const top = this.ghostPosition.y - this.dragGhostOffset.y;
+        // minus the original grab offset (itself capped for touch, see
+        // onDragStart), regardless of dragGhostStyle - an earlier
+        // attempt lifted this clear of the pointer entirely and was
+        // live-reported as feeling visually disconnected from what was
+        // actually being dragged. Every style below only ever changes
+        // the ghost's own SIZE/opacity, or adds a separate satellite
+        // element near it - never its position.
+        const rawLeft = this.ghostPosition.x - this.dragGhostOffset.x;
+        const rawTop = this.ghostPosition.y - this.dragGhostOffset.y;
 
         // Only while actually hovering a valid reparent ("inside")
         // target - that's the one case the ghost (sitting right at the
@@ -2281,6 +2351,12 @@ export class TodoOverlayList extends LitElement {
         const applyTreatment = hoveringParent && targetItem !== undefined && this.dragGhostStyle !== "none";
         const shrinking = applyTreatment && this.dragGhostStyle === "shrink";
 
+        const ghostWidth = shrinking
+            ? DRAG_GHOST_SHRINK_WIDTH_PX
+            : (this.dragGhostSize?.width ?? DRAG_GHOST_FALLBACK_WIDTH_PX);
+        const ghostHeight = this.dragGhostSize?.height ?? DRAG_GHOST_FALLBACK_HEIGHT_PX;
+        const {left, top} = this.clampToViewport(rawLeft, rawTop, ghostWidth, ghostHeight);
+
         return html`
             <div
                 class=${classMap({
@@ -2291,9 +2367,7 @@ export class TodoOverlayList extends LitElement {
                 style=${styleMap({
                     left: `${left}px`,
                     top: `${top}px`,
-                    width: shrinking
-                        ? `${DRAG_GHOST_SHRINK_WIDTH_PX}px`
-                        : (this.dragGhostSize ? `${this.dragGhostSize.width}px` : undefined),
+                    width: `${ghostWidth}px`,
                 })}
             >
                 <ha-checkbox .checked=${item.completed}></ha-checkbox>
@@ -2305,19 +2379,27 @@ export class TodoOverlayList extends LitElement {
                 }
             </div>
             ${
-                applyTreatment && this.dragGhostStyle === "label"
-                    ? html`
+                (() => {
+                    if (!(applyTreatment && this.dragGhostStyle === "label")) {
+                        return "";
+                    }
+
+                    const labelPos = this.clampToViewport(
+                        left,
+                        top + ghostHeight + DRAG_GHOST_LABEL_GAP_PX,
+                        ghostWidth,
+                        DRAG_GHOST_LABEL_FALLBACK_HEIGHT_PX,
+                    );
+
+                    return html`
                         <div
                             class="drag-ghost-label"
-                            style=${styleMap({
-                                left: `${left}px`,
-                                top: `${top + (this.dragGhostSize?.height ?? DRAG_GHOST_FALLBACK_HEIGHT_PX) + DRAG_GHOST_LABEL_GAP_PX}px`,
-                            })}
+                            style=${styleMap({left: `${labelPos.left}px`, top: `${labelPos.top}px`})}
                         >
                             Add to: ${targetItem!.title}
                         </div>
-                    `
-                    : ""
+                    `;
+                })()
             }
         `;
     }

@@ -666,6 +666,61 @@ describe("todo-overlay-list onGlobalPointerMove vs. native scroll", () => {
     });
 });
 
+// Live-reported: because touch can only ever start a drag from the
+// reorder-mode handle (at the row's far-right edge), a natural thumb
+// drag curving even slightly left dragged the ghost along with it -
+// findDropTarget only ever reads the vertical coordinate, so that
+// horizontal movement had zero effect on WHERE anything would drop,
+// only on how the ghost itself (mis)behaved on screen.
+describe("todo-overlay-list reorder-mode ghost - vertical-only movement", () => {
+    it("freezes the ghost's horizontal position for a reorder-mode (touch) drag - only vertical movement moves it", async () => {
+        const {el} = await renderList({
+            entity_id: ENTITY_ID,
+            items: [makeItem({id: "1", title: "Milk"}), makeItem({id: "2", title: "Bread"})],
+        });
+
+        const draggable = el as unknown as DraggableList & {reorderModeActive: boolean};
+        draggable.reorderModeActive = true;
+        draggable.draggedId = "1";
+        draggable.onDragStart(new CustomEvent("tree-drag-start", {
+            detail: {rect: undefined, pointerX: 300, pointerY: 50, grabOffsetX: 0, grabOffsetY: 0, pointerType: "touch"},
+        }));
+
+        draggable.onGlobalPointerMove(new PointerEvent("pointermove", {clientX: 20, clientY: 90, pointerType: "touch"}));
+        await el.updateComplete;
+
+        const ghost = el.shadowRoot?.querySelector(".drag-ghost") as HTMLElement;
+        // clientX drifted from 300 down to 20 - the ghost's left must
+        // still reflect the ORIGINAL 300, not the drifted 20.
+        expect(ghost.style.left).toBe("300px");
+        expect(ghost.style.top).toBe("90px");
+
+        await draggable.onGlobalPointerUp();
+    });
+
+    it("still tracks full 2D pointer movement for a mouse drag (never reorder-mode)", async () => {
+        const {el} = await renderList({
+            entity_id: ENTITY_ID,
+            items: [makeItem({id: "1", title: "Milk"}), makeItem({id: "2", title: "Bread"})],
+        });
+
+        const draggable = el as unknown as DraggableList;
+        draggable.draggedId = "1";
+        draggable.onDragStart(new CustomEvent("tree-drag-start", {
+            detail: {rect: undefined, pointerX: 300, pointerY: 50, grabOffsetX: 0, grabOffsetY: 0, pointerType: "mouse"},
+        }));
+
+        draggable.onGlobalPointerMove(new PointerEvent("pointermove", {clientX: 20, clientY: 90, pointerType: "mouse"}));
+        await el.updateComplete;
+
+        const ghost = el.shadowRoot?.querySelector(".drag-ghost") as HTMLElement;
+        expect(ghost.style.left).toBe("20px");
+        expect(ghost.style.top).toBe("90px");
+
+        await draggable.onGlobalPointerUp();
+    });
+});
+
 // Live-reported bug: on mobile, the moment an item was picked up, the
 // highlight seemed to jump onto the NEXT row instead of staying on the
 // dragged item - before any intentional movement at all. Root cause: the
@@ -2083,5 +2138,88 @@ describe("todo-overlay-list drag ghost styles", () => {
         await settle(el);
 
         expect(el.shadowRoot?.querySelector(".drag-ghost-label")).toBeNull();
+    });
+
+    // Live-reported on a real phone: touch can only ever start a drag
+    // from the reorder handle, which sits at the row's far-right edge -
+    // so the grab offset baked into the ghost's position ends up close
+    // to the row's ENTIRE width. A natural thumb drag curving even
+    // slightly left off that edge (ordinary ergonomics, not user error)
+    // then amplified into the ghost - and the "label" style's pill
+    // anchored under it - jumping far to the left, often off-screen.
+    describe("touch grab-offset cap and viewport clamp", () => {
+        it("caps a TOUCH drag's horizontal grab offset so the ghost stays close to the pointer, regardless of where on the row it was grabbed", async () => {
+            const {el} = await renderList({
+                entity_id: ENTITY_ID,
+                items: [makeItem({id: "1", title: "Milk"})],
+            });
+
+            const draggable = el as unknown as DraggableList;
+            draggable.draggedId = "1";
+            draggable.onDragStart(new CustomEvent("tree-drag-start", {
+                detail: {
+                    rect: {x: 0, y: 0, width: 300, height: 40},
+                    pointerX: 300,
+                    pointerY: 100,
+                    grabOffsetX: 280,
+                    grabOffsetY: 20,
+                    pointerType: "touch",
+                },
+            }));
+            await settle(el);
+
+            const ghost = el.shadowRoot?.querySelector(".drag-ghost") as HTMLElement;
+            // Uncapped this would be 300 - 280 = 20px - the whole point
+            // is that it ISN'T that, and stays much closer to the
+            // pointer (300) instead.
+            expect(parseInt(ghost.style.left, 10)).toBeGreaterThan(200);
+        });
+
+        it("does not cap a MOUSE drag's horizontal grab offset - a cursor has no equivalent edge-anchoring problem", async () => {
+            const {el} = await renderList({
+                entity_id: ENTITY_ID,
+                items: [makeItem({id: "1", title: "Milk"})],
+            });
+
+            const draggable = el as unknown as DraggableList;
+            draggable.draggedId = "1";
+            draggable.onDragStart(new CustomEvent("tree-drag-start", {
+                detail: {
+                    rect: {x: 0, y: 0, width: 300, height: 40},
+                    pointerX: 300,
+                    pointerY: 100,
+                    grabOffsetX: 280,
+                    grabOffsetY: 20,
+                    pointerType: "mouse",
+                },
+            }));
+            await settle(el);
+
+            const ghost = el.shadowRoot?.querySelector(".drag-ghost") as HTMLElement;
+            expect(ghost.style.left).toBe("20px");
+        });
+
+        it("clamps the ghost to stay fully on-screen even from a wildly off-screen raw position", async () => {
+            const el = await renderHoveringParent("shrink");
+
+            setDragState(el, {ghostPosition: {x: -5000, y: -5000}, dragGhostOffset: {x: 0, y: 0}});
+            await settle(el);
+
+            const ghost = el.shadowRoot?.querySelector(".drag-ghost") as HTMLElement;
+            expect(parseInt(ghost.style.left, 10)).toBeGreaterThanOrEqual(0);
+            expect(parseInt(ghost.style.top, 10)).toBeGreaterThanOrEqual(0);
+        });
+
+        it("clamps the 'label' style's pill to stay on-screen too, even from a wildly off-screen raw position", async () => {
+            const el = await renderHoveringParent("label");
+
+            setDragState(el, {ghostPosition: {x: 100000, y: 100000}, dragGhostOffset: {x: 0, y: 0}});
+            await settle(el);
+
+            const label = el.shadowRoot?.querySelector(".drag-ghost-label") as HTMLElement;
+            expect(label).not.toBeNull();
+            expect(parseInt(label.style.left, 10)).toBeLessThan(100000);
+            expect(parseInt(label.style.top, 10)).toBeLessThan(100000);
+        });
     });
 });
