@@ -127,6 +127,20 @@ const DRAG_HANDLE_ICON = html`
 // second button competing for the same tight row width.
 const DELETE_CONFIRM_WINDOW_MS = 3000;
 
+// How long the row's own collapse animation runs before the delete
+// event actually dispatches - see dispatchDeleteAfterCollapse's own
+// comment for why this exists at all: live-verified (real browser,
+// not speculation) that removing a row INSTANTLY, while already
+// scrolled to the bottom of a long list, forces the browser to clamp
+// scrollY to the new, shorter document height in one un-animatable
+// snap - nothing about CSS scroll-behavior:smooth affects that
+// specific kind of forced, reflow-driven adjustment (only programmatic
+// scrollTo/scrollBy calls), confirmed by direct testing. Animating the
+// row's own height down FIRST turns that same unavoidable scroll
+// adjustment into a gradual, visibly-explained settle instead of an
+// instant, disorienting jump.
+export const ROW_COLLAPSE_MS = 180;
+
 function formatDue(item: TodoItem): {label: string; overdue: boolean} | undefined {
     const raw = item.due_datetime ?? (item.due_date ? `${item.due_date}T00:00:00` : null);
 
@@ -1032,6 +1046,60 @@ export class TodoTreeItem extends LitElement {
 
         this.confirmingDelete = false;
 
+        this.dispatchDeleteAfterCollapse();
+    }
+
+    // Collapses this row's own <li> (height, opacity, margin, padding)
+    // before actually dispatching tree-delete-item - see
+    // ROW_COLLAPSE_MS's own comment for why. Falls back to dispatching
+    // immediately if the <li> can't be found for some reason (should
+    // never happen, but a delete action must never silently no-op just
+    // because a cosmetic animation setup failed). A plain
+    // window.setTimeout, not transitionend, drives the actual dispatch -
+    // more robust against edge cases (e.g. prefers-reduced-motion
+    // collapsing the transition to 0 duration, or the element being
+    // torn down mid-transition for an unrelated reason) than depending
+    // on the event actually firing.
+    private dispatchDeleteAfterCollapse() {
+        const li = this.renderRoot.querySelector("li");
+
+        if (!li) {
+            this.dispatchDeleteEvent();
+            return;
+        }
+
+        const height = li.getBoundingClientRect().height;
+
+        li.style.overflow = "hidden";
+        li.style.height = `${height}px`;
+        li.style.transition = [
+            `height ${ROW_COLLAPSE_MS}ms ease`,
+            `opacity ${ROW_COLLAPSE_MS}ms ease`,
+            `margin ${ROW_COLLAPSE_MS}ms ease`,
+            `padding ${ROW_COLLAPSE_MS}ms ease`,
+        ].join(", ");
+        li.style.opacity = "1";
+
+        // Forces a layout flush so the transition above has an actual
+        // starting point to animate FROM, before flipping to the
+        // collapsed target on the next frame - setting both in the same
+        // synchronous pass would just apply the end state immediately,
+        // with nothing to transition between.
+        li.getBoundingClientRect();
+
+        requestAnimationFrame(() => {
+            li.style.height = "0px";
+            li.style.opacity = "0";
+            li.style.marginTop = "0px";
+            li.style.marginBottom = "0px";
+            li.style.paddingTop = "0px";
+            li.style.paddingBottom = "0px";
+        });
+
+        window.setTimeout(() => this.dispatchDeleteEvent(), ROW_COLLAPSE_MS);
+    }
+
+    private dispatchDeleteEvent() {
         this.dispatchEvent(
             new CustomEvent("tree-delete-item", {
                 detail: {id: this.item.id},
@@ -1436,13 +1504,7 @@ export class TodoTreeItem extends LitElement {
         this.swipeOffsetX = 0;
 
         if (offset <= -SWIPE_ACTION_THRESHOLD_PX) {
-            this.dispatchEvent(
-                new CustomEvent("tree-delete-item", {
-                    detail: {id: this.item.id},
-                    bubbles: true,
-                    composed: true,
-                }),
-            );
+            this.dispatchDeleteAfterCollapse();
         } else if (offset >= SWIPE_ACTION_THRESHOLD_PX) {
             this.dispatchEvent(
                 new CustomEvent("tree-toggle-child-quick-add", {

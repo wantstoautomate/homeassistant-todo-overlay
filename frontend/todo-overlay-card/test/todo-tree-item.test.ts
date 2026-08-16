@@ -2,7 +2,7 @@ import {afterEach, describe, expect, it, vi} from "vitest";
 
 import "../src/components/todo-tree-item";
 import type {TodoTreeItem} from "../src/components/todo-tree-item";
-import {SWIPE_ACTION_THRESHOLD_PX, SWIPE_AXIS_LOCK_PX, SWIPE_MAX_REVEAL_PX} from "../src/components/todo-tree-item";
+import {ROW_COLLAPSE_MS, SWIPE_ACTION_THRESHOLD_PX, SWIPE_AXIS_LOCK_PX, SWIPE_MAX_REVEAL_PX} from "../src/components/todo-tree-item";
 import {LONG_PRESS_MS, type TodoItem} from "../src/models";
 
 function makeItem(overrides: Partial<TodoItem> = {}): TodoItem {
@@ -61,6 +61,17 @@ function release(): void {
     window.dispatchEvent(
         new PointerEvent("pointerup", {clientX: 0, clientY: 0, pointerType: "mouse", bubbles: true}),
     );
+}
+
+// A confirmed delete no longer dispatches tree-delete-item
+// synchronously - it plays a local collapse animation on the row's own
+// <li> first (see dispatchDeleteAfterCollapse's own comment: an
+// instant removal, while already scrolled to the bottom of a long
+// list, forces the browser into an un-animatable scroll snap), then
+// dispatches once that finishes. A generous margin over ROW_COLLAPSE_MS
+// itself, since this is a real (not faked) timer.
+function flushRowCollapse(): Promise<void> {
+    return new Promise(r => setTimeout(r, ROW_COLLAPSE_MS + 50));
 }
 
 describe("todo-overlay-tree-item", () => {
@@ -432,6 +443,7 @@ describe("todo-overlay-tree-item", () => {
             touchPress(el);
             move(el, -(SWIPE_ACTION_THRESHOLD_PX + 10), 0);
             touchRelease();
+            await flushRowCollapse();
 
             expect(detail).toEqual({id: "1"});
         });
@@ -838,6 +850,7 @@ describe("todo-overlay-tree-item", () => {
             });
 
             (el.shadowRoot?.querySelector(".delete-button") as HTMLElement).click();
+            await flushRowCollapse();
 
             expect(detail).toEqual({id: "1"});
         });
@@ -856,6 +869,7 @@ describe("todo-overlay-tree-item", () => {
             expect(el.shadowRoot?.querySelector(".delete-button.confirming")).not.toBeNull();
 
             button.click();
+            await flushRowCollapse();
 
             expect(fired).toBe(true);
         });

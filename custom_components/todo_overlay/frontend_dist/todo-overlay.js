@@ -2056,6 +2056,7 @@ var DRAG_HANDLE_ICON = b2`
     </svg>
 `;
 var DELETE_CONFIRM_WINDOW_MS = 3e3;
+var ROW_COLLAPSE_MS = 180;
 function formatDue(item) {
   const raw = item.due_datetime ?? (item.due_date ? `${item.due_date}T00:00:00` : null);
   if (!raw) {
@@ -2262,6 +2263,47 @@ var TodoTreeItem = class extends i4 {
       return;
     }
     this.confirmingDelete = false;
+    this.dispatchDeleteAfterCollapse();
+  }
+  // Collapses this row's own <li> (height, opacity, margin, padding)
+  // before actually dispatching tree-delete-item - see
+  // ROW_COLLAPSE_MS's own comment for why. Falls back to dispatching
+  // immediately if the <li> can't be found for some reason (should
+  // never happen, but a delete action must never silently no-op just
+  // because a cosmetic animation setup failed). A plain
+  // window.setTimeout, not transitionend, drives the actual dispatch -
+  // more robust against edge cases (e.g. prefers-reduced-motion
+  // collapsing the transition to 0 duration, or the element being
+  // torn down mid-transition for an unrelated reason) than depending
+  // on the event actually firing.
+  dispatchDeleteAfterCollapse() {
+    const li = this.renderRoot.querySelector("li");
+    if (!li) {
+      this.dispatchDeleteEvent();
+      return;
+    }
+    const height = li.getBoundingClientRect().height;
+    li.style.overflow = "hidden";
+    li.style.height = `${height}px`;
+    li.style.transition = [
+      `height ${ROW_COLLAPSE_MS}ms ease`,
+      `opacity ${ROW_COLLAPSE_MS}ms ease`,
+      `margin ${ROW_COLLAPSE_MS}ms ease`,
+      `padding ${ROW_COLLAPSE_MS}ms ease`
+    ].join(", ");
+    li.style.opacity = "1";
+    li.getBoundingClientRect();
+    requestAnimationFrame(() => {
+      li.style.height = "0px";
+      li.style.opacity = "0";
+      li.style.marginTop = "0px";
+      li.style.marginBottom = "0px";
+      li.style.paddingTop = "0px";
+      li.style.paddingBottom = "0px";
+    });
+    window.setTimeout(() => this.dispatchDeleteEvent(), ROW_COLLAPSE_MS);
+  }
+  dispatchDeleteEvent() {
     this.dispatchEvent(
       new CustomEvent("tree-delete-item", {
         detail: { id: this.item.id },
@@ -2446,13 +2488,7 @@ var TodoTreeItem = class extends i4 {
     this.swipeDragging = false;
     this.swipeOffsetX = 0;
     if (offset <= -SWIPE_ACTION_THRESHOLD_PX) {
-      this.dispatchEvent(
-        new CustomEvent("tree-delete-item", {
-          detail: { id: this.item.id },
-          bubbles: true,
-          composed: true
-        })
-      );
+      this.dispatchDeleteAfterCollapse();
     } else if (offset >= SWIPE_ACTION_THRESHOLD_PX) {
       this.dispatchEvent(
         new CustomEvent("tree-toggle-child-quick-add", {
