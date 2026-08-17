@@ -17,6 +17,7 @@ import {
     restoreCompleted,
     saveList,
     setCompleted,
+    setPinType,
     setQuantity,
     setTags,
     setTriggerOnDue,
@@ -217,7 +218,15 @@ function collectAllRows(
         if (isTreeItem && currentEntity) {
             const rowEl = itemEl.shadowRoot?.querySelector(".row");
 
-            if (rowEl) {
+            // The synthetic "Other" row (see grouping.ts) never becomes a
+            // drop target itself - it's a rendering fiction with no real
+            // item_id behind it, so there's nothing a drag could actually
+            // reparent onto. Its real children are collected completely
+            // normally regardless: the recursive descent into its own
+            // shadow root below doesn't gate on this at all, so skipping
+            // the push here only removes Other's OWN row from `rows`,
+            // never anything nested under it.
+            if (rowEl && !rowEl.hasAttribute("data-synthetic")) {
                 // Deliberately NOT itemEl.item.children unconditionally -
                 // that's the raw DATA, populated regardless of whether
                 // this item is currently collapsed. A collapsed parent's
@@ -412,6 +421,29 @@ function applyGapCorrection(
     ));
 }
 
+// Live-reported (real drag, not just theory): hovering right where a
+// nested item's own row meets its ancestor's - e.g. a grandchild dragged
+// up toward the boundary between its parent's row and its parent's OWN
+// parent's row - could make the surrounding rows visibly jump up/down
+// repeatedly even for a barely-moving pointer. Root cause: which row
+// wins the nearest-row search below can flip between two DIFFERENT rows
+// (say, an ancestor vs. one of its descendants) that each end up
+// resolving to a different final target - and each is independently
+// self-consistent once landed on, since applyGapCorrection's own
+// shift (which rows move, and by how much) depends entirely on which
+// target is currently sticky. Landing on either after a fast pointer
+// jump (consecutive pointermove events several tens of px apart are
+// completely normal for a real drag - browsers don't guarantee one
+// event per pixel) is then a stable dead end on its own, but a little
+// further jitter can tip the nearest-row search back the other way,
+// each flip re-triggering applyGapCorrection's shift on a DIFFERENT set
+// of rows - that's the visible up/down jump. ROW_SWITCH_HYSTERESIS_PX
+// below closes this the same way ZONE_HYSTERESIS already protects a
+// single row's own before/inside/after boundary: once a row has won
+// the nearest-row search, a competing row has to be decisively closer,
+// not just marginally so, before it can take over.
+const ROW_SWITCH_HYSTERESIS_PX = 24;
+
 // Hit-testing against LIVE row positions creates a feedback loop: hovering
 // near a boundary opens a "gap" (a margin shift) on the rows next to it,
 // which moves those rows' rects, which can put a now-stationary pointer over
@@ -425,17 +457,33 @@ function applyGapCorrection(
 // Distance-to-nearest-row (rather than requiring the pointer land inside a
 // row's rect) also naturally covers dragging above the first item or below
 // the last, where a direct hit would otherwise find nothing.
+//
+// `stickyNearestRowId` is the previous frame's own WINNING row from this
+// same search (see ROW_SWITCH_HYSTERESIS_PX above) - distinct from
+// `sticky`, which is the previous frame's own FINAL resolved id/placement
+// after resolvePlacement has possibly renamed it (e.g. to that row's
+// first child) - the two can legitimately name different rows, and it's
+// specifically THIS search, not the final id, that needed protecting.
 function findDropTarget(
     y: number,
     rows: RowSnapshot[],
     sticky?: {id: string; placement: Placement},
-): {id: string | undefined; entityId: string; placement: Placement; depth: number} | undefined {
+    stickyNearestRowId?: string,
+): {id: string | undefined; entityId: string; placement: Placement; depth: number; nearestRowId: string | undefined} | undefined {
     if (rows.length === 0) {
         return undefined;
     }
 
-    let nearest = rows[0];
-    let nearestDistance = Infinity;
+    // Tracks both the RAW nearest row (no hysteresis at all) and the
+    // hysteresis-adjusted nearest row in the same single pass - each
+    // row's distance is computed once and fed into both. Which one
+    // actually gets used is decided once, after the loop: see
+    // `nearest`'s own comment below for why raw wins whenever it found
+    // a genuine zero-distance row.
+    let nearestRaw = rows[0];
+    let nearestRawDistance = Infinity;
+    let nearestWithHysteresis = rows[0];
+    let nearestWithHysteresisDistance = Infinity;
 
     for (const row of rows) {
         const distance = y < row.rect.top
@@ -444,18 +492,37 @@ function findDropTarget(
                 ? y - row.rect.bottom
                 : 0;
 
-        if (distance < nearestDistance) {
-            nearest = row;
-            nearestDistance = distance;
+        if (distance < nearestRawDistance) {
+            nearestRaw = row;
+            nearestRawDistance = distance;
+        }
+
+        const hysteresisDistance = stickyNearestRowId !== undefined && row.id === stickyNearestRowId
+            ? Math.max(0, distance - ROW_SWITCH_HYSTERESIS_PX)
+            : distance;
+
+        if (hysteresisDistance < nearestWithHysteresisDistance) {
+            nearestWithHysteresis = row;
+            nearestWithHysteresisDistance = hysteresisDistance;
         }
     }
+
+    // The pointer sitting literally inside some row's own rect (raw
+    // distance 0) is completely unambiguous - there's nothing for
+    // hysteresis to protect against, and letting it apply anyway would
+    // let a merely-discounted STALE row tie with (and, by iteration
+    // order, beat) the row the pointer is now decisively inside. Only
+    // withhold hysteresis in that one case - it stays fully in effect
+    // for the genuinely ambiguous "pointer is between two rows, inside
+    // neither" case this exists for in the first place.
+    const nearest = nearestRawDistance === 0 ? nearestRaw : nearestWithHysteresis;
 
     // The empty-list placeholder - nothing to be before/after/inside OF,
     // so the only meaningful placement is "become this entity's first
     // (and only) root item" (see onGlobalPointerUp's transferItem call,
     // which sends no reference_id at all for this case).
     if (nearest.id === undefined) {
-        return {id: undefined, entityId: nearest.entityId, placement: "inside", depth: 0};
+        return {id: undefined, entityId: nearest.entityId, placement: "inside", depth: 0, nearestRowId: undefined};
     }
 
     const relativeY = (y - nearest.rect.top) / nearest.rect.height;
@@ -477,7 +544,7 @@ function findDropTarget(
     const resolvedRow = rows.find(r => r.id === resolved.id) ?? nearest;
     const depth = resolvedRow.depth + (resolved.placement === "inside" ? 1 : 0);
 
-    return {...resolved, depth};
+    return {...resolved, depth, nearestRowId: nearest.id};
 }
 
 function findItem(items: TodoItem[], id: string): TodoItem | undefined {
@@ -1134,6 +1201,16 @@ export class TodoOverlayList extends LitElement {
     // onGlobalPointerUp for how that's handled.
     private hoverEntityId?: string;
 
+    // The previous frame's own WINNING row from findDropTarget's
+    // nearest-row search - fed back in as that search's own hysteresis
+    // anchor (see ROW_SWITCH_HYSTERESIS_PX). Deliberately separate from
+    // hoverId, which is the FINAL resolved id after resolvePlacement may
+    // have renamed it (e.g. to that row's own first child) - the two can
+    // legitimately name different rows, and it's specifically the
+    // nearest-row search that needed its own hysteresis anchor. Never
+    // rendered, so no reason for this to be @state.
+    private hoverNearestRowId?: string;
+
     // draggedId/hoverId/hoverEntityId above are only ever populated on
     // the ONE instance whose own row the drag actually started from -
     // every OTHER todo-overlay-list on the page (any other section of a
@@ -1515,11 +1592,18 @@ export class TodoOverlayList extends LitElement {
             ? {id: this.hoverId, placement: this.hoverPlacement}
             : undefined;
 
-        const hit = findDropTarget(e.clientY, applyGapCorrection(this.rowSnapshot, sticky), sticky);
+        const hit = findDropTarget(
+            e.clientY,
+            applyGapCorrection(this.rowSnapshot, sticky),
+            sticky,
+            this.hoverNearestRowId,
+        );
         const valid = hit && hit.id !== this.draggedId;
 
         const previousHoverId = this.hoverId;
         const previousHoverPlacement = this.hoverPlacement;
+
+        this.hoverNearestRowId = hit?.nearestRowId;
 
         this.hoverId = valid ? hit.id : undefined;
         this.hoverPlacement = valid ? hit.placement : undefined;
@@ -1561,6 +1645,7 @@ export class TodoOverlayList extends LitElement {
         this.hoverPlacement = undefined;
         this.hoverDepth = 0;
         this.hoverEntityId = undefined;
+        this.hoverNearestRowId = undefined;
         this.rowSnapshot = [];
 
         // Tell every other list the drag is over - otherwise an empty
@@ -1972,6 +2057,7 @@ export class TodoOverlayList extends LitElement {
             dueDate: due.date,
             dueTime: due.time,
             triggerOnDue: item.trigger_on_due,
+            pinType: item.pin_type ?? "",
         };
     }
 
@@ -1995,6 +2081,7 @@ export class TodoOverlayList extends LitElement {
             .split(",")
             .map(tag => tag.trim())
             .filter(tag => tag.length > 0);
+        const pinType = value.pinType || undefined;
 
         try {
             if (this.dialogMode === "edit" && this.dialogItem) {
@@ -2010,9 +2097,25 @@ export class TodoOverlayList extends LitElement {
                     dueDate,
                     dueDatetime,
                 });
-                await setQuantity(this.hass, this.entity, this.dialogItem.id, quantity);
-                await setTags(this.hass, this.entity, this.dialogItem.id, tags);
-                await setTriggerOnDue(this.hass, this.entity, this.dialogItem.id, value.triggerOnDue);
+                // This one has to finish first, not join the batch below -
+                // setTriggerOnDue's own backend validation requires the
+                // item's due_datetime to already be persisted (see
+                // DueTimeRequiredError), which is exactly what the
+                // updateItem call above just wrote. Racing them via
+                // Promise.all risks setTriggerOnDue's websocket message
+                // being processed before that write lands, wrongly
+                // rejecting a due-time+trigger set in the very same edit.
+                // The four calls below don't depend on each other or on
+                // updateItem in that same way (each targets its own
+                // metadata_store key), so batching them concurrently -
+                // rather than the previous four separate sequential round
+                // trips - is safe.
+                await Promise.all([
+                    setQuantity(this.hass, this.entity, this.dialogItem.id, quantity),
+                    setTags(this.hass, this.entity, this.dialogItem.id, tags),
+                    setTriggerOnDue(this.hass, this.entity, this.dialogItem.id, value.triggerOnDue),
+                    setPinType(this.hass, this.entity, this.dialogItem.id, pinType),
+                ]);
             } else {
                 await createItem(this.hass, this.entity, {
                     title: value.title,
@@ -2022,6 +2125,7 @@ export class TodoOverlayList extends LitElement {
                     quantity,
                     tags,
                     triggerOnDue: value.triggerOnDue,
+                    pinType,
                 });
             }
 

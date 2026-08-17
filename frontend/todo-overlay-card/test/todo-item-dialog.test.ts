@@ -45,6 +45,44 @@ describe("todo-overlay-item-dialog", () => {
         expect(detail).toEqual(value);
     });
 
+    describe("pin type", () => {
+        function pinTypeSelect(el: TodoItemDialog): HTMLSelectElement {
+            return el.shadowRoot?.querySelector("#todo-item-pin-type") as HTMLSelectElement;
+        }
+
+        it("defaults to 'Normal item' (empty) and shows no hint", async () => {
+            const el = await renderDialog({value: {...EMPTY_FORM_VALUE, title: "Milk"}});
+
+            expect(pinTypeSelect(el).value).toBe("");
+            expect(el.shadowRoot?.querySelector(".pin-type-hint")).toBeNull();
+        });
+
+        it("seeds the select from an already-pinned item's value", async () => {
+            const el = await renderDialog({value: {...EMPTY_FORM_VALUE, title: "Brodie", pinType: "person"}});
+
+            expect(pinTypeSelect(el).value).toBe("person");
+            expect(el.shadowRoot?.querySelector(".pin-type-hint")).not.toBeNull();
+        });
+
+        it("updates the draft value and emits it on save when changed", async () => {
+            const el = await renderDialog({value: {...EMPTY_FORM_VALUE, title: "Groceries"}});
+
+            const select = pinTypeSelect(el);
+            select.value = "category";
+            select.dispatchEvent(new Event("change"));
+
+            expect(el.value.pinType).toBe("category");
+
+            let detail: TodoItemFormValue | undefined;
+            el.addEventListener("dialog-save", (e) => {
+                detail = (e as CustomEvent<TodoItemFormValue>).detail;
+            });
+            saveButton(el).click();
+
+            expect(detail?.pinType).toBe("category");
+        });
+    });
+
     it("blocks Save (disabled, no event) when triggerOnDue is set without a due date/time", async () => {
         const value: TodoItemFormValue = {
             ...EMPTY_FORM_VALUE, title: "Renew passport", triggerOnDue: true,

@@ -3,6 +3,69 @@
 All notable changes to this project are documented here. Versions follow the
 integration's `manifest.json`/card's `package.json` (kept in lockstep).
 
+## 1.2.0
+
+A new feature (category/person pins) plus a scroll-jump fix, a real drag-
+target instability fix, and a sweep of the pin work's own follow-on gaps.
+
+- **New: category/person pins.** An item's edit dialog gained a "Show as"
+  field - pick "Category" or "Person" to make it always render like a
+  section header (bold/tracked title, no checkbox, collapsible), even
+  before it has any children of its own. A Person pin additionally gets a
+  small initial-letter avatar. Once a level has two or more of these
+  (real parents count too), its other plain items automatically collect
+  into a trailing "Other" group rather than sitting interspersed between
+  them - a single incidental parent never triggers this on its own, only
+  once a level has "genuinely become a set of categories." The
+  synthetic Other row is purely a rendering choice, not real data: no
+  backend call, nothing persisted, every interactive affordance
+  suppressed except collapse/expand, and it can never itself become a
+  drag target (its real children still can). A pinned-but-childless row
+  gets a small static dash in the collapse-toggle slot rather than a
+  real chevron - live-reported that the real one read as "there's
+  something to expand" when there wasn't.
+- **New: pins are usable from automations, not just the dialog.** A
+  `todo_overlay.set_pin_type` service and a `todo_overlay.pin_type_changed`
+  trigger were missing entirely from the initial cut - every other
+  overlay-only field (quantity, tags, trigger_on_due) has both, so pins
+  now do too. Pins also now round-trip through saved-list templates
+  (`save_list`/`load_list`) and survive the existing same-titled-item
+  merge, both of which silently dropped them before.
+- **Fixed: dragging near a nested boundary (e.g. a grandchild toward the
+  gap between its parent's row and its parent's own parent's row) made
+  surrounding rows visibly jump up/down repeatedly.** Root cause: the
+  reorder gap's own open midpoint sits exactly equidistant between the
+  row above and below it, since the gap itself is comfortably wider than
+  a typical row - a dead-even tie in the drop-target search that the
+  smallest jitter flipped back and forth, each flip re-opening the gap
+  on a different row. Fixed with the same hysteresis the zone-boundary
+  logic already used for a single row's own before/inside/after split,
+  now extended to which row wins the search in the first place.
+- **Fixed: deleting a row while scrolled to the bottom of a long list
+  snapped the page instantly** rather than settling smoothly - the
+  browser clamps `scrollY` the moment a delete shrinks the page below
+  the current scroll position, and nothing about `scroll-behavior:
+  smooth` covers that specific kind of forced, reflow-driven adjustment.
+  The row's own height now collapses first, turning the same unavoidable
+  scroll clamp into a gradual, visibly-explained settle.
+
+<details>
+<summary>Internal cleanup</summary>
+
+A self-review after the pin work above turned up a few smaller gaps,
+folded into this release rather than left for later:
+
+- The edit dialog's quantity/tags/trigger-on-due/pin-type fields now save
+  as one batched round trip instead of four sequential ones (the title/
+  description/due-date update still runs first and alone - trigger-on-due
+  validation depends on the due date/time it writes).
+- The drag-and-drop hit-test's nearest-row search now does one pass over
+  the visible rows instead of three.
+- `package-lock.json` was badly stale (hadn't tracked `package.json`'s own
+  version in a long time) - regenerated.
+
+</details>
+
 ## 1.1.1
 
 Three fixes to 1.1.0's own new behavior, driven by live mobile testing and a

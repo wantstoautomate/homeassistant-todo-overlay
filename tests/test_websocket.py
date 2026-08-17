@@ -352,6 +352,22 @@ async def test_websocket_create_item_with_reference_id_and_placement_positions_i
 
 
 @pytest.mark.asyncio
+async def test_websocket_create_item_with_pin_type():
+    manager = make_manager()
+
+    connection = await call_handler(
+        websocket.websocket_create_item, manager,
+        {"entity_id": ENTITY_ID, "title": "Anna", "pin_type": "person"},
+    )
+
+    msg_id, result = connection.results[0]
+    new_id = result["id"]
+
+    metadata_store: FakeMetadataStore = manager._metadata_store
+    assert metadata_store._pin_types[new_id] == "person"
+
+
+@pytest.mark.asyncio
 async def test_websocket_update_item_updates_native_fields():
     manager = make_manager(items=[TodoItem(id="1", title="Milk", completed=False)])
 
@@ -399,6 +415,41 @@ async def test_websocket_set_quantity_success():
 
     metadata_store: FakeMetadataStore = manager._metadata_store
     assert metadata_store._quantities["1"] == "3kg"
+
+
+@pytest.mark.asyncio
+async def test_websocket_set_pin_type_success():
+    manager = make_manager()
+
+    connection = await call_handler(
+        websocket.websocket_set_pin_type, manager,
+        {"entity_id": ENTITY_ID, "item_id": "1", "pin_type": "person"},
+    )
+
+    assert connection.results == [(1, None)]
+
+    metadata_store: FakeMetadataStore = manager._metadata_store
+    assert metadata_store._pin_types["1"] == "person"
+
+
+@pytest.mark.asyncio
+async def test_websocket_set_pin_type_rejects_an_invalid_value():
+    # call_handler goes via handler.__wrapped__ (see this file's own
+    # module docstring), which bypasses websocket_command's own schema
+    # validation (the vol.In check) entirely - so this exercises
+    # TodoManager.set_pin_type's own validation and the
+    # InvalidPinTypeError -> "invalid_pin_type" error-code mapping, not
+    # the schema layer.
+    manager = make_manager()
+
+    connection = await call_handler(
+        websocket.websocket_set_pin_type, manager,
+        {"entity_id": ENTITY_ID, "item_id": "1", "pin_type": "not-a-real-type"},
+    )
+
+    assert connection.results == []
+    msg_id, code, message = connection.errors[0]
+    assert code == "invalid_pin_type"
 
 
 @pytest.mark.asyncio
@@ -547,6 +598,7 @@ def test_async_register_websocket_registers_every_handler():
         "todo_overlay/update_item",
         "todo_overlay/delete_item",
         "todo_overlay/set_quantity",
+        "todo_overlay/set_pin_type",
         "todo_overlay/set_tags",
         "todo_overlay/add_tag",
         "todo_overlay/remove_tag",

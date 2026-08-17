@@ -8,8 +8,16 @@ export interface TodoItem {
     quantity: string | null;
     tags: string[];
     trigger_on_due: boolean;
+    // Marks this item as always rendering like a parent (bold/section-
+    // header title, no checkbox, collapsible) regardless of whether it
+    // currently has any children - "category" and "person" are purely
+    // presentational (a person gets an initial avatar), see
+    // todo-tree-item.ts's own isStructural.
+    pin_type: PinType | null;
     children: TodoItem[];
 }
+
+export type PinType = "category" | "person";
 
 export interface TodoList {
     entity_id: string;

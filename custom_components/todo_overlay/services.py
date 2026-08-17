@@ -16,6 +16,7 @@ from .const import (
     ATTR_MODE,
     ATTR_NAME,
     ATTR_PERSIST_STATES,
+    ATTR_PIN_TYPE,
     ATTR_QUANTITY,
     ATTR_TAG,
     ATTR_TAGS,
@@ -31,10 +32,12 @@ from .const import (
     SERVICE_LOAD_LIST,
     SERVICE_REMOVE_TAG,
     SERVICE_SAVE_LIST,
+    SERVICE_SET_PIN_TYPE,
     SERVICE_SET_QUANTITY,
     SERVICE_SET_TRIGGER_ON_DUE,
     SERVICE_UNLINK,
 )
+from .manager_types import PIN_TYPES
 from .runtime_data import get_link_sync, get_manager, get_metadata_store
 
 SAVE_LIST_SCHEMA = vol.Schema(
@@ -79,6 +82,7 @@ CREATE_ITEM_SCHEMA = vol.Schema(
         vol.Optional(ATTR_QUANTITY): str,
         vol.Optional(ATTR_TAGS): [str],
         vol.Optional(ATTR_TRIGGER_ON_DUE, default=False): bool,
+        vol.Optional(ATTR_PIN_TYPE): vol.In(sorted(PIN_TYPES)),
     }
 )
 
@@ -87,6 +91,14 @@ SET_QUANTITY_SCHEMA = vol.Schema(
         vol.Required("entity_id"): cv.entity_id,
         vol.Required(ATTR_ITEM): str,
         vol.Optional(ATTR_QUANTITY): str,
+    }
+)
+
+SET_PIN_TYPE_SCHEMA = vol.Schema(
+    {
+        vol.Required("entity_id"): cv.entity_id,
+        vol.Required(ATTR_ITEM): str,
+        vol.Optional(ATTR_PIN_TYPE): vol.In(sorted(PIN_TYPES)),
     }
 )
 
@@ -177,6 +189,7 @@ def async_register_services(hass: HomeAssistant) -> None:
             quantity=call.data.get(ATTR_QUANTITY),
             tags=call.data.get(ATTR_TAGS),
             trigger_on_due=call.data[ATTR_TRIGGER_ON_DUE],
+            pin_type=call.data.get(ATTR_PIN_TYPE),
         )
 
     async def handle_set_quantity(call: ServiceCall) -> None:
@@ -186,6 +199,15 @@ def async_register_services(hass: HomeAssistant) -> None:
             entity_id=call.data["entity_id"],
             item=call.data[ATTR_ITEM],
             quantity=call.data.get(ATTR_QUANTITY),
+        )
+
+    async def handle_set_pin_type(call: ServiceCall) -> None:
+        manager = get_manager(hass)
+
+        await manager.set_pin_type_by_item(
+            entity_id=call.data["entity_id"],
+            item=call.data[ATTR_ITEM],
+            pin_type=call.data.get(ATTR_PIN_TYPE),
         )
 
     async def handle_set_trigger_on_due(call: ServiceCall) -> None:
@@ -260,6 +282,9 @@ def async_register_services(hass: HomeAssistant) -> None:
     )
     hass.services.async_register(
         DOMAIN, SERVICE_SET_QUANTITY, handle_set_quantity, schema=SET_QUANTITY_SCHEMA
+    )
+    hass.services.async_register(
+        DOMAIN, SERVICE_SET_PIN_TYPE, handle_set_pin_type, schema=SET_PIN_TYPE_SCHEMA
     )
     hass.services.async_register(
         DOMAIN,

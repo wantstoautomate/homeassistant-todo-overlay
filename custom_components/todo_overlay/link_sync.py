@@ -52,13 +52,15 @@ from .const import EVENT_ITEM_CHANGED
 from .errors import CycleError, ItemNotFoundError
 from .ha_adapter import HomeAssistantTodoProvider
 from .manager import TodoManager
-from .manager_types import Placement
+from .manager_types import PIN_TYPES, Placement
 from .metadata_store import MetadataStore
 from .mqtt_link import TOPIC_PREFIX, LinkTransport
 
 _LOGGER = logging.getLogger(__name__)
 
-_SYNCED_FIELDS = ("title", "completed", "description", "due_date", "due_datetime", "quantity", "tags")
+_SYNCED_FIELDS = (
+    "title", "completed", "description", "due_date", "due_datetime", "quantity", "tags", "pin_type",
+)
 
 # Fired directly on this instance's own event bus after successfully
 # applying an incoming remote change - bypassing TodoManager entirely,
@@ -101,6 +103,9 @@ def _sanitize_incoming_fields(fields: dict[str, Any] | None) -> dict[str, Any] |
     tags = fields.get("tags")
     tags = [tag[:_MAX_TEXT_LENGTH] for tag in tags if isinstance(tag, str)][:_MAX_TAGS] if isinstance(tags, list) else []
 
+    pin_type = fields.get("pin_type")
+    pin_type = pin_type if pin_type in PIN_TYPES else None
+
     return {
         "title": title[:_MAX_TEXT_LENGTH],
         "completed": bool(fields.get("completed")),
@@ -109,6 +114,7 @@ def _sanitize_incoming_fields(fields: dict[str, Any] | None) -> dict[str, Any] |
         "due_datetime": _text(fields.get("due_datetime"), 64),
         "quantity": _text(fields.get("quantity"), 64),
         "tags": tags,
+        "pin_type": pin_type,
     }
 
 
@@ -288,6 +294,7 @@ class LinkSyncManager:
 
         quantities = await self._metadata_store.get_quantities(entity_id)
         tags = await self._metadata_store.get_tags(entity_id)
+        pin_types = await self._metadata_store.get_pin_types(entity_id)
 
         fields = {
             "title": item.title,
@@ -297,6 +304,7 @@ class LinkSyncManager:
             "due_datetime": item.due_datetime,
             "quantity": quantities.get(item_id),
             "tags": tags.get(item_id, []),
+            "pin_type": pin_types.get(item_id),
         }
 
         # Wherever the item currently sits, described as sync-id
@@ -623,6 +631,10 @@ class LinkSyncManager:
             if tags:
                 await self._metadata_store.set_tags(entity_id, native_uid, tags)
 
+            pin_type = fields.get("pin_type")
+            if pin_type:
+                await self._metadata_store.set_pin_type(entity_id, native_uid, pin_type)
+
             if fields.get("completed"):
                 await self._adapter.set_completed(entity_id, native_uid, True)
 
@@ -638,6 +650,7 @@ class LinkSyncManager:
             await self._adapter.set_completed(entity_id, native_uid, bool(fields.get("completed")))
             await self._metadata_store.set_quantity(entity_id, native_uid, fields.get("quantity"))
             await self._metadata_store.set_tags(entity_id, native_uid, fields.get("tags") or [])
+            await self._metadata_store.set_pin_type(entity_id, native_uid, fields.get("pin_type"))
 
         await self._metadata_store.set_link_item_state(
             entity_id, sync_id, updated_at=updated_at, deleted_at=None, fields=fields, position=position,

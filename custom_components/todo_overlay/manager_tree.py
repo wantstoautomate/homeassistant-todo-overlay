@@ -53,18 +53,19 @@ class TreeMixin:
         quantities = await self._metadata_store.get_quantities(entity_id)
         tags = await self._metadata_store.get_tags(entity_id)
         trigger_on_due = await self._metadata_store.get_trigger_on_due(entity_id)
+        pin_types = await self._metadata_store.get_pin_types(entity_id)
 
-        items, positions, quantities, tags, trigger_on_due = await self._reconcile_orphaned_metadata(
-            entity_id, items, positions, quantities, tags, trigger_on_due,
+        items, positions, quantities, tags, trigger_on_due, pin_types = await self._reconcile_orphaned_metadata(
+            entity_id, items, positions, quantities, tags, trigger_on_due, pin_types,
         )
 
-        items, positions, quantities, tags, trigger_on_due = await self._merge_duplicate_titles(
-            entity_id, items, positions, quantities, tags, trigger_on_due,
+        items, positions, quantities, tags, trigger_on_due, pin_types = await self._merge_duplicate_titles(
+            entity_id, items, positions, quantities, tags, trigger_on_due, pin_types,
         )
 
         return TodoList(
             entity_id=entity_id,
-            items=build_tree(items, positions, quantities, tags, trigger_on_due, group_completed),
+            items=build_tree(items, positions, quantities, tags, trigger_on_due, group_completed, pin_types),
         )
 
     async def _reconcile_orphaned_metadata(
@@ -75,12 +76,13 @@ class TreeMixin:
         quantities: dict[str, str],
         tags: dict[str, list[str]],
         trigger_on_due: set[str],
+        pin_types: dict[str, str],
     ) -> tuple[
-        list[TodoItem], dict[str, ItemPosition], dict[str, str], dict[str, list[str]], set[str],
+        list[TodoItem], dict[str, ItemPosition], dict[str, str], dict[str, list[str]], set[str], dict[str, str],
     ]:
-        """Drop stored positions/quantities/tags/trigger_on_due (and the
-        scheduler's due_fired bookkeeping) for ids that no longer exist on
-        the native list.
+        """Drop stored positions/quantities/tags/trigger_on_due/pin_type
+        (and the scheduler's due_fired bookkeeping) for ids that no
+        longer exist on the native list.
 
         An item can disappear through paths this integration never sees -
         the native todo card, a voice assistant, an automation calling
@@ -94,11 +96,11 @@ class TreeMixin:
         live_ids = {item.id for item in items}
         orphaned_set = set()
 
-        for source in (positions, quantities, tags, trigger_on_due):
+        for source in (positions, quantities, tags, trigger_on_due, pin_types):
             orphaned_set.update(item_id for item_id in source if item_id not in live_ids)
 
         if not orphaned_set:
-            return items, positions, quantities, tags, trigger_on_due
+            return items, positions, quantities, tags, trigger_on_due, pin_types
 
         orphaned = list(orphaned_set)
 
@@ -107,13 +109,15 @@ class TreeMixin:
         await self._metadata_store.remove_tags_for_items(entity_id, orphaned)
         await self._metadata_store.remove_trigger_on_due_for_items(entity_id, orphaned)
         await self._metadata_store.remove_due_fired_for_items(entity_id, orphaned)
+        await self._metadata_store.remove_pin_types(entity_id, orphaned)
 
         positions = {k: v for k, v in positions.items() if k not in orphaned_set}
         quantities = {k: v for k, v in quantities.items() if k not in orphaned_set}
         tags = {k: v for k, v in tags.items() if k not in orphaned_set}
         trigger_on_due = {item_id for item_id in trigger_on_due if item_id not in orphaned_set}
+        pin_types = {k: v for k, v in pin_types.items() if k not in orphaned_set}
 
-        return items, positions, quantities, tags, trigger_on_due
+        return items, positions, quantities, tags, trigger_on_due, pin_types
 
     async def _merge_duplicate_titles(
         self,
@@ -123,8 +127,9 @@ class TreeMixin:
         quantities: dict[str, str],
         tags: dict[str, list[str]],
         trigger_on_due: set[str],
+        pin_types: dict[str, str],
     ) -> tuple[
-        list[TodoItem], dict[str, ItemPosition], dict[str, str], dict[str, list[str]], set[str],
+        list[TodoItem], dict[str, ItemPosition], dict[str, str], dict[str, list[str]], set[str], dict[str, str],
     ]:
         """Collapse sibling items that share a title into one, combining
         their quantities where possible (see _combine_quantities) and
@@ -161,6 +166,12 @@ class TreeMixin:
             survivor, *duplicates = group
             combined_quantity = quantities.get(survivor.id)
             combined_tags = list(tags.get(survivor.id, []))
+            # Not combinable like quantity/tags - a single value, not a
+            # sum or a set. The survivor's own pin_type always wins if it
+            # has one; only adopts a duplicate's pin_type when the
+            # survivor has none at all, so a merge never silently drops
+            # a pin that was only ever set on the duplicate being removed.
+            combined_pin_type = pin_types.get(survivor.id)
             # A duplicate's own due_datetime never transfers to the
             # survivor (only the survivor's own due_datetime matters), so
             # this only ever turns the flag on, and only when the
@@ -176,6 +187,9 @@ class TreeMixin:
                 for tag in tags.get(duplicate.id, []):
                     if tag not in combined_tags:
                         combined_tags.append(tag)
+
+                if combined_pin_type is None:
+                    combined_pin_type = pin_types.get(duplicate.id)
 
                 if duplicate.id in trigger_on_due:
                     survivor_trigger_on_due = True
@@ -214,6 +228,10 @@ class TreeMixin:
                 await self._metadata_store.set_tags(entity_id, survivor.id, combined_tags)
                 tags[survivor.id] = combined_tags
 
+            if combined_pin_type and pin_types.get(survivor.id) != combined_pin_type:
+                await self._metadata_store.set_pin_type(entity_id, survivor.id, combined_pin_type)
+                pin_types[survivor.id] = combined_pin_type
+
             if survivor_trigger_on_due and survivor.due_datetime and survivor.id not in trigger_on_due:
                 await self._metadata_store.set_trigger_on_due(entity_id, survivor.id, True)
                 trigger_on_due.add(survivor.id)
@@ -222,13 +240,14 @@ class TreeMixin:
             await self._metadata_store.set_positions(entity_id, reparented)
 
         if not removed_ids:
-            return items, positions, quantities, tags, trigger_on_due
+            return items, positions, quantities, tags, trigger_on_due, pin_types
 
         await self._metadata_store.remove_positions(entity_id, removed_ids)
         await self._metadata_store.remove_quantities(entity_id, removed_ids)
         await self._metadata_store.remove_tags_for_items(entity_id, removed_ids)
         await self._metadata_store.remove_trigger_on_due_for_items(entity_id, removed_ids)
         await self._metadata_store.remove_due_fired_for_items(entity_id, removed_ids)
+        await self._metadata_store.remove_pin_types(entity_id, removed_ids)
 
         removed_id_set = set(removed_ids)
         items = [item for item in items if item.id not in removed_id_set]
@@ -236,5 +255,6 @@ class TreeMixin:
         quantities = {k: v for k, v in quantities.items() if k not in removed_id_set}
         tags = {k: v for k, v in tags.items() if k not in removed_id_set}
         trigger_on_due = {item_id for item_id in trigger_on_due if item_id not in removed_id_set}
+        pin_types = {k: v for k, v in pin_types.items() if k not in removed_id_set}
 
-        return items, positions, quantities, tags, trigger_on_due
+        return items, positions, quantities, tags, trigger_on_due, pin_types

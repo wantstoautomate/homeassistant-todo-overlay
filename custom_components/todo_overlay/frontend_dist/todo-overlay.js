@@ -731,7 +731,8 @@ async function createItem(hass, entityId, fields) {
     tags: fields.tags,
     trigger_on_due: fields.triggerOnDue,
     reference_id: fields.referenceId,
-    placement: fields.placement
+    placement: fields.placement,
+    pin_type: fields.pinType
   });
   return result.id;
 }
@@ -767,6 +768,14 @@ async function setTriggerOnDue(hass, entityId, itemId, enabled) {
     entity_id: entityId,
     item_id: itemId,
     enabled
+  });
+}
+async function setPinType(hass, entityId, itemId, pinType) {
+  await hass.connection.sendMessagePromise({
+    type: "todo_overlay/set_pin_type",
+    entity_id: entityId,
+    item_id: itemId,
+    pin_type: pinType
   });
 }
 async function setTags(hass, entityId, itemId, tags) {
@@ -956,7 +965,8 @@ var EMPTY_FORM_VALUE = {
   description: "",
   dueDate: "",
   dueTime: "",
-  triggerOnDue: false
+  triggerOnDue: false,
+  pinType: ""
 };
 function digitsOnly(raw, maxLen) {
   return raw.replace(/\D/g, "").slice(0, maxLen);
@@ -1281,6 +1291,25 @@ var TodoItemDialog = class extends i4 {
                     />
                 </div>
 
+                <div class="field">
+                    <label for="todo-item-pin-type">Show as</label>
+                    <select
+                        id="todo-item-pin-type"
+                        class="pin-type-select"
+                        .value=${this.draftValue.pinType}
+                        @change=${(e7) => this.updateField("pinType", e7.target.value)}
+                    >
+                        <option value="">Normal item</option>
+                        <option value="category">Category (e.g. "Groceries")</option>
+                        <option value="person">Person (e.g. "Brodie")</option>
+                    </select>
+                    ${this.draftValue.pinType ? b2`
+                                <div class="field-hint pin-type-hint">
+                                    Always shown as a section header, even with nothing under it yet.
+                                </div>
+                            ` : ""}
+                </div>
+
                 ${showDue ? b2`
                             <div class="due-row">
                                 <div class="field">
@@ -1485,6 +1514,28 @@ TodoItemDialog.styles = i`
         textarea:focus {
             border-bottom: 2px solid var(--primary-color);
             padding-bottom: 7px;
+        }
+
+        select.pin-type-select {
+            box-sizing: border-box;
+            width: 100%;
+            font-family: inherit;
+            font-size: 16px;
+            color: var(--primary-text-color);
+            background: none;
+            border: none;
+            border-bottom: 1px solid var(--divider-color);
+            padding: 8px 0;
+            outline: none;
+        }
+
+        select.pin-type-select:focus {
+            border-bottom: 2px solid var(--primary-color);
+            padding-bottom: 7px;
+        }
+
+        .field-hint.pin-type-hint {
+            margin-top: 2px;
         }
 
         /* Day/month/year and hour/minute, always in that fixed order
@@ -2010,6 +2061,45 @@ TodoSaveLoadDialog = __decorateClass([
   t3("todo-overlay-save-load-dialog")
 ], TodoSaveLoadDialog);
 
+// src/grouping.ts
+var OTHER_TITLE = "Other";
+var OTHER_BUCKET_THRESHOLD = 2;
+function isStructural(item) {
+  return item.children.length > 0 || item.pin_type != null;
+}
+function otherGroupId(parentId) {
+  return `__other__:${parentId ?? "root"}`;
+}
+function groupSiblingsForDisplay(items, parentId) {
+  const structuralCount = items.reduce((count, item) => count + (isStructural(item) ? 1 : 0), 0);
+  if (structuralCount < OTHER_BUCKET_THRESHOLD) {
+    return items;
+  }
+  const structural = [];
+  const plain = [];
+  for (const item of items) {
+    (isStructural(item) ? structural : plain).push(item);
+  }
+  if (plain.length === 0) {
+    return items;
+  }
+  const other = {
+    id: otherGroupId(parentId),
+    title: OTHER_TITLE,
+    completed: plain.every((item) => item.completed),
+    description: null,
+    due_date: null,
+    due_datetime: null,
+    quantity: null,
+    tags: [],
+    trigger_on_due: false,
+    pin_type: null,
+    children: plain,
+    synthetic: true
+  };
+  return [...structural, other];
+}
+
 // src/components/todo-tree-item.ts
 var BEFORE_AFTER_ZONE = 0.3;
 var ROW_INDENT_PX = 20;
@@ -2056,6 +2146,7 @@ var DRAG_HANDLE_ICON = b2`
     </svg>
 `;
 var DELETE_CONFIRM_WINDOW_MS = 3e3;
+var ROW_COLLAPSE_MS = 180;
 function formatDue(item) {
   const raw = item.due_datetime ?? (item.due_date ? `${item.due_date}T00:00:00` : null);
   if (!raw) {
@@ -2220,11 +2311,48 @@ var TodoTreeItem = class extends i4 {
   // checkbox at all; completing it becomes a deliberate action via the
   // edit dialog instead (see todo-overlay.ts's onPointerUp and
   // todo-item-dialog.ts's complete toggle).
+  //
+  // A pinned item (see isPinned) or the synthetic Other row (see
+  // isSynthetic) never shows a checkbox at all, unconditionally - not
+  // gated by hideCompleteForParents/showCheckboxes the way a REAL
+  // parent's is. Both are a deliberate structural declaration ("this
+  // is a category/person", "this is a grouping, not a real item"),
+  // categorically different from "this happens to have accumulated
+  // children" - the one case the existing toggle is actually about.
   get checkboxHidden() {
+    if (this.isPinned || this.isSynthetic) {
+      return true;
+    }
     if (!this.showCheckboxes) {
       return true;
     }
     return this.hideCompleteForParents && this.item.children.length > 0;
+  }
+  get isPinned() {
+    return this.item.pin_type != null;
+  }
+  // True only for the one synthetic "Other" row groupSiblingsForDisplay
+  // generates when a level's plain siblings get swept up (see
+  // grouping.ts) - never a real item, so every interactive affordance
+  // a normal row has (edit, delete, add-child, drag, swipe) is
+  // suppressed for it; only collapse/expand still works, exactly like
+  // any other structural row.
+  get isSynthetic() {
+    return Boolean(this.item.synthetic);
+  }
+  // Always shown as a section header - bold/tracked title, no
+  // checkbox - regardless of whether it currently has any children:
+  // either because it genuinely does, or because it's pinned as a
+  // stand-in for one that will. The leading collapse-slot glyph (see
+  // the template's own collapse-toggle branch) reacts to this too,
+  // but not uniformly - see its own comment for why a childless
+  // pinned row gets a distinct, non-interactive placeholder rather
+  // than the real (clickable) chevron a row with actual children
+  // gets. The completed-count badge (see childStatus) deliberately
+  // stays gated on REAL children only - a pin alone shouldn't ever
+  // show a "0/0".
+  get isStructural() {
+    return this.hasChildren || this.isPinned;
   }
   get hasChildren() {
     return this.item.children.length > 0;
@@ -2262,6 +2390,47 @@ var TodoTreeItem = class extends i4 {
       return;
     }
     this.confirmingDelete = false;
+    this.dispatchDeleteAfterCollapse();
+  }
+  // Collapses this row's own <li> (height, opacity, margin, padding)
+  // before actually dispatching tree-delete-item - see
+  // ROW_COLLAPSE_MS's own comment for why. Falls back to dispatching
+  // immediately if the <li> can't be found for some reason (should
+  // never happen, but a delete action must never silently no-op just
+  // because a cosmetic animation setup failed). A plain
+  // window.setTimeout, not transitionend, drives the actual dispatch -
+  // more robust against edge cases (e.g. prefers-reduced-motion
+  // collapsing the transition to 0 duration, or the element being
+  // torn down mid-transition for an unrelated reason) than depending
+  // on the event actually firing.
+  dispatchDeleteAfterCollapse() {
+    const li = this.renderRoot.querySelector("li");
+    if (!li) {
+      this.dispatchDeleteEvent();
+      return;
+    }
+    const height = li.getBoundingClientRect().height;
+    li.style.overflow = "hidden";
+    li.style.height = `${height}px`;
+    li.style.transition = [
+      `height ${ROW_COLLAPSE_MS}ms ease`,
+      `opacity ${ROW_COLLAPSE_MS}ms ease`,
+      `margin ${ROW_COLLAPSE_MS}ms ease`,
+      `padding ${ROW_COLLAPSE_MS}ms ease`
+    ].join(", ");
+    li.style.opacity = "1";
+    li.getBoundingClientRect();
+    requestAnimationFrame(() => {
+      li.style.height = "0px";
+      li.style.opacity = "0";
+      li.style.marginTop = "0px";
+      li.style.marginBottom = "0px";
+      li.style.paddingTop = "0px";
+      li.style.paddingBottom = "0px";
+    });
+    window.setTimeout(() => this.dispatchDeleteEvent(), ROW_COLLAPSE_MS);
+  }
+  dispatchDeleteEvent() {
     this.dispatchEvent(
       new CustomEvent("tree-delete-item", {
         detail: { id: this.item.id },
@@ -2310,6 +2479,9 @@ var TodoTreeItem = class extends i4 {
     );
   }
   pointerDown(e7) {
+    if (this.isSynthetic) {
+      return;
+    }
     this.pointerDownAt = Date.now();
     this.pointerDownScreenPos = { x: e7.clientX, y: e7.clientY };
     this.hasMoved = false;
@@ -2446,13 +2618,7 @@ var TodoTreeItem = class extends i4 {
     this.swipeDragging = false;
     this.swipeOffsetX = 0;
     if (offset <= -SWIPE_ACTION_THRESHOLD_PX) {
-      this.dispatchEvent(
-        new CustomEvent("tree-delete-item", {
-          detail: { id: this.item.id },
-          bubbles: true,
-          composed: true
-        })
-      );
+      this.dispatchDeleteAfterCollapse();
     } else if (offset >= SWIPE_ACTION_THRESHOLD_PX) {
       this.dispatchEvent(
         new CustomEvent("tree-toggle-child-quick-add", {
@@ -2466,6 +2632,7 @@ var TodoTreeItem = class extends i4 {
   render() {
     const isDropTarget = this.isDropTarget;
     const isBeingDragged = this.isBeingDragged;
+    const displayChildren = groupSiblingsForDisplay(this.item.children, this.item.id);
     const rowClasses = {
       row: true,
       pressed: this.isPressed && !isBeingDragged,
@@ -2510,6 +2677,7 @@ var TodoTreeItem = class extends i4 {
                     <div
                         class=${e6({ ...rowClasses, swiping: this.swipeDragging })}
                         style=${o6({ transform: this.swipeOffsetX ? `translateX(${this.swipeOffsetX}px)` : "" })}
+                        ?data-synthetic=${this.isSynthetic}
 
                         @pointerdown=${this.pointerDown}
                     >
@@ -2541,17 +2709,32 @@ var TodoTreeItem = class extends i4 {
                                             >
                                                 ${CHEVRON_ICON}
                                             </button>
-                                        ` : b2`<span class="collapse-toggle-spacer"></span>`}
+                                        ` : this.isStructural ? b2`
+                                                <span class="structural-placeholder" aria-hidden="true">
+                                                    <span class="dash"></span>
+                                                </span>
+                                            ` : b2`<span class="collapse-toggle-spacer"></span>`}
 
-                                ${this.checkboxHidden ? "" : b2`
-                                            <div class="checkbox-slot">
-                                                <ha-checkbox .checked=${this.item.completed}></ha-checkbox>
+                                ${// A person pin gets a small initial
+    // avatar in place of the checkbox
+    // slot - never for the synthetic
+    // Other row, which has no title
+    // that means anything as a "person"
+    // (and is never pinned to begin
+    // with - see isSynthetic).
+    this.item.pin_type === "person" && !this.isSynthetic ? b2`
+                                            <div class="person-avatar" aria-hidden="true">
+                                                ${this.item.title.trim().charAt(0).toUpperCase() || "?"}
                                             </div>
-                                        `}
+                                        ` : this.checkboxHidden ? "" : b2`
+                                                <div class="checkbox-slot">
+                                                    <ha-checkbox .checked=${this.item.completed}></ha-checkbox>
+                                                </div>
+                                            `}
 
                                 <div class="content">
                                     <div class="title-line">
-                                        <span class=${e6({ summary: true, "has-children": this.hasChildren })}>${this.item.title}</span>
+                                        <span class=${e6({ summary: true, structural: this.isStructural })}>${this.item.title}</span>
                                         ${this.item.quantity ? b2`<span class="quantity-chip">${this.item.quantity}</span>` : ""}
                                         ${status ? b2`
                                                     <span class=${e6({
@@ -2580,39 +2763,48 @@ var TodoTreeItem = class extends i4 {
                                             ` : ""}
                                 </div>
 
-                                ${this.reorderModeActive ? b2`
-                                            <button
-                                                class="drag-handle"
-                                                aria-label="Drag to reorder"
-                                                @pointerdown=${this.handlePointerDown}
-                                            >
-                                                ${DRAG_HANDLE_ICON}
-                                            </button>
-                                        ` : this.addModeActive ? b2`
+                                ${// The synthetic Other row (see
+    // isSynthetic) is never draggable,
+    // never gains a child, never gets
+    // deleted - it isn't a real item at
+    // all, just a view-time grouping
+    // over some of this level's real
+    // siblings. Only collapse/expand
+    // still works for it, same as any
+    // other structural row.
+    this.isSynthetic ? "" : this.reorderModeActive ? b2`
                                                 <button
-                                                    class=${e6({
+                                                    class="drag-handle"
+                                                    aria-label="Drag to reorder"
+                                                    @pointerdown=${this.handlePointerDown}
+                                                >
+                                                    ${DRAG_HANDLE_ICON}
+                                                </button>
+                                            ` : this.addModeActive ? b2`
+                                                    <button
+                                                        class=${e6({
       "child-quick-add-toggle": true,
       active: this.childQuickAddParentIds.has(this.item.id)
     })}
-                                                    aria-label=${this.childQuickAddParentIds.has(this.item.id) ? "Close add-child field" : "Add child item"}
-                                                    @click=${this.onToggleChildQuickAddClick}
-                                                    @pointerdown=${(e7) => e7.stopPropagation()}
-                                                >
-                                                    ${this.childQuickAddParentIds.has(this.item.id) ? CROSS_ICON : PLUS_ICON}
-                                                </button>
-                                            ` : this.deleteModeActive && !this.hasChildren ? b2`
-                                                    <button
-                                                        class=${e6({
+                                                        aria-label=${this.childQuickAddParentIds.has(this.item.id) ? "Close add-child field" : "Add child item"}
+                                                        @click=${this.onToggleChildQuickAddClick}
+                                                        @pointerdown=${(e7) => e7.stopPropagation()}
+                                                    >
+                                                        ${this.childQuickAddParentIds.has(this.item.id) ? CROSS_ICON : PLUS_ICON}
+                                                    </button>
+                                                ` : this.deleteModeActive && !this.hasChildren ? b2`
+                                                        <button
+                                                            class=${e6({
       "delete-button": true,
       confirming: this.confirmingDelete
     })}
-                                                        aria-label=${this.confirmingDelete ? "Confirm delete" : "Delete"}
-                                                        @click=${this.onDeleteClick}
-                                                        @pointerdown=${(e7) => e7.stopPropagation()}
-                                                    >
-                                                        ${CROSS_ICON}
-                                                    </button>
-                                                ` : ""}
+                                                            aria-label=${this.confirmingDelete ? "Confirm delete" : "Delete"}
+                                                            @click=${this.onDeleteClick}
+                                                            @pointerdown=${(e7) => e7.stopPropagation()}
+                                                        >
+                                                            ${CROSS_ICON}
+                                                        </button>
+                                                    ` : ""}
 
                                 ${this.holdRippleOrigin ? b2`
                                             <div
@@ -2645,7 +2837,7 @@ var TodoTreeItem = class extends i4 {
 
                 ${this.hasChildren && !this.isCollapsed ? b2`
                             <ul>
-                                ${this.item.children.map(
+                                ${displayChildren.map(
       (child) => b2`
                                         <todo-overlay-tree-item
                                             .item=${child}
@@ -2854,17 +3046,27 @@ TodoTreeItem.styles = i`
             color: var(--secondary-text-color);
         }
 
-        /* A row with children needs to read as a group header at a
-           glance - it never shows a checkbox at all (see the template's
-           checkboxHidden branch, which drops .checkbox-slot from the
-           layout entirely rather than reserving empty space for it), so
-           bold + very slightly larger text carries that signal on its
-           own instead, the same way the reference card this design
-           was inspired by distinguishes a single level of nesting with
-           no indentation at all. */
-        .summary.has-children {
-            font-weight: 600;
-            font-size: 15px;
+        /* A structural row (see isStructural - real children, or
+           pinned) needs to read as a section header at a glance, not
+           just a heavier task - it never shows a checkbox at all (see
+           checkboxHidden, which drops the checkbox slot from the
+           layout entirely rather than reserving empty space for it),
+           so a small uppercase, letter-spaced label carries that
+           signal on its own instead - the same treatment already used
+           for the Active/Completed section headers elsewhere in this
+           card (see todo-overlay-list.ts's own .section-header), so a
+           category reads as "the same KIND of thing" as those rather
+           than an unrelated new visual language. */
+        .summary.structural {
+            font-size: 11.5px;
+            font-weight: 700;
+            letter-spacing: 0.06em;
+            text-transform: uppercase;
+            color: var(--secondary-text-color);
+        }
+
+        .row.completed .summary.structural {
+            text-decoration: none;
         }
 
         ha-checkbox {
@@ -2890,6 +3092,24 @@ TodoTreeItem.styles = i`
             display: flex;
             align-items: center;
             justify-content: center;
+        }
+
+        /* Same slot width as .checkbox-slot (see the template, which
+           renders one or the other, never both) so a person row's
+           title lines up with every other row's, pinned or not. */
+        .person-avatar {
+            flex-shrink: 0;
+            width: 22px;
+            height: 22px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-family: Roboto, "Noto Sans", sans-serif;
+            font-size: 11px;
+            font-weight: 700;
+            color: #fff;
+            background: var(--accent-color, var(--primary-color));
         }
 
         .collapse-toggle {
@@ -2923,6 +3143,34 @@ TodoTreeItem.styles = i`
             flex-shrink: 0;
             width: 20px;
             margin-inline-start: -4px;
+        }
+
+        /* A pinned item with no children yet (see isStructural) gets
+           this instead of the real collapse-toggle - same slot
+           geometry as both that and the spacer, so nothing else in the
+           row shifts depending on which of the three renders. A short
+           static rule, deliberately not a button and not shaped like
+           the chevron - there's nothing to collapse, and the whole
+           point is to say that immediately rather than invite a click
+           that would do nothing (see the live-reported feedback this
+           replaced: the real chevron here read as "this has content to
+           expand," which was actively misleading). */
+        .structural-placeholder {
+            flex-shrink: 0;
+            width: 20px;
+            height: 20px;
+            margin-inline-start: -4px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .structural-placeholder .dash {
+            width: 8px;
+            height: 2px;
+            border-radius: 1px;
+            background: var(--secondary-text-color);
+            opacity: 0.6;
         }
 
         .status-chip {
@@ -3360,6 +3608,7 @@ var TodoTree = class extends i4 {
     this.deleteModeActive = false;
   }
   render() {
+    const displayItems = groupSiblingsForDisplay(this.items, void 0);
     return b2`
             <ul>
                 ${this.items.length === 0 ? b2`
@@ -3371,7 +3620,7 @@ var TodoTree = class extends i4 {
                                     ${this.emptyDropHighlight ? "Drop here" : "No items"}
                                 </div>
                             </li>
-                        ` : this.items.map(
+                        ` : displayItems.map(
       (item) => b2`
                                 <todo-overlay-tree-item
                                     .item=${item}
@@ -3622,7 +3871,7 @@ function collectAllRows(root, currentEntity, currentDepth = 0) {
     const isTreeItem = el.localName === "todo-overlay-tree-item" && Boolean(itemEl.item);
     if (isTreeItem && currentEntity) {
       const rowEl = itemEl.shadowRoot?.querySelector(".row");
-      if (rowEl) {
+      if (rowEl && !rowEl.hasAttribute("data-synthetic")) {
         const hasVisibleChildren = itemEl.shadowRoot?.querySelector("ul") != null;
         rows.push({
           id: itemEl.item.id,
@@ -3701,21 +3950,30 @@ function applyGapCorrection(rows, sticky) {
   }
   return rows.map((row) => shiftedIds.has(row.id) ? { ...row, rect: shiftRectDown(row.rect, DROP_GAP_PX) } : row);
 }
-function findDropTarget(y3, rows, sticky) {
+var ROW_SWITCH_HYSTERESIS_PX = 24;
+function findDropTarget(y3, rows, sticky, stickyNearestRowId) {
   if (rows.length === 0) {
     return void 0;
   }
-  let nearest = rows[0];
-  let nearestDistance = Infinity;
+  let nearestRaw = rows[0];
+  let nearestRawDistance = Infinity;
+  let nearestWithHysteresis = rows[0];
+  let nearestWithHysteresisDistance = Infinity;
   for (const row of rows) {
     const distance = y3 < row.rect.top ? row.rect.top - y3 : y3 > row.rect.bottom ? y3 - row.rect.bottom : 0;
-    if (distance < nearestDistance) {
-      nearest = row;
-      nearestDistance = distance;
+    if (distance < nearestRawDistance) {
+      nearestRaw = row;
+      nearestRawDistance = distance;
+    }
+    const hysteresisDistance = stickyNearestRowId !== void 0 && row.id === stickyNearestRowId ? Math.max(0, distance - ROW_SWITCH_HYSTERESIS_PX) : distance;
+    if (hysteresisDistance < nearestWithHysteresisDistance) {
+      nearestWithHysteresis = row;
+      nearestWithHysteresisDistance = hysteresisDistance;
     }
   }
+  const nearest = nearestRawDistance === 0 ? nearestRaw : nearestWithHysteresis;
   if (nearest.id === void 0) {
-    return { id: void 0, entityId: nearest.entityId, placement: "inside", depth: 0 };
+    return { id: void 0, entityId: nearest.entityId, placement: "inside", depth: 0, nearestRowId: void 0 };
   }
   const relativeY = (y3 - nearest.rect.top) / nearest.rect.height;
   const resolved = {
@@ -3724,7 +3982,7 @@ function findDropTarget(y3, rows, sticky) {
   };
   const resolvedRow = rows.find((r6) => r6.id === resolved.id) ?? nearest;
   const depth = resolvedRow.depth + (resolved.placement === "inside" ? 1 : 0);
-  return { ...resolved, depth };
+  return { ...resolved, depth, nearestRowId: nearest.id };
 }
 function findItem(items, id) {
   for (const item of items) {
@@ -3830,10 +4088,16 @@ var TodoOverlayList = class extends i4 {
         return;
       }
       const sticky = this.hoverId !== void 0 && this.hoverPlacement !== void 0 ? { id: this.hoverId, placement: this.hoverPlacement } : void 0;
-      const hit = findDropTarget(e7.clientY, applyGapCorrection(this.rowSnapshot, sticky), sticky);
+      const hit = findDropTarget(
+        e7.clientY,
+        applyGapCorrection(this.rowSnapshot, sticky),
+        sticky,
+        this.hoverNearestRowId
+      );
       const valid = hit && hit.id !== this.draggedId;
       const previousHoverId = this.hoverId;
       const previousHoverPlacement = this.hoverPlacement;
+      this.hoverNearestRowId = hit?.nearestRowId;
       this.hoverId = valid ? hit.id : void 0;
       this.hoverPlacement = valid ? hit.placement : void 0;
       this.hoverDepth = valid ? hit.depth : 0;
@@ -3858,6 +4122,7 @@ var TodoOverlayList = class extends i4 {
       this.hoverPlacement = void 0;
       this.hoverDepth = 0;
       this.hoverEntityId = void 0;
+      this.hoverNearestRowId = void 0;
       this.rowSnapshot = [];
       this.broadcastDragHover();
       if (draggedId && hoverEntityId) {
@@ -4342,7 +4607,8 @@ var TodoOverlayList = class extends i4 {
       description: item.description ?? "",
       dueDate: due.date,
       dueTime: due.time,
-      triggerOnDue: item.trigger_on_due
+      triggerOnDue: item.trigger_on_due,
+      pinType: item.pin_type ?? ""
     };
   }
   async onDialogSave(e7) {
@@ -4358,6 +4624,7 @@ var TodoOverlayList = class extends i4 {
     }
     const quantity = value.quantity.trim() || void 0;
     const tags = value.tags.split(",").map((tag) => tag.trim()).filter((tag) => tag.length > 0);
+    const pinType = value.pinType || void 0;
     try {
       if (this.dialogMode === "edit" && this.dialogItem) {
         await updateItem(this.hass, this.entity, this.dialogItem.id, {
@@ -4366,9 +4633,12 @@ var TodoOverlayList = class extends i4 {
           dueDate,
           dueDatetime
         });
-        await setQuantity(this.hass, this.entity, this.dialogItem.id, quantity);
-        await setTags(this.hass, this.entity, this.dialogItem.id, tags);
-        await setTriggerOnDue(this.hass, this.entity, this.dialogItem.id, value.triggerOnDue);
+        await Promise.all([
+          setQuantity(this.hass, this.entity, this.dialogItem.id, quantity),
+          setTags(this.hass, this.entity, this.dialogItem.id, tags),
+          setTriggerOnDue(this.hass, this.entity, this.dialogItem.id, value.triggerOnDue),
+          setPinType(this.hass, this.entity, this.dialogItem.id, pinType)
+        ]);
       } else {
         await createItem(this.hass, this.entity, {
           title: value.title,
@@ -4377,7 +4647,8 @@ var TodoOverlayList = class extends i4 {
           dueDatetime,
           quantity,
           tags,
-          triggerOnDue: value.triggerOnDue
+          triggerOnDue: value.triggerOnDue,
+          pinType
         });
       }
       await this.load();

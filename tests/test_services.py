@@ -66,6 +66,7 @@ def test_async_register_services_registers_every_service():
         "remove_tag",
         "create_item",
         "set_quantity",
+        "set_pin_type",
         "set_trigger_on_due",
         "create_link",
         "join_link",
@@ -159,6 +160,77 @@ async def test_service_set_quantity_resolves_by_title():
     todo_list = await manager.get_list(ENTITY_ID)
     item = next(i for i in todo_list.items if i.id == "1")
     assert item.quantity == "5kg"
+
+
+@pytest.mark.asyncio
+async def test_service_create_item_with_pin_type():
+    manager = make_manager()
+    _, services = make_hass(manager)
+
+    await services.handlers["create_item"](FakeServiceCall({
+        "entity_id": ENTITY_ID,
+        "title": "Brodie",
+        "description": None,
+        "due_date": None,
+        "due_datetime": None,
+        "quantity": None,
+        "tags": None,
+        "trigger_on_due": False,
+        "pin_type": "person",
+    }))
+
+    todo_list = await manager.get_list(ENTITY_ID)
+    brodie = next(i for i in todo_list.items if i.title == "Brodie")
+    assert brodie.pin_type == "person"
+
+
+@pytest.mark.asyncio
+async def test_service_set_pin_type_resolves_by_title():
+    manager = make_manager()
+    _, services = make_hass(manager)
+
+    await services.handlers["set_pin_type"](FakeServiceCall({
+        "entity_id": ENTITY_ID, "item": "Shopping", "pin_type": "category",
+    }))
+
+    todo_list = await manager.get_list(ENTITY_ID)
+    item = next(i for i in todo_list.items if i.id == "1")
+    assert item.pin_type == "category"
+
+
+@pytest.mark.asyncio
+async def test_service_set_pin_type_can_clear_by_omitting_the_field():
+    manager = make_manager()
+    _, services = make_hass(manager)
+
+    await services.handlers["set_pin_type"](FakeServiceCall({
+        "entity_id": ENTITY_ID, "item": "Shopping", "pin_type": "category",
+    }))
+    await services.handlers["set_pin_type"](FakeServiceCall({
+        "entity_id": ENTITY_ID, "item": "Shopping",
+    }))
+
+    todo_list = await manager.get_list(ENTITY_ID)
+    item = next(i for i in todo_list.items if i.id == "1")
+    assert item.pin_type is None
+
+
+@pytest.mark.asyncio
+async def test_service_set_pin_type_raises_invalid_pin_type_for_a_bad_value():
+    """Services don't catch TodoManager's errors themselves (see the
+    matching add_tag/ItemNotFoundError test above) - this bypasses the
+    vol.In schema layer the same way, exercising the manager-level
+    InvalidPinTypeError check directly."""
+
+    from custom_components.todo_overlay.errors import InvalidPinTypeError
+
+    manager = make_manager()
+    _, services = make_hass(manager)
+
+    with pytest.raises(InvalidPinTypeError):
+        await services.handlers["set_pin_type"](FakeServiceCall({
+            "entity_id": ENTITY_ID, "item": "Shopping", "pin_type": "not-a-real-pin-type",
+        }))
 
 
 @pytest.mark.asyncio

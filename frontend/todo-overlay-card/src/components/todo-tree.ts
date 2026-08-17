@@ -2,6 +2,7 @@ import {LitElement, html, css} from "lit";
 import {customElement, property} from "lit/decorators.js";
 import {classMap} from "lit/directives/class-map.js";
 
+import {groupSiblingsForDisplay} from "../grouping";
 import type {Placement, TodoItem} from "../models";
 
 import "./todo-tree-item";
@@ -100,6 +101,11 @@ export class TodoTree extends LitElement {
     deleteModeActive = false;
 
     render() {
+        // Root level has no real parent id of its own - see grouping.ts's
+        // own otherGroupId, which treats undefined as "root" for exactly
+        // this call site.
+        const displayItems = groupSiblingsForDisplay(this.items, undefined);
+
         return html`
             <ul>
                 ${
@@ -114,7 +120,7 @@ export class TodoTree extends LitElement {
                                 </div>
                             </li>
                         `
-                        : this.items.map(
+                        : displayItems.map(
                             item => html`
                                 <todo-overlay-tree-item
                                     .item=${item}

@@ -2,6 +2,8 @@ import {LitElement, html, css} from "lit";
 import {customElement, property, state} from "lit/decorators.js";
 import {classMap} from "lit/directives/class-map.js";
 
+import type {PinType} from "../models";
+
 const CALENDAR_ICON = html`
     <svg viewBox="0 0 24 24">
         <path d="M19,19H5V8H19M16,1V3H8V1H6V3H5C3.89,3 3,3.89 3,5V19A2,2 0 0,0 5,21H19A2,2 0 0,0 21,19V5C21,3.89 20.1,3 19,3H18V1M17,12H12V17H17V12Z"></path>
@@ -31,6 +33,10 @@ export interface TodoItemFormValue {
     dueDate: string;
     dueTime: string;
     triggerOnDue: boolean;
+    // "" means unpinned - a plain <select> value, not PinType | null,
+    // so it can sit in the same string-keyed updateField() path every
+    // other text field already goes through.
+    pinType: "" | PinType;
 }
 
 export interface TodoItemDialogFieldSupport {
@@ -47,6 +53,7 @@ export const EMPTY_FORM_VALUE: TodoItemFormValue = {
     dueDate: "",
     dueTime: "",
     triggerOnDue: false,
+    pinType: "",
 };
 
 // Digits only, capped to maxLen - shared by every day/month/year/hour/
@@ -138,6 +145,28 @@ export class TodoItemDialog extends LitElement {
         textarea:focus {
             border-bottom: 2px solid var(--primary-color);
             padding-bottom: 7px;
+        }
+
+        select.pin-type-select {
+            box-sizing: border-box;
+            width: 100%;
+            font-family: inherit;
+            font-size: 16px;
+            color: var(--primary-text-color);
+            background: none;
+            border: none;
+            border-bottom: 1px solid var(--divider-color);
+            padding: 8px 0;
+            outline: none;
+        }
+
+        select.pin-type-select:focus {
+            border-bottom: 2px solid var(--primary-color);
+            padding-bottom: 7px;
+        }
+
+        .field-hint.pin-type-hint {
+            margin-top: 2px;
         }
 
         /* Day/month/year and hour/minute, always in that fixed order
@@ -808,6 +837,30 @@ export class TodoItemDialog extends LitElement {
                         @input=${(e: InputEvent) =>
                             this.updateField("tags", (e.target as HTMLInputElement).value)}
                     />
+                </div>
+
+                <div class="field">
+                    <label for="todo-item-pin-type">Show as</label>
+                    <select
+                        id="todo-item-pin-type"
+                        class="pin-type-select"
+                        .value=${this.draftValue.pinType}
+                        @change=${(e: Event) =>
+                            this.updateField("pinType", (e.target as HTMLSelectElement).value)}
+                    >
+                        <option value="">Normal item</option>
+                        <option value="category">Category (e.g. "Groceries")</option>
+                        <option value="person">Person (e.g. "Brodie")</option>
+                    </select>
+                    ${
+                        this.draftValue.pinType
+                            ? html`
+                                <div class="field-hint pin-type-hint">
+                                    Always shown as a section header, even with nothing under it yet.
+                                </div>
+                            `
+                            : ""
+                    }
                 </div>
 
                 ${

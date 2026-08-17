@@ -37,3 +37,8 @@ class DueTimeRequiredError(TodoOverlayError):
     due_datetime - a date-only due_date isn't specific enough to schedule
     an exact-time trigger against, so this is enforced rather than
     silently picking an arbitrary time of day."""
+
+
+class InvalidPinTypeError(TodoOverlayError):
+    """Raised when set_pin_type is given a value other than one of
+    PIN_TYPES (see manager_types.py) or None."""

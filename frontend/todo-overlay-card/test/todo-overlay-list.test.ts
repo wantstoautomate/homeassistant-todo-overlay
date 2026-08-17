@@ -18,6 +18,7 @@ function makeItem(overrides: Partial<TodoItem> = {}): TodoItem {
         quantity: null,
         tags: [],
         trigger_on_due: false,
+        pin_type: null,
         children: [],
         ...overrides,
     };
@@ -847,6 +848,75 @@ describe("todo-overlay-list dragging onto a collapsed parent", () => {
     });
 });
 
+// The synthetic Other row (see grouping.ts) has no real item behind it at
+// all, so it must never be offered as a drop target itself - collectAllRows
+// skips its own row entry while still collecting its real children
+// completely normally (see collectAllRows' own comment).
+describe("todo-overlay-list drag hit-testing skips the synthetic Other row", () => {
+    it("never resolves Other's own header as a target - the nearest REAL row wins instead", async () => {
+        const {el, hass} = await renderList({
+            entity_id: ENTITY_ID,
+            items: [
+                makeItem({id: "brodie", title: "Brodie", pin_type: "person"}),
+                makeItem({id: "anna", title: "Anna", pin_type: "person"}),
+                makeItem({id: "bins", title: "Take out bins"}),
+            ],
+        });
+
+        const rows = deepQueryAll(el.shadowRoot!, "todo-overlay-tree-item") as (Element & {
+            shadowRoot: ShadowRoot;
+            item: {id: string};
+        })[];
+
+        const annaRow = rows.find(r => r.item.id === "anna")!;
+        const otherRow = rows.find(r => r.item.id.startsWith("__other__"))!;
+        const binsRow = rows.find(r => r.item.id === "bins")!;
+        expect(otherRow, "Other should actually be swept together here for this test to mean anything").toBeDefined();
+        expect(binsRow, "Other's own real child should still be in the DOM, just nested under it").toBeDefined();
+
+        mockRect(rows.find(r => r.item.id === "brodie")!.shadowRoot.querySelector(".row")!, {top: 0, bottom: 40, height: 40});
+        mockRect(annaRow.shadowRoot.querySelector(".row")!, {top: 40, bottom: 80, height: 40});
+        // Other's own header sits right here visually - mocked purely so
+        // a bug that DIDN'T exclude it would have something to wrongly
+        // land on; the real hit-testing has nothing of its own here at
+        // all once excluded.
+        mockRect(otherRow.shadowRoot.querySelector(".row")!, {top: 80, bottom: 120, height: 40});
+        mockRect(binsRow.shadowRoot.querySelector(".row")!, {top: 120, bottom: 160, height: 40});
+
+        const draggable = el as unknown as DraggableList & {hoverId?: string};
+
+        draggable.draggedId = "brodie";
+        draggable.onDragStart(new CustomEvent("tree-drag-start", {
+            detail: {rect: undefined, pointerX: 20, pointerY: 20, grabOffsetX: 0, grabOffsetY: 0},
+        }));
+
+        // Well inside Other's own (mocked) header rect, close to its
+        // bottom edge - clearly nearer to bins (its real child, sitting
+        // right below it) than to anna, so there's no ambiguity about
+        // which real row "nearest" should resolve to once Other itself
+        // is out of the running.
+        draggable.onGlobalPointerMove(new PointerEvent("pointermove", {clientX: 20, clientY: 115}));
+
+        expect(draggable.hoverId).toBe("bins");
+        await settle(el);
+
+        // Never a highlight on Other's own row - it isn't a valid target
+        // to highlight in the first place.
+        expect(otherRow.shadowRoot.querySelector(".row")?.classList.contains("drop-inside")).toBe(false);
+
+        await draggable.onGlobalPointerUp();
+
+        expect(hass.connection.sent).toContainEqual(expect.objectContaining({
+            type: "todo_overlay/move_item",
+            child_id: "brodie",
+            reference_id: "bins",
+        }));
+        expect(
+            hass.connection.sent.some(m => typeof m.reference_id === "string" && m.reference_id.startsWith("__other__")),
+        ).toBe(false);
+    });
+});
+
 // Live-reported: dragging a child that's directly below its own parent
 // - i.e. the parent's own first VISIBLE child - up toward roughly its
 // original position glitched a lot, and hovering the parent's own row
@@ -1110,6 +1180,82 @@ describe("todo-overlay-list gap correction keeps hit-testing in sync with the op
         draggable.onGlobalPointerMove(new PointerEvent("pointermove", {clientX: 20, clientY: 60}));
         expect(draggable.hoverId).toBe("2");
         expect(draggable.hoverPlacement).toBe("inside");
+    });
+});
+
+// Live-reported: dragging near a nested boundary (a grandchild toward the
+// gap between its parent's row and its parent's own parent's row) made
+// surrounding rows visibly jump up/down repeatedly for barely-moving
+// pointer input. The exact geometry that reproduces it: applyGapCorrection
+// opens a DROP_GAP_PX-tall visual gap wherever the current target's own
+// "before"/"after" placement sits - and the midpoint of that gap is
+// exactly equidistant between the row above it and the row below, since
+// DROP_GAP_PX (52) is comfortably wider than a typical row. A pointer
+// resting anywhere near that midpoint is one px away from a dead-even tie
+// in findDropTarget's own nearest-row search, which - unprotected - the
+// smallest jitter flips back and forth, each flip re-triggering
+// applyGapCorrection's shift on a DIFFERENT row (opening/closing a
+// different gap), which is the visible up/down jump. ROW_SWITCH_HYSTERESIS_PX
+// fixes this the same way ZONE_HYSTERESIS already protects a single row's
+// own before/inside/after boundary - once a row has won the nearest-row
+// search, a competing row has to be decisively closer, not just
+// marginally so, before it can take over.
+describe("todo-overlay-list drag hit-testing near an open reorder gap's own midpoint", () => {
+    it("does not flip to the row on the other side of the gap on a 1px jitter past its exact midpoint", async () => {
+        const {el} = await renderList({
+            entity_id: ENTITY_ID,
+            items: [
+                makeItem({id: "a", title: "First"}),
+                makeItem({id: "b", title: "Second"}),
+                makeItem({id: "dragged", title: "Dragged"}),
+            ],
+        });
+
+        const rows = deepQueryAll(el.shadowRoot!, "todo-overlay-tree-item") as (Element & {
+            shadowRoot: ShadowRoot; item: {id: string};
+        })[];
+        // "a" and "b" sit directly adjacent (0-40, 40-80) - once "a/after"
+        // becomes the target, applyGapCorrection shifts "b" (and
+        // everything below it) down by DROP_GAP_PX, opening a 40-92 gap
+        // whose exact midpoint (66) is equidistant from both.
+        mockRect(rows.find(r => r.item.id === "a")!.shadowRoot.querySelector(".row")!, {top: 0, bottom: 40, height: 40});
+        mockRect(rows.find(r => r.item.id === "b")!.shadowRoot.querySelector(".row")!, {top: 40, bottom: 80, height: 40});
+
+        const draggable = el as unknown as DraggableList & {hoverId?: string; hoverPlacement?: string};
+
+        draggable.draggedId = "dragged";
+        draggable.onDragStart(new CustomEvent("tree-drag-start", {
+            detail: {rect: undefined, pointerX: 20, pointerY: 200, grabOffsetX: 0, grabOffsetY: 0},
+        }));
+
+        // Deep in "a"'s own after-zone first, to lock in "a/after" (and
+        // its gap) the normal way.
+        draggable.onGlobalPointerMove(new PointerEvent("pointermove", {clientX: 20, clientY: 35}));
+        expect(draggable.hoverId).toBe("a");
+        expect(draggable.hoverPlacement).toBe("after");
+
+        // The gap's own exact midpoint - still a dead-even tie between
+        // "a" (below it) and "b" (shifted down, above it), resolved by
+        // array order alone, but consistent with "a/after" either way.
+        draggable.onGlobalPointerMove(new PointerEvent("pointermove", {clientX: 20, clientY: 66}));
+        expect(draggable.hoverId).toBe("a");
+        expect(draggable.hoverPlacement).toBe("after");
+
+        // One px PAST the midpoint, now genuinely nearer "b" than "a" by
+        // raw distance alone (25px vs 27px) - without hysteresis this
+        // flips straight to "before b". The still-current "a/after"
+        // target must hold instead.
+        draggable.onGlobalPointerMove(new PointerEvent("pointermove", {clientX: 20, clientY: 67}));
+        expect(draggable.hoverId).toBe("a");
+        expect(draggable.hoverPlacement).toBe("after");
+
+        // A little jitter around that same 1px-past-midpoint spot -
+        // never budges.
+        for (const y of [68, 67, 69, 66, 67]) {
+            draggable.onGlobalPointerMove(new PointerEvent("pointermove", {clientX: 20, clientY: y}));
+            expect(draggable.hoverId, `hoverId flipped at y=${y}`).toBe("a");
+            expect(draggable.hoverPlacement, `hoverPlacement flipped at y=${y}`).toBe("after");
+        }
     });
 });
 
@@ -1745,6 +1891,114 @@ describe("todo-overlay-list edit-dialog delete (diagnostic)", () => {
             title: "Oat milk",
         }));
         expect(hass.serviceCalls).not.toContainEqual(expect.objectContaining({domain: "todo", service: "update_item"}));
+    });
+
+    it("saving an edit with a pin type sends todo_overlay/set_pin_type", async () => {
+        const {el, hass} = await renderList({
+            entity_id: ENTITY_ID,
+            items: [makeItem({id: "1", title: "Brodie"})],
+        });
+
+        const treeItem = deepQueryAll(el.shadowRoot!, "todo-overlay-tree-item")[0];
+        treeItem.dispatchEvent(new CustomEvent("tree-pointer-down", {
+            detail: {id: "1"}, bubbles: true, composed: true,
+        }));
+        treeItem.dispatchEvent(new CustomEvent("tree-pointer-up", {
+            detail: {id: "1", pressDurationMs: 600, moved: false}, bubbles: true, composed: true,
+        }));
+        await el.updateComplete;
+
+        const dialog = el.shadowRoot?.querySelector("todo-overlay-item-dialog");
+
+        dialog!.dispatchEvent(new CustomEvent("dialog-save", {
+            detail: {
+                title: "Brodie", quantity: "", tags: "", description: "",
+                dueDate: "", dueTime: "", triggerOnDue: false, pinType: "person",
+            },
+            bubbles: true, composed: true,
+        }));
+        await flushAsync();
+
+        expect(hass.connection.sent).toContainEqual(expect.objectContaining({
+            type: "todo_overlay/set_pin_type",
+            entity_id: ENTITY_ID,
+            item_id: "1",
+            pin_type: "person",
+        }));
+    });
+
+    // quantity/tags/triggerOnDue/pinType all batch into one Promise.all
+    // now (see onDialogSave's own comment) - but update_item has to
+    // fully precede that batch, not join it: setTriggerOnDue's backend
+    // validation requires the item's due_datetime to already be
+    // persisted (see DueTimeRequiredError), which is exactly what
+    // update_item's own dueDate/dueTime fields just wrote. Racing them
+    // would risk setTriggerOnDue's message being processed before that
+    // write lands. FakeConnection.sendMessagePromise pushes onto `sent`
+    // synchronously, before its own internal await - so message ORDER
+    // here directly reflects call order, making this a meaningful check,
+    // not just a coincidence of both happening to appear somewhere in
+    // the array.
+    it("sends update_item (with the due date/time) strictly before set_trigger_on_due, even though the other fields now batch", async () => {
+        const {el, hass} = await renderList({
+            entity_id: ENTITY_ID,
+            items: [makeItem({id: "1", title: "Renew passport"})],
+        });
+
+        const treeItem = deepQueryAll(el.shadowRoot!, "todo-overlay-tree-item")[0];
+        treeItem.dispatchEvent(new CustomEvent("tree-pointer-down", {
+            detail: {id: "1"}, bubbles: true, composed: true,
+        }));
+        treeItem.dispatchEvent(new CustomEvent("tree-pointer-up", {
+            detail: {id: "1", pressDurationMs: 600, moved: false}, bubbles: true, composed: true,
+        }));
+        await el.updateComplete;
+
+        const dialog = el.shadowRoot?.querySelector("todo-overlay-item-dialog");
+
+        dialog!.dispatchEvent(new CustomEvent("dialog-save", {
+            detail: {
+                title: "Renew passport", quantity: "", tags: "", description: "",
+                dueDate: "2026-06-01", dueTime: "09:00", triggerOnDue: true,
+            },
+            bubbles: true, composed: true,
+        }));
+        await flushAsync();
+
+        const updateItemIndex = hass.connection.sent.findIndex(m => m.type === "todo_overlay/update_item");
+        const setTriggerIndex = hass.connection.sent.findIndex(m => m.type === "todo_overlay/set_trigger_on_due");
+
+        expect(updateItemIndex).toBeGreaterThanOrEqual(0);
+        expect(setTriggerIndex).toBeGreaterThan(updateItemIndex);
+    });
+
+    it("creating an item with a pin type sends it as part of todo_overlay/create_item", async () => {
+        const {el, hass} = await renderList(
+            {entity_id: ENTITY_ID, items: []},
+            {showQuickAdd: false},
+        );
+
+        (el.shadowRoot?.querySelector("button[aria-label='Add item']") as HTMLElement).click();
+        await settle(el);
+
+        const dialog = el.shadowRoot?.querySelector("todo-overlay-item-dialog");
+        expect(dialog, "create dialog should be open").not.toBeNull();
+
+        dialog!.dispatchEvent(new CustomEvent("dialog-save", {
+            detail: {
+                title: "Anna", quantity: "", tags: "", description: "",
+                dueDate: "", dueTime: "", triggerOnDue: false, pinType: "person",
+            },
+            bubbles: true, composed: true,
+        }));
+        await flushAsync();
+
+        expect(hass.connection.sent).toContainEqual(expect.objectContaining({
+            type: "todo_overlay/create_item",
+            entity_id: ENTITY_ID,
+            title: "Anna",
+            pin_type: "person",
+        }));
     });
 
     it("does not clobber an in-progress unsaved edit when a live-sync reload fires while the dialog is open", async () => {

@@ -11,6 +11,7 @@ import {
     restoreCompleted,
     saveList,
     setCompleted,
+    setPinType,
     setQuantity,
     setTags,
     setTriggerOnDue,
@@ -126,6 +127,26 @@ describe("api", () => {
 
         expect(hass.connection.sent).toEqual([{
             type: "todo_overlay/set_quantity", entity_id: "todo.a", item_id: "1", quantity: "2kg",
+        }]);
+    });
+
+    it("setPinType sends item_id and pin_type", async () => {
+        const hass = makeFakeHass();
+
+        await setPinType(hass, "todo.a", "1", "person");
+
+        expect(hass.connection.sent).toEqual([{
+            type: "todo_overlay/set_pin_type", entity_id: "todo.a", item_id: "1", pin_type: "person",
+        }]);
+    });
+
+    it("setPinType sends undefined pin_type to clear it", async () => {
+        const hass = makeFakeHass();
+
+        await setPinType(hass, "todo.a", "1", undefined);
+
+        expect(hass.connection.sent).toEqual([{
+            type: "todo_overlay/set_pin_type", entity_id: "todo.a", item_id: "1", pin_type: undefined,
         }]);
     });
 

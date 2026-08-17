@@ -2,7 +2,8 @@ import {afterEach, describe, expect, it, vi} from "vitest";
 
 import "../src/components/todo-tree-item";
 import type {TodoTreeItem} from "../src/components/todo-tree-item";
-import {SWIPE_ACTION_THRESHOLD_PX, SWIPE_AXIS_LOCK_PX, SWIPE_MAX_REVEAL_PX} from "../src/components/todo-tree-item";
+import {ROW_COLLAPSE_MS, SWIPE_ACTION_THRESHOLD_PX, SWIPE_AXIS_LOCK_PX, SWIPE_MAX_REVEAL_PX} from "../src/components/todo-tree-item";
+import type {DisplayItem} from "../src/grouping";
 import {LONG_PRESS_MS, type TodoItem} from "../src/models";
 
 function makeItem(overrides: Partial<TodoItem> = {}): TodoItem {
@@ -16,6 +17,7 @@ function makeItem(overrides: Partial<TodoItem> = {}): TodoItem {
         quantity: null,
         tags: [],
         trigger_on_due: false,
+        pin_type: null,
         children: [],
         ...overrides,
     };
@@ -61,6 +63,17 @@ function release(): void {
     window.dispatchEvent(
         new PointerEvent("pointerup", {clientX: 0, clientY: 0, pointerType: "mouse", bubbles: true}),
     );
+}
+
+// A confirmed delete no longer dispatches tree-delete-item
+// synchronously - it plays a local collapse animation on the row's own
+// <li> first (see dispatchDeleteAfterCollapse's own comment: an
+// instant removal, while already scrolled to the bottom of a long
+// list, forces the browser into an un-animatable scroll snap), then
+// dispatches once that finishes. A generous margin over ROW_COLLAPSE_MS
+// itself, since this is a real (not faked) timer.
+function flushRowCollapse(): Promise<void> {
+    return new Promise(r => setTimeout(r, ROW_COLLAPSE_MS + 50));
 }
 
 describe("todo-overlay-tree-item", () => {
@@ -148,12 +161,81 @@ describe("todo-overlay-tree-item", () => {
         expect(parent.shadowRoot?.querySelector(".checkbox-slot")).toBeNull();
     });
 
-    it("bolds a parent's title so it reads as distinct from a leaf/child row", async () => {
+    it("renders a parent's title as a section header, distinct from a leaf/child row", async () => {
         const parent = await renderItem(makeItem({children: [makeItem({id: "2"})]}));
-        expect(parent.shadowRoot?.querySelector(".summary")?.classList.contains("has-children")).toBe(true);
+        expect(parent.shadowRoot?.querySelector(".summary")?.classList.contains("structural")).toBe(true);
 
         const leaf = await renderItem(makeItem());
-        expect(leaf.shadowRoot?.querySelector(".summary")?.classList.contains("has-children")).toBe(false);
+        expect(leaf.shadowRoot?.querySelector(".summary")?.classList.contains("structural")).toBe(false);
+    });
+
+    it("renders a PINNED leaf's title as a section header too, even with zero children", async () => {
+        const person = await renderItem(makeItem({pin_type: "person", title: "Anna"}));
+        expect(person.shadowRoot?.querySelector(".summary")?.classList.contains("structural")).toBe(true);
+
+        const category = await renderItem(makeItem({pin_type: "category", title: "Groceries"}));
+        expect(category.shadowRoot?.querySelector(".summary")?.classList.contains("structural")).toBe(true);
+    });
+
+    it("hides the checkbox unconditionally for a pinned item, even with showCheckboxes and hideCompleteForParents both off", async () => {
+        const el = await renderItem(
+            makeItem({pin_type: "category", title: "Groceries"}),
+            {showCheckboxes: true, hideCompleteForParents: false},
+        );
+
+        expect(el.shadowRoot?.querySelector(".checkbox-slot")).toBeNull();
+    });
+
+    it("renders a small initial avatar for a person pin, in place of the checkbox slot", async () => {
+        const el = await renderItem(makeItem({pin_type: "person", title: "Brodie"}), {showCheckboxes: true});
+
+        const avatar = el.shadowRoot?.querySelector(".person-avatar");
+        expect(avatar).not.toBeNull();
+        expect(avatar?.textContent?.trim()).toBe("B");
+        expect(el.shadowRoot?.querySelector(".checkbox-slot")).toBeNull();
+    });
+
+    it("does not render an avatar for a category pin (no assumed identity)", async () => {
+        const el = await renderItem(makeItem({pin_type: "category", title: "Groceries"}));
+
+        expect(el.shadowRoot?.querySelector(".person-avatar")).toBeNull();
+    });
+
+    // Live-reported: a pinned-but-childless row first got the SAME real
+    // chevron a row with actual children gets - which read as "there's
+    // something to expand" when there wasn't. Landed on instead (see
+    // .structural-placeholder's own comment): a distinct, static dash -
+    // immediately legible as "structural, but nothing here yet" without
+    // inviting a click that would do nothing.
+    it("renders a static placeholder dash for a pinned item with zero children - not the real chevron, not the blank spacer", async () => {
+        const el = await renderItem(makeItem({pin_type: "person", title: "Brodie"}));
+
+        expect(el.shadowRoot?.querySelector(".collapse-toggle")).toBeNull();
+        expect(el.shadowRoot?.querySelector(".collapse-toggle-spacer")).toBeNull();
+        expect(el.shadowRoot?.querySelector(".structural-placeholder")).not.toBeNull();
+    });
+
+    it("the placeholder dash is not a button and does not dispatch tree-toggle-collapse when clicked", async () => {
+        const el = await renderItem(makeItem({pin_type: "person", title: "Brodie"}));
+
+        const placeholder = el.shadowRoot?.querySelector(".structural-placeholder") as HTMLElement;
+        expect(placeholder.tagName).not.toBe("BUTTON");
+
+        let fired = false;
+        el.addEventListener("tree-toggle-collapse", () => { fired = true; });
+        placeholder.click();
+
+        expect(fired).toBe(false);
+    });
+
+    it("still renders the real, clickable chevron for a pinned item that DOES have children", async () => {
+        const el = await renderItem(makeItem({
+            pin_type: "person", title: "Brodie",
+            children: [makeItem({id: "2", title: "Buy milk"})],
+        }));
+
+        expect(el.shadowRoot?.querySelector(".collapse-toggle")).not.toBeNull();
+        expect(el.shadowRoot?.querySelector(".structural-placeholder")).toBeNull();
     });
 
     it("does not render children when collapsed", async () => {
@@ -432,6 +514,7 @@ describe("todo-overlay-tree-item", () => {
             touchPress(el);
             move(el, -(SWIPE_ACTION_THRESHOLD_PX + 10), 0);
             touchRelease();
+            await flushRowCollapse();
 
             expect(detail).toEqual({id: "1"});
         });
@@ -838,6 +921,7 @@ describe("todo-overlay-tree-item", () => {
             });
 
             (el.shadowRoot?.querySelector(".delete-button") as HTMLElement).click();
+            await flushRowCollapse();
 
             expect(detail).toEqual({id: "1"});
         });
@@ -856,6 +940,7 @@ describe("todo-overlay-tree-item", () => {
             expect(el.shadowRoot?.querySelector(".delete-button.confirming")).not.toBeNull();
 
             button.click();
+            await flushRowCollapse();
 
             expect(fired).toBe(true);
         });
@@ -886,6 +971,86 @@ describe("todo-overlay-tree-item", () => {
             } finally {
                 vi.useRealTimers();
             }
+        });
+    });
+
+    // The one synthetic node groupSiblingsForDisplay ever generates (see
+    // grouping.ts) - a rendering fiction with no real item behind it, so
+    // every interactive affordance a normal row has must stay off, while
+    // collapse/expand (the one thing that makes it read as a genuine
+    // section, per "ensure parents are still collapsible") keeps working
+    // exactly like any other structural row.
+    describe("synthetic Other row", () => {
+        function makeOtherItem(children: TodoItem[]): DisplayItem {
+            return {
+                ...makeItem({id: "__other__:root", title: "Other", children}),
+                synthetic: true,
+            };
+        }
+
+        it("renders as a structural section header with no checkbox or avatar", async () => {
+            const el = await renderItem(makeOtherItem([makeItem({id: "a"}), makeItem({id: "b"})]), {showCheckboxes: true});
+
+            expect(el.shadowRoot?.querySelector(".summary")?.classList.contains("structural")).toBe(true);
+            expect(el.shadowRoot?.querySelector(".summary")?.textContent).toBe("Other");
+            expect(el.shadowRoot?.querySelector(".checkbox-slot")).toBeNull();
+            expect(el.shadowRoot?.querySelector(".person-avatar")).toBeNull();
+        });
+
+        it("stays collapsible - chevron present, toggling dispatches tree-toggle-collapse with its own id", async () => {
+            const el = await renderItem(makeOtherItem([makeItem({id: "a"})]));
+
+            const chevron = el.shadowRoot?.querySelector(".collapse-toggle") as HTMLElement;
+            expect(chevron).not.toBeNull();
+
+            let detail: {id: string} | undefined;
+            el.addEventListener("tree-toggle-collapse", (e) => {
+                detail = (e as CustomEvent<{id: string}>).detail;
+            });
+            chevron.click();
+
+            expect(detail).toEqual({id: "__other__:root"});
+        });
+
+        it("hides its swept-up children when collapsed, same as a real parent", async () => {
+            const el = await renderItem(
+                makeOtherItem([makeItem({id: "a"})]),
+                {collapsedIds: new Set(["__other__:root"])},
+            );
+
+            expect(el.shadowRoot?.querySelector("ul")).toBeNull();
+        });
+
+        it("suppresses every interactive icon - no drag-handle, add-toggle, or delete button, in any mode", async () => {
+            const reorder = await renderItem(makeOtherItem([makeItem({id: "a"})]), {reorderModeActive: true});
+            expect(reorder.shadowRoot?.querySelector(".drag-handle")).toBeNull();
+
+            const addMode = await renderItem(makeOtherItem([makeItem({id: "a"})]), {addModeActive: true});
+            expect(addMode.shadowRoot?.querySelector(".child-quick-add-toggle")).toBeNull();
+
+            const deleteMode = await renderItem(makeOtherItem([makeItem({id: "a"})]), {deleteModeActive: true});
+            expect(deleteMode.shadowRoot?.querySelector(".delete-button")).toBeNull();
+        });
+
+        it("marks its own row data-synthetic (what collectAllRows' drag hit-testing excludes on), unlike a real row", async () => {
+            const other = await renderItem(makeOtherItem([makeItem({id: "a"})]));
+            expect(other.shadowRoot?.querySelector(".row")?.hasAttribute("data-synthetic")).toBe(true);
+
+            const real = await renderItem(makeItem({id: "real", children: [makeItem({id: "child"})]}));
+            expect(real.shadowRoot?.querySelector(".row")?.hasAttribute("data-synthetic")).toBe(false);
+        });
+
+        it("ignores pointerdown entirely - no tap-to-complete, hold-to-edit, drag, or swipe setup", async () => {
+            const el = await renderItem(makeOtherItem([makeItem({id: "a"})]));
+
+            let fired = false;
+            el.addEventListener("tree-pointer-down", () => { fired = true; });
+
+            (el.shadowRoot?.querySelector(".row") as HTMLElement).dispatchEvent(
+                new PointerEvent("pointerdown", {clientX: 0, clientY: 0, pointerType: "mouse", bubbles: true}),
+            );
+
+            expect(fired).toBe(false);
         });
     });
 });

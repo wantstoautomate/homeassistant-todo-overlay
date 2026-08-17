@@ -136,6 +136,14 @@ create_item:
       description: Fire the "due" automation trigger at the item's due date and time. Requires due_datetime to also be set.
       selector:
         boolean:
+    pin_type:
+      required: false
+      description: Pin the item as always rendering like a section header ("category" or "person"), regardless of whether it has children yet.
+      selector:
+        select:
+          options:
+            - category
+            - person
 
 set_quantity:
   name: Set quantity
@@ -157,6 +165,30 @@ set_quantity:
       example: 150g
       selector:
         text:
+
+set_pin_type:
+  name: Set pin type
+  description: Set (or clear) a Todo Overlay item's pin type - always rendering it like a section header ("category" or "person"), regardless of whether it has children.
+  fields:
+    entity_id:
+      required: true
+      selector:
+        entity:
+          domain: todo
+    item:
+      required: true
+      example: Brodie
+      description: The item's id or title (same convention as todo.update_item).
+      selector:
+        text:
+    pin_type:
+      required: false
+      description: Omit to clear the pin.
+      selector:
+        select:
+          options:
+            - category
+            - person
 
 set_trigger_on_due:
   name: Set trigger on due

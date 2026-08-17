@@ -29,6 +29,13 @@ SAVE_DELAY = 3
 SNAPSHOTS_KEY = "_snapshots"
 QUANTITIES_KEY = "_quantities"
 TAGS_KEY = "_tags"
+# Marks an item as always rendering/behaving like a parent (bold title,
+# no checkbox, collapsible) regardless of whether it currently has any
+# children - "category" and "person" are purely presentational
+# distinctions on the frontend (a person pin gets an initial avatar), not
+# different storage shapes; both are just pin_type values here. See
+# manager_items.py's set_pin_type for the full rationale.
+PIN_TYPE_KEY = "_pin_type"
 TRIGGER_ON_DUE_KEY = "_trigger_on_due"
 # Which due value a "due" trigger has already fired for, per item - the
 # scheduler's own bookkeeping (see due_scheduler.py) so a restart, or any
@@ -196,6 +203,7 @@ class MetadataStore:
         self._cache.pop(entity_id, None)
         self._cache.get(QUANTITIES_KEY, {}).pop(entity_id, None)
         self._cache.get(TAGS_KEY, {}).pop(entity_id, None)
+        self._cache.get(PIN_TYPE_KEY, {}).pop(entity_id, None)
         self._cache.get(TRIGGER_ON_DUE_KEY, {}).pop(entity_id, None)
         self._cache.get(DUE_FIRED_KEY, {}).pop(entity_id, None)
         self._cache.get(LINKS_KEY, {}).pop(entity_id, None)
@@ -222,7 +230,7 @@ class MetadataStore:
             self._cache[new_entity_id] = self._cache.pop(old_entity_id)
 
         for key in (
-            QUANTITIES_KEY, TAGS_KEY, TRIGGER_ON_DUE_KEY, DUE_FIRED_KEY,
+            QUANTITIES_KEY, TAGS_KEY, PIN_TYPE_KEY, TRIGGER_ON_DUE_KEY, DUE_FIRED_KEY,
             LINKS_KEY, LINK_ITEM_STATE_KEY,
         ):
             bucket = self._cache.get(key, {})
@@ -312,6 +320,59 @@ class MetadataStore:
             entity_quantities[item_id] = quantity
         else:
             entity_quantities.pop(item_id, None)
+
+        self._save()
+
+    async def get_pin_types(
+        self,
+        entity_id: str,
+    ) -> dict[str, str]:
+        await self._load()
+
+        assert self._cache is not None
+
+        return dict(self._cache.get(PIN_TYPE_KEY, {}).get(entity_id, {}))
+
+    async def set_pin_type(
+        self,
+        entity_id: str,
+        item_id: str,
+        pin_type: str | None,
+    ) -> None:
+        """Set (or clear, if pin_type is None) an item's pin type."""
+
+        await self._load()
+
+        assert self._cache is not None
+
+        entity_pin_types = self._cache.setdefault(PIN_TYPE_KEY, {}).setdefault(entity_id, {})
+
+        if pin_type:
+            entity_pin_types[item_id] = pin_type
+        else:
+            entity_pin_types.pop(item_id, None)
+
+        self._save()
+
+    async def remove_pin_types(
+        self,
+        entity_id: str,
+        item_ids: list[str],
+    ) -> None:
+        """Drop stored pin types for items that no longer exist, e.g.
+        after a clear-completed removal."""
+
+        await self._load()
+
+        assert self._cache is not None
+
+        entity_pin_types = self._cache.get(PIN_TYPE_KEY, {}).get(entity_id)
+
+        if not entity_pin_types:
+            return
+
+        for item_id in item_ids:
+            entity_pin_types.pop(item_id, None)
 
         self._save()
 

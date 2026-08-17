@@ -5,6 +5,7 @@ A Home Assistant custom integration and Lovelace card that overlays a parent/chi
 ## Features
 
 - **Hierarchy** - nest items under a parent, drag-and-drop to reorder or reparent, with collapsible rows and a completion counter on any row with children.
+- **Category/person pins** - mark an item as always rendering like a section header ("Groceries", "Brodie"), even before it has any children, via the item dialog's "Show as" field. Once a level has two or more of these, its other plain items automatically collect into a trailing "Other" group rather than getting lost between them.
 - **Quantities and tags** - overlay-only fields the native `todo.*` entity has no concept of, editable from the card or via services.
 - **Due-date automation triggers** - opt in per item, and an automation fires the moment the due date/time arrives - no polling, no bespoke per-list automation needed.
 - **Saved lists** - save a list's current structure as a reusable template, then load it back onto any `todo.*` entity (e.g. a recurring "Weekly shop" or "Pack for a trip" list).
@@ -62,8 +63,9 @@ or use the visual card editor from the dashboard's "Add Card" dialog, which also
 
 | Service | Purpose |
 | --- | --- |
-| `todo_overlay.create_item` | Create an item, including quantity/tags/due-trigger fields the native `todo.add_item` has no concept of. |
+| `todo_overlay.create_item` | Create an item, including quantity/tags/pin/due-trigger fields the native `todo.add_item` has no concept of. |
 | `todo_overlay.set_quantity` | Set or clear an item's quantity. |
+| `todo_overlay.set_pin_type` | Set or clear an item's pin ("category" or "person") - see Features above. |
 | `todo_overlay.add_tag` / `todo_overlay.remove_tag` | Add or remove a tag from an item. |
 | `todo_overlay.set_trigger_on_due` | Enable or disable the due-date automation trigger for an item (requires a due date and time already set). |
 | `todo_overlay.save_list` | Save a list's current items/hierarchy as a named, reusable template. |
@@ -74,7 +76,7 @@ See each service's own description in the Home Assistant UI (**Developer Tools â
 
 ## Automation triggers
 
-Eight triggers are available - one per kind of change - each showing up in the automation editor's "+ Add Trigger" picker under "Custom to-do item created", "Custom to-do item completed", etc. (search for "Custom to-do"):
+Nine triggers are available - one per kind of change - each showing up in the automation editor's "+ Add Trigger" picker under "Custom to-do item created", "Custom to-do item completed", etc. (search for "Custom to-do"):
 
 - `todo_overlay.created`
 - `todo_overlay.completed`
@@ -83,6 +85,7 @@ Eight triggers are available - one per kind of change - each showing up in the a
 - `todo_overlay.tag_added`
 - `todo_overlay.tag_removed`
 - `todo_overlay.quantity_changed`
+- `todo_overlay.pin_type_changed`
 - `todo_overlay.due`
 
 Each takes a standard target entity selector (defaults to any `todo.*` entity if left blank) and an optional `tag` field to only match items with that tag:
@@ -99,7 +102,7 @@ The trigger provides `trigger.event.data` with the item's `entity_id`, `item_id`
 
 ## Linked lists
 
-Two independent Home Assistant instances (e.g. two households) can keep one list in sync over MQTT - an item created, completed, uncompleted, or removed on one side is mirrored on the other. Only item content syncs (title, completed, description, due, quantity, tags), not position/hierarchy; deletions and conflicts are resolved automatically. This is entirely optional - skip it for normal, non-linked use.
+Two independent Home Assistant instances (e.g. two households) can keep one list in sync over MQTT - an item created, completed, uncompleted, or removed on one side is mirrored on the other. Only item content syncs (title, completed, description, due, quantity, tags, pin), not position/hierarchy; deletions and conflicts are resolved automatically. This is entirely optional - skip it for normal, non-linked use.
 
 ### Requirements
 
