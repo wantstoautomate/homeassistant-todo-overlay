@@ -3914,21 +3914,27 @@ function applyGapCorrection(rows, sticky) {
   }
   return rows.map((row) => shiftedIds.has(row.id) ? { ...row, rect: shiftRectDown(row.rect, DROP_GAP_PX) } : row);
 }
-function findDropTarget(y3, rows, sticky) {
+var ROW_SWITCH_HYSTERESIS_PX = 24;
+function findDropTarget(y3, rows, sticky, stickyNearestRowId) {
   if (rows.length === 0) {
     return void 0;
   }
+  const rawDistances = rows.map((row) => y3 < row.rect.top ? row.rect.top - y3 : y3 > row.rect.bottom ? y3 - row.rect.bottom : 0);
+  const pointerIsInsideSomeRow = rawDistances.some((distance) => distance === 0);
   let nearest = rows[0];
   let nearestDistance = Infinity;
-  for (const row of rows) {
-    const distance = y3 < row.rect.top ? row.rect.top - y3 : y3 > row.rect.bottom ? y3 - row.rect.bottom : 0;
+  rows.forEach((row, i7) => {
+    let distance = rawDistances[i7];
+    if (!pointerIsInsideSomeRow && stickyNearestRowId !== void 0 && row.id === stickyNearestRowId) {
+      distance = Math.max(0, distance - ROW_SWITCH_HYSTERESIS_PX);
+    }
     if (distance < nearestDistance) {
       nearest = row;
       nearestDistance = distance;
     }
-  }
+  });
   if (nearest.id === void 0) {
-    return { id: void 0, entityId: nearest.entityId, placement: "inside", depth: 0 };
+    return { id: void 0, entityId: nearest.entityId, placement: "inside", depth: 0, nearestRowId: void 0 };
   }
   const relativeY = (y3 - nearest.rect.top) / nearest.rect.height;
   const resolved = {
@@ -3937,7 +3943,7 @@ function findDropTarget(y3, rows, sticky) {
   };
   const resolvedRow = rows.find((r6) => r6.id === resolved.id) ?? nearest;
   const depth = resolvedRow.depth + (resolved.placement === "inside" ? 1 : 0);
-  return { ...resolved, depth };
+  return { ...resolved, depth, nearestRowId: nearest.id };
 }
 function findItem(items, id) {
   for (const item of items) {
@@ -4043,10 +4049,16 @@ var TodoOverlayList = class extends i4 {
         return;
       }
       const sticky = this.hoverId !== void 0 && this.hoverPlacement !== void 0 ? { id: this.hoverId, placement: this.hoverPlacement } : void 0;
-      const hit = findDropTarget(e7.clientY, applyGapCorrection(this.rowSnapshot, sticky), sticky);
+      const hit = findDropTarget(
+        e7.clientY,
+        applyGapCorrection(this.rowSnapshot, sticky),
+        sticky,
+        this.hoverNearestRowId
+      );
       const valid = hit && hit.id !== this.draggedId;
       const previousHoverId = this.hoverId;
       const previousHoverPlacement = this.hoverPlacement;
+      this.hoverNearestRowId = hit?.nearestRowId;
       this.hoverId = valid ? hit.id : void 0;
       this.hoverPlacement = valid ? hit.placement : void 0;
       this.hoverDepth = valid ? hit.depth : 0;
@@ -4071,6 +4083,7 @@ var TodoOverlayList = class extends i4 {
       this.hoverPlacement = void 0;
       this.hoverDepth = 0;
       this.hoverEntityId = void 0;
+      this.hoverNearestRowId = void 0;
       this.rowSnapshot = [];
       this.broadcastDragHover();
       if (draggedId && hoverEntityId) {

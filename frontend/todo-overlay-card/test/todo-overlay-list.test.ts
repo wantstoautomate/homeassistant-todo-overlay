@@ -1183,6 +1183,82 @@ describe("todo-overlay-list gap correction keeps hit-testing in sync with the op
     });
 });
 
+// Live-reported: dragging near a nested boundary (a grandchild toward the
+// gap between its parent's row and its parent's own parent's row) made
+// surrounding rows visibly jump up/down repeatedly for barely-moving
+// pointer input. The exact geometry that reproduces it: applyGapCorrection
+// opens a DROP_GAP_PX-tall visual gap wherever the current target's own
+// "before"/"after" placement sits - and the midpoint of that gap is
+// exactly equidistant between the row above it and the row below, since
+// DROP_GAP_PX (52) is comfortably wider than a typical row. A pointer
+// resting anywhere near that midpoint is one px away from a dead-even tie
+// in findDropTarget's own nearest-row search, which - unprotected - the
+// smallest jitter flips back and forth, each flip re-triggering
+// applyGapCorrection's shift on a DIFFERENT row (opening/closing a
+// different gap), which is the visible up/down jump. ROW_SWITCH_HYSTERESIS_PX
+// fixes this the same way ZONE_HYSTERESIS already protects a single row's
+// own before/inside/after boundary - once a row has won the nearest-row
+// search, a competing row has to be decisively closer, not just
+// marginally so, before it can take over.
+describe("todo-overlay-list drag hit-testing near an open reorder gap's own midpoint", () => {
+    it("does not flip to the row on the other side of the gap on a 1px jitter past its exact midpoint", async () => {
+        const {el} = await renderList({
+            entity_id: ENTITY_ID,
+            items: [
+                makeItem({id: "a", title: "First"}),
+                makeItem({id: "b", title: "Second"}),
+                makeItem({id: "dragged", title: "Dragged"}),
+            ],
+        });
+
+        const rows = deepQueryAll(el.shadowRoot!, "todo-overlay-tree-item") as (Element & {
+            shadowRoot: ShadowRoot; item: {id: string};
+        })[];
+        // "a" and "b" sit directly adjacent (0-40, 40-80) - once "a/after"
+        // becomes the target, applyGapCorrection shifts "b" (and
+        // everything below it) down by DROP_GAP_PX, opening a 40-92 gap
+        // whose exact midpoint (66) is equidistant from both.
+        mockRect(rows.find(r => r.item.id === "a")!.shadowRoot.querySelector(".row")!, {top: 0, bottom: 40, height: 40});
+        mockRect(rows.find(r => r.item.id === "b")!.shadowRoot.querySelector(".row")!, {top: 40, bottom: 80, height: 40});
+
+        const draggable = el as unknown as DraggableList & {hoverId?: string; hoverPlacement?: string};
+
+        draggable.draggedId = "dragged";
+        draggable.onDragStart(new CustomEvent("tree-drag-start", {
+            detail: {rect: undefined, pointerX: 20, pointerY: 200, grabOffsetX: 0, grabOffsetY: 0},
+        }));
+
+        // Deep in "a"'s own after-zone first, to lock in "a/after" (and
+        // its gap) the normal way.
+        draggable.onGlobalPointerMove(new PointerEvent("pointermove", {clientX: 20, clientY: 35}));
+        expect(draggable.hoverId).toBe("a");
+        expect(draggable.hoverPlacement).toBe("after");
+
+        // The gap's own exact midpoint - still a dead-even tie between
+        // "a" (below it) and "b" (shifted down, above it), resolved by
+        // array order alone, but consistent with "a/after" either way.
+        draggable.onGlobalPointerMove(new PointerEvent("pointermove", {clientX: 20, clientY: 66}));
+        expect(draggable.hoverId).toBe("a");
+        expect(draggable.hoverPlacement).toBe("after");
+
+        // One px PAST the midpoint, now genuinely nearer "b" than "a" by
+        // raw distance alone (25px vs 27px) - without hysteresis this
+        // flips straight to "before b". The still-current "a/after"
+        // target must hold instead.
+        draggable.onGlobalPointerMove(new PointerEvent("pointermove", {clientX: 20, clientY: 67}));
+        expect(draggable.hoverId).toBe("a");
+        expect(draggable.hoverPlacement).toBe("after");
+
+        // A little jitter around that same 1px-past-midpoint spot -
+        // never budges.
+        for (const y of [68, 67, 69, 66, 67]) {
+            draggable.onGlobalPointerMove(new PointerEvent("pointermove", {clientX: 20, clientY: y}));
+            expect(draggable.hoverId, `hoverId flipped at y=${y}`).toBe("a");
+            expect(draggable.hoverPlacement, `hoverPlacement flipped at y=${y}`).toBe("after");
+        }
+    });
+});
+
 // Reported alongside the intuitiveness feedback above: a physical
 // confirmation that doesn't depend on catching a visual highlight
 // mid-gesture - particularly useful on mobile, where the finger itself
