@@ -3,6 +3,23 @@
 All notable changes to this project are documented here. Versions follow the
 integration's `manifest.json`/card's `package.json` (kept in lockstep).
 
+## 1.2.1
+
+CI-only fix, no functional change to the integration or card.
+
+- **Fixed: frontend CI failed on `npm ci`.** 1.2.0's own `package-lock.json`
+  regeneration ran under Node 24's bundled npm (v11) locally, but CI pins
+  Node 22 (npm v10 - see `.github/workflows/test.yml`), whose own `npm ci`
+  is stricter about the lockfile matching exactly what it expects - it
+  rejected the v11-authored lockfile outright for several esbuild
+  platform-optional-dependency entries v10 wants listed explicitly that
+  v11 had pruned. Reproduced the actual CI failure locally first, then
+  regenerated the lockfile under Node 22 specifically. The built
+  `frontend_dist/todo-overlay.js` is byte-identical either way - only
+  `package-lock.json` changes, so nothing about an existing install
+  (HACS pulls the tagged file tree directly, not via `npm ci`) was ever
+  affected.
+
 ## 1.2.0
 
 A new feature (category/person pins) plus a scroll-jump fix, a real drag-
