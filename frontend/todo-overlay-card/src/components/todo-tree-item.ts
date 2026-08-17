@@ -1057,12 +1057,21 @@ export class TodoTreeItem extends LitElement {
     }
 
     // Always shown as a section header - bold/tracked title, no
-    // checkbox, collapsible - regardless of whether it currently has
-    // any children: either because it genuinely does, or because it's
-    // pinned as a stand-in for one that will. The completed-count badge
-    // (see childStatus) and the collapse chevron deliberately stay
-    // gated on REAL children only (hasChildren) - see this getter's own
-    // call sites for why neither should react to a pin alone.
+    // checkbox, collapsible-LOOKING, regardless of whether it currently
+    // has any children: either because it genuinely does, or because
+    // it's pinned as a stand-in for one that will. Live-reported: a
+    // pinned-but-childless row showing no chevron at all read as a
+    // plain list item, not a category/person - visually inconsistent
+    // with every other structural row. The chevron (see the template's
+    // own collapse-toggle branch) and isCollapsed below both follow
+    // this getter now, not raw hasChildren - collapsing a childless
+    // pinned row is a harmless no-op (there's nothing under it to hide,
+    // see the <ul> render condition, which stays gated on the real
+    // hasChildren), but the chevron itself, and its own rotation on
+    // click, still needs to be there and to visibly respond. The
+    // completed-count badge (see childStatus) is the one thing that
+    // deliberately stays gated on REAL children only - a pin alone
+    // shouldn't ever show a "0/0".
     private get isStructural(): boolean {
         return this.hasChildren || this.isPinned;
     }
@@ -1072,7 +1081,7 @@ export class TodoTreeItem extends LitElement {
     }
 
     private get isCollapsed(): boolean {
-        return this.hasChildren && this.collapsedIds.has(this.item.id);
+        return this.isStructural && this.collapsedIds.has(this.item.id);
     }
 
     private get childStatus(): {completed: number; total: number} | undefined {
@@ -1684,7 +1693,7 @@ export class TodoTreeItem extends LitElement {
                             ? ""
                             : html`
                                 ${
-                                    this.hasChildren
+                                    this.isStructural
                                         ? html`
                                             <button
                                                 class=${classMap({
