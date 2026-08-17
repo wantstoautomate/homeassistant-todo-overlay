@@ -166,6 +166,12 @@ class TreeMixin:
             survivor, *duplicates = group
             combined_quantity = quantities.get(survivor.id)
             combined_tags = list(tags.get(survivor.id, []))
+            # Not combinable like quantity/tags - a single value, not a
+            # sum or a set. The survivor's own pin_type always wins if it
+            # has one; only adopts a duplicate's pin_type when the
+            # survivor has none at all, so a merge never silently drops
+            # a pin that was only ever set on the duplicate being removed.
+            combined_pin_type = pin_types.get(survivor.id)
             # A duplicate's own due_datetime never transfers to the
             # survivor (only the survivor's own due_datetime matters), so
             # this only ever turns the flag on, and only when the
@@ -181,6 +187,9 @@ class TreeMixin:
                 for tag in tags.get(duplicate.id, []):
                     if tag not in combined_tags:
                         combined_tags.append(tag)
+
+                if combined_pin_type is None:
+                    combined_pin_type = pin_types.get(duplicate.id)
 
                 if duplicate.id in trigger_on_due:
                     survivor_trigger_on_due = True
@@ -218,6 +227,10 @@ class TreeMixin:
             if combined_tags:
                 await self._metadata_store.set_tags(entity_id, survivor.id, combined_tags)
                 tags[survivor.id] = combined_tags
+
+            if combined_pin_type and pin_types.get(survivor.id) != combined_pin_type:
+                await self._metadata_store.set_pin_type(entity_id, survivor.id, combined_pin_type)
+                pin_types[survivor.id] = combined_pin_type
 
             if survivor_trigger_on_due and survivor.due_datetime and survivor.id not in trigger_on_due:
                 await self._metadata_store.set_trigger_on_due(entity_id, survivor.id, True)

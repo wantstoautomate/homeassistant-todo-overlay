@@ -216,13 +216,46 @@ class ItemMixin:
             )
 
         async with self._lock_for(entity_id):
-            await self._metadata_store.set_pin_type(entity_id, item_id, pin_type)
+            await self._set_pin_type_impl(entity_id, item_id, pin_type)
+
+    async def _set_pin_type_impl(
+        self,
+        entity_id: str,
+        item_id: str,
+        pin_type: str | None,
+    ) -> None:
+        """The actual body of set_pin_type(), callable by
+        set_pin_type_by_item() without re-entering self._lock_for() - see
+        TreeMixin._get_list_impl()'s docstring for why that split exists.
+        Validation already happened in set_pin_type() before the lock was
+        ever taken, so this trusts pin_type as-is."""
+
+        await self._metadata_store.set_pin_type(entity_id, item_id, pin_type)
 
         items = await self._adapter.get_items(entity_id)
         item = next((candidate for candidate in items if candidate.id == item_id), None)
 
         if item is not None:
             self._fire_event(entity_id, item_id, item.title, "pin_type_changed", pin_type=pin_type)
+
+    async def set_pin_type_by_item(
+        self,
+        entity_id: str,
+        item: str,
+        pin_type: str | None,
+    ) -> None:
+        """Set an item's pin type, identified by uid or title - the
+        service-facing counterpart to set_pin_type(), which callers with
+        a real item_id already in hand (the frontend) use directly."""
+
+        if pin_type is not None and pin_type not in PIN_TYPES:
+            raise InvalidPinTypeError(
+                f"pin_type must be one of {sorted(PIN_TYPES)} or None, got {pin_type!r}"
+            )
+
+        async with self._lock_for(entity_id):
+            resolved = await self._resolve_item(entity_id, item)
+            await self._set_pin_type_impl(entity_id, resolved.id, pin_type)
 
     async def set_tags(
         self,

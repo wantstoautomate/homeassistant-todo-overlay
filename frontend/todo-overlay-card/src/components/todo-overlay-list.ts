@@ -474,13 +474,38 @@ function findDropTarget(
         return undefined;
     }
 
-    const rawDistances = rows.map(row => (
-        y < row.rect.top
+    // Tracks both the RAW nearest row (no hysteresis at all) and the
+    // hysteresis-adjusted nearest row in the same single pass - each
+    // row's distance is computed once and fed into both. Which one
+    // actually gets used is decided once, after the loop: see
+    // `nearest`'s own comment below for why raw wins whenever it found
+    // a genuine zero-distance row.
+    let nearestRaw = rows[0];
+    let nearestRawDistance = Infinity;
+    let nearestWithHysteresis = rows[0];
+    let nearestWithHysteresisDistance = Infinity;
+
+    for (const row of rows) {
+        const distance = y < row.rect.top
             ? row.rect.top - y
             : y > row.rect.bottom
                 ? y - row.rect.bottom
-                : 0
-    ));
+                : 0;
+
+        if (distance < nearestRawDistance) {
+            nearestRaw = row;
+            nearestRawDistance = distance;
+        }
+
+        const hysteresisDistance = stickyNearestRowId !== undefined && row.id === stickyNearestRowId
+            ? Math.max(0, distance - ROW_SWITCH_HYSTERESIS_PX)
+            : distance;
+
+        if (hysteresisDistance < nearestWithHysteresisDistance) {
+            nearestWithHysteresis = row;
+            nearestWithHysteresisDistance = hysteresisDistance;
+        }
+    }
 
     // The pointer sitting literally inside some row's own rect (raw
     // distance 0) is completely unambiguous - there's nothing for
@@ -490,23 +515,7 @@ function findDropTarget(
     // withhold hysteresis in that one case - it stays fully in effect
     // for the genuinely ambiguous "pointer is between two rows, inside
     // neither" case this exists for in the first place.
-    const pointerIsInsideSomeRow = rawDistances.some(distance => distance === 0);
-
-    let nearest = rows[0];
-    let nearestDistance = Infinity;
-
-    rows.forEach((row, i) => {
-        let distance = rawDistances[i];
-
-        if (!pointerIsInsideSomeRow && stickyNearestRowId !== undefined && row.id === stickyNearestRowId) {
-            distance = Math.max(0, distance - ROW_SWITCH_HYSTERESIS_PX);
-        }
-
-        if (distance < nearestDistance) {
-            nearest = row;
-            nearestDistance = distance;
-        }
-    });
+    const nearest = nearestRawDistance === 0 ? nearestRaw : nearestWithHysteresis;
 
     // The empty-list placeholder - nothing to be before/after/inside OF,
     // so the only meaningful placement is "become this entity's first
@@ -2088,10 +2097,25 @@ export class TodoOverlayList extends LitElement {
                     dueDate,
                     dueDatetime,
                 });
-                await setQuantity(this.hass, this.entity, this.dialogItem.id, quantity);
-                await setTags(this.hass, this.entity, this.dialogItem.id, tags);
-                await setTriggerOnDue(this.hass, this.entity, this.dialogItem.id, value.triggerOnDue);
-                await setPinType(this.hass, this.entity, this.dialogItem.id, pinType);
+                // This one has to finish first, not join the batch below -
+                // setTriggerOnDue's own backend validation requires the
+                // item's due_datetime to already be persisted (see
+                // DueTimeRequiredError), which is exactly what the
+                // updateItem call above just wrote. Racing them via
+                // Promise.all risks setTriggerOnDue's websocket message
+                // being processed before that write lands, wrongly
+                // rejecting a due-time+trigger set in the very same edit.
+                // The four calls below don't depend on each other or on
+                // updateItem in that same way (each targets its own
+                // metadata_store key), so batching them concurrently -
+                // rather than the previous four separate sequential round
+                // trips - is safe.
+                await Promise.all([
+                    setQuantity(this.hass, this.entity, this.dialogItem.id, quantity),
+                    setTags(this.hass, this.entity, this.dialogItem.id, tags),
+                    setTriggerOnDue(this.hass, this.entity, this.dialogItem.id, value.triggerOnDue),
+                    setPinType(this.hass, this.entity, this.dialogItem.id, pinType),
+                ]);
             } else {
                 await createItem(this.hass, this.entity, {
                     title: value.title,

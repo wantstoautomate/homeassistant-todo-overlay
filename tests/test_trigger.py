@@ -42,12 +42,12 @@ async def _attach(trigger, triggered: list[dict]):
 
 
 @pytest.mark.asyncio
-async def test_async_get_triggers_registers_all_eight_actions():
+async def test_async_get_triggers_registers_all_nine_actions():
     triggers = await async_get_triggers(hass=None)
 
     assert set(triggers.keys()) == {
         "created", "completed", "uncompleted", "removed",
-        "tag_added", "tag_removed", "quantity_changed", "due",
+        "tag_added", "tag_removed", "quantity_changed", "pin_type_changed", "due",
     }
 
 

@@ -3955,20 +3955,23 @@ function findDropTarget(y3, rows, sticky, stickyNearestRowId) {
   if (rows.length === 0) {
     return void 0;
   }
-  const rawDistances = rows.map((row) => y3 < row.rect.top ? row.rect.top - y3 : y3 > row.rect.bottom ? y3 - row.rect.bottom : 0);
-  const pointerIsInsideSomeRow = rawDistances.some((distance) => distance === 0);
-  let nearest = rows[0];
-  let nearestDistance = Infinity;
-  rows.forEach((row, i7) => {
-    let distance = rawDistances[i7];
-    if (!pointerIsInsideSomeRow && stickyNearestRowId !== void 0 && row.id === stickyNearestRowId) {
-      distance = Math.max(0, distance - ROW_SWITCH_HYSTERESIS_PX);
+  let nearestRaw = rows[0];
+  let nearestRawDistance = Infinity;
+  let nearestWithHysteresis = rows[0];
+  let nearestWithHysteresisDistance = Infinity;
+  for (const row of rows) {
+    const distance = y3 < row.rect.top ? row.rect.top - y3 : y3 > row.rect.bottom ? y3 - row.rect.bottom : 0;
+    if (distance < nearestRawDistance) {
+      nearestRaw = row;
+      nearestRawDistance = distance;
     }
-    if (distance < nearestDistance) {
-      nearest = row;
-      nearestDistance = distance;
+    const hysteresisDistance = stickyNearestRowId !== void 0 && row.id === stickyNearestRowId ? Math.max(0, distance - ROW_SWITCH_HYSTERESIS_PX) : distance;
+    if (hysteresisDistance < nearestWithHysteresisDistance) {
+      nearestWithHysteresis = row;
+      nearestWithHysteresisDistance = hysteresisDistance;
     }
-  });
+  }
+  const nearest = nearestRawDistance === 0 ? nearestRaw : nearestWithHysteresis;
   if (nearest.id === void 0) {
     return { id: void 0, entityId: nearest.entityId, placement: "inside", depth: 0, nearestRowId: void 0 };
   }
@@ -4630,10 +4633,12 @@ var TodoOverlayList = class extends i4 {
           dueDate,
           dueDatetime
         });
-        await setQuantity(this.hass, this.entity, this.dialogItem.id, quantity);
-        await setTags(this.hass, this.entity, this.dialogItem.id, tags);
-        await setTriggerOnDue(this.hass, this.entity, this.dialogItem.id, value.triggerOnDue);
-        await setPinType(this.hass, this.entity, this.dialogItem.id, pinType);
+        await Promise.all([
+          setQuantity(this.hass, this.entity, this.dialogItem.id, quantity),
+          setTags(this.hass, this.entity, this.dialogItem.id, tags),
+          setTriggerOnDue(this.hass, this.entity, this.dialogItem.id, value.triggerOnDue),
+          setPinType(this.hass, this.entity, this.dialogItem.id, pinType)
+        ]);
       } else {
         await createItem(this.hass, this.entity, {
           title: value.title,

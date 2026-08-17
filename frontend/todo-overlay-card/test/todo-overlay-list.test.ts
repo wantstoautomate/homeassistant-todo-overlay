@@ -1927,6 +1927,51 @@ describe("todo-overlay-list edit-dialog delete (diagnostic)", () => {
         }));
     });
 
+    // quantity/tags/triggerOnDue/pinType all batch into one Promise.all
+    // now (see onDialogSave's own comment) - but update_item has to
+    // fully precede that batch, not join it: setTriggerOnDue's backend
+    // validation requires the item's due_datetime to already be
+    // persisted (see DueTimeRequiredError), which is exactly what
+    // update_item's own dueDate/dueTime fields just wrote. Racing them
+    // would risk setTriggerOnDue's message being processed before that
+    // write lands. FakeConnection.sendMessagePromise pushes onto `sent`
+    // synchronously, before its own internal await - so message ORDER
+    // here directly reflects call order, making this a meaningful check,
+    // not just a coincidence of both happening to appear somewhere in
+    // the array.
+    it("sends update_item (with the due date/time) strictly before set_trigger_on_due, even though the other fields now batch", async () => {
+        const {el, hass} = await renderList({
+            entity_id: ENTITY_ID,
+            items: [makeItem({id: "1", title: "Renew passport"})],
+        });
+
+        const treeItem = deepQueryAll(el.shadowRoot!, "todo-overlay-tree-item")[0];
+        treeItem.dispatchEvent(new CustomEvent("tree-pointer-down", {
+            detail: {id: "1"}, bubbles: true, composed: true,
+        }));
+        treeItem.dispatchEvent(new CustomEvent("tree-pointer-up", {
+            detail: {id: "1", pressDurationMs: 600, moved: false}, bubbles: true, composed: true,
+        }));
+        await el.updateComplete;
+
+        const dialog = el.shadowRoot?.querySelector("todo-overlay-item-dialog");
+
+        dialog!.dispatchEvent(new CustomEvent("dialog-save", {
+            detail: {
+                title: "Renew passport", quantity: "", tags: "", description: "",
+                dueDate: "2026-06-01", dueTime: "09:00", triggerOnDue: true,
+            },
+            bubbles: true, composed: true,
+        }));
+        await flushAsync();
+
+        const updateItemIndex = hass.connection.sent.findIndex(m => m.type === "todo_overlay/update_item");
+        const setTriggerIndex = hass.connection.sent.findIndex(m => m.type === "todo_overlay/set_trigger_on_due");
+
+        expect(updateItemIndex).toBeGreaterThanOrEqual(0);
+        expect(setTriggerIndex).toBeGreaterThan(updateItemIndex);
+    });
+
     it("creating an item with a pin type sends it as part of todo_overlay/create_item", async () => {
         const {el, hass} = await renderList(
             {entity_id: ENTITY_ID, items: []},

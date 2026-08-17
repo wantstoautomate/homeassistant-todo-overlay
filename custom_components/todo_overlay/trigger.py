@@ -1,6 +1,7 @@
 """Automation triggers: one distinct trigger per kind of change TodoManager
 reports (item created/completed/uncompleted/removed, a tag added/removed,
-a quantity changed, or an opted-in item's due time arriving) - see
+a quantity changed, a pin type set/cleared, or an opted-in item's due
+time arriving) - see
 manager.py's _fire_event()/fire_due_event() and const.py's
 EVENT_ITEM_CHANGED. Each one uses the standard target selector (the same
 entity/device/area picker every other HA trigger uses) for its todo list(s),
@@ -132,6 +133,15 @@ class TodoOverlayQuantityChangedTrigger(_TodoOverlayItemTrigger):
     _item_action = "quantity_changed"
 
 
+class TodoOverlayPinTypeChangedTrigger(_TodoOverlayItemTrigger):
+    """Fires when an item's pin type is set or cleared (see
+    manager_items.py's set_pin_type) - e.g. to notify when a person's
+    section gains its first item, or to react to a category being
+    pinned/unpinned."""
+
+    _item_action = "pin_type_changed"
+
+
 class TodoOverlayItemDueTrigger(_TodoOverlayItemTrigger):
     """Fires when an opted-in item's due time arrives."""
 
@@ -146,6 +156,7 @@ TRIGGERS: dict[str, type[Trigger]] = {
     "tag_added": TodoOverlayTagAddedTrigger,
     "tag_removed": TodoOverlayTagRemovedTrigger,
     "quantity_changed": TodoOverlayQuantityChangedTrigger,
+    "pin_type_changed": TodoOverlayPinTypeChangedTrigger,
     "due": TodoOverlayItemDueTrigger,
 }
 
