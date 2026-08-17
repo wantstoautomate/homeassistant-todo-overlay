@@ -201,44 +201,41 @@ describe("todo-overlay-tree-item", () => {
         expect(el.shadowRoot?.querySelector(".person-avatar")).toBeNull();
     });
 
-    // Live-reported: a pinned-but-childless row showed no chevron at all
-    // (just the plain spacer, same as any leaf), which read as an
-    // ordinary list item rather than a category/person - visually
-    // inconsistent with every other structural row. The chevron now
-    // follows isStructural (real children OR pinned), not raw
-    // hasChildren - collapsing it is a harmless no-op (there's nothing
-    // under it to hide), but it still needs to be there, and to
-    // visibly respond to a click, for the row to read as structural at
-    // a glance.
-    it("renders the collapse chevron for a pinned item even with zero children, not the plain spacer", async () => {
+    // Live-reported: a pinned-but-childless row first got the SAME real
+    // chevron a row with actual children gets - which read as "there's
+    // something to expand" when there wasn't. Landed on instead (see
+    // .structural-placeholder's own comment): a distinct, static dash -
+    // immediately legible as "structural, but nothing here yet" without
+    // inviting a click that would do nothing.
+    it("renders a static placeholder dash for a pinned item with zero children - not the real chevron, not the blank spacer", async () => {
         const el = await renderItem(makeItem({pin_type: "person", title: "Brodie"}));
 
-        expect(el.shadowRoot?.querySelector(".collapse-toggle")).not.toBeNull();
+        expect(el.shadowRoot?.querySelector(".collapse-toggle")).toBeNull();
         expect(el.shadowRoot?.querySelector(".collapse-toggle-spacer")).toBeNull();
+        expect(el.shadowRoot?.querySelector(".structural-placeholder")).not.toBeNull();
     });
 
-    it("toggles the pinned-but-childless chevron's own rotation on click, even though there's nothing to collapse", async () => {
+    it("the placeholder dash is not a button and does not dispatch tree-toggle-collapse when clicked", async () => {
         const el = await renderItem(makeItem({pin_type: "person", title: "Brodie"}));
 
-        const chevron = el.shadowRoot?.querySelector(".collapse-toggle") as HTMLElement;
-        expect(chevron.classList.contains("collapsed")).toBe(false);
+        const placeholder = el.shadowRoot?.querySelector(".structural-placeholder") as HTMLElement;
+        expect(placeholder.tagName).not.toBe("BUTTON");
 
-        let detail: {id: string} | undefined;
-        el.addEventListener("tree-toggle-collapse", (e) => {
-            detail = (e as CustomEvent<{id: string}>).detail;
-        });
-        chevron.click();
+        let fired = false;
+        el.addEventListener("tree-toggle-collapse", () => { fired = true; });
+        placeholder.click();
 
-        expect(detail).toEqual({id: "1"});
+        expect(fired).toBe(false);
+    });
 
-        // The list owns collapsedIds - re-render as it would after
-        // toggling it in.
-        el.collapsedIds = new Set(["1"]);
-        await el.updateComplete;
+    it("still renders the real, clickable chevron for a pinned item that DOES have children", async () => {
+        const el = await renderItem(makeItem({
+            pin_type: "person", title: "Brodie",
+            children: [makeItem({id: "2", title: "Buy milk"})],
+        }));
 
-        expect(el.shadowRoot?.querySelector(".collapse-toggle")?.classList.contains("collapsed")).toBe(true);
-        // Still nothing to actually hide - no <ul> ever existed here.
-        expect(el.shadowRoot?.querySelector("ul")).toBeNull();
+        expect(el.shadowRoot?.querySelector(".collapse-toggle")).not.toBeNull();
+        expect(el.shadowRoot?.querySelector(".structural-placeholder")).toBeNull();
     });
 
     it("does not render children when collapsed", async () => {

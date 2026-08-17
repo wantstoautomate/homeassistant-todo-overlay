@@ -2341,21 +2341,16 @@ var TodoTreeItem = class extends i4 {
     return Boolean(this.item.synthetic);
   }
   // Always shown as a section header - bold/tracked title, no
-  // checkbox, collapsible-LOOKING, regardless of whether it currently
-  // has any children: either because it genuinely does, or because
-  // it's pinned as a stand-in for one that will. Live-reported: a
-  // pinned-but-childless row showing no chevron at all read as a
-  // plain list item, not a category/person - visually inconsistent
-  // with every other structural row. The chevron (see the template's
-  // own collapse-toggle branch) and isCollapsed below both follow
-  // this getter now, not raw hasChildren - collapsing a childless
-  // pinned row is a harmless no-op (there's nothing under it to hide,
-  // see the <ul> render condition, which stays gated on the real
-  // hasChildren), but the chevron itself, and its own rotation on
-  // click, still needs to be there and to visibly respond. The
-  // completed-count badge (see childStatus) is the one thing that
-  // deliberately stays gated on REAL children only - a pin alone
-  // shouldn't ever show a "0/0".
+  // checkbox - regardless of whether it currently has any children:
+  // either because it genuinely does, or because it's pinned as a
+  // stand-in for one that will. The leading collapse-slot glyph (see
+  // the template's own collapse-toggle branch) reacts to this too,
+  // but not uniformly - see its own comment for why a childless
+  // pinned row gets a distinct, non-interactive placeholder rather
+  // than the real (clickable) chevron a row with actual children
+  // gets. The completed-count badge (see childStatus) deliberately
+  // stays gated on REAL children only - a pin alone shouldn't ever
+  // show a "0/0".
   get isStructural() {
     return this.hasChildren || this.isPinned;
   }
@@ -2363,7 +2358,7 @@ var TodoTreeItem = class extends i4 {
     return this.item.children.length > 0;
   }
   get isCollapsed() {
-    return this.isStructural && this.collapsedIds.has(this.item.id);
+    return this.hasChildren && this.collapsedIds.has(this.item.id);
   }
   get childStatus() {
     if (!this.hasChildren) {
@@ -2702,7 +2697,7 @@ var TodoTreeItem = class extends i4 {
                                 ></div>
                             ` : ""}
                     ${isBeingDragged ? "" : b2`
-                                ${this.isStructural ? b2`
+                                ${this.hasChildren ? b2`
                                             <button
                                                 class=${e6({
       "collapse-toggle": true,
@@ -2714,7 +2709,11 @@ var TodoTreeItem = class extends i4 {
                                             >
                                                 ${CHEVRON_ICON}
                                             </button>
-                                        ` : b2`<span class="collapse-toggle-spacer"></span>`}
+                                        ` : this.isStructural ? b2`
+                                                <span class="structural-placeholder" aria-hidden="true">
+                                                    <span class="dash"></span>
+                                                </span>
+                                            ` : b2`<span class="collapse-toggle-spacer"></span>`}
 
                                 ${// A person pin gets a small initial
     // avatar in place of the checkbox
@@ -3144,6 +3143,34 @@ TodoTreeItem.styles = i`
             flex-shrink: 0;
             width: 20px;
             margin-inline-start: -4px;
+        }
+
+        /* A pinned item with no children yet (see isStructural) gets
+           this instead of the real collapse-toggle - same slot
+           geometry as both that and the spacer, so nothing else in the
+           row shifts depending on which of the three renders. A short
+           static rule, deliberately not a button and not shaped like
+           the chevron - there's nothing to collapse, and the whole
+           point is to say that immediately rather than invite a click
+           that would do nothing (see the live-reported feedback this
+           replaced: the real chevron here read as "this has content to
+           expand," which was actively misleading). */
+        .structural-placeholder {
+            flex-shrink: 0;
+            width: 20px;
+            height: 20px;
+            margin-inline-start: -4px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .structural-placeholder .dash {
+            width: 8px;
+            height: 2px;
+            border-radius: 1px;
+            background: var(--secondary-text-color);
+            opacity: 0.6;
         }
 
         .status-chip {
