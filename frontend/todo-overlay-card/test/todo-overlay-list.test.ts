@@ -19,6 +19,7 @@ function makeItem(overrides: Partial<TodoItem> = {}): TodoItem {
         tags: [],
         trigger_on_due: false,
         pin_type: null,
+        linked: false,
         children: [],
         ...overrides,
     };
@@ -1925,6 +1926,108 @@ describe("todo-overlay-list edit-dialog delete (diagnostic)", () => {
             item_id: "1",
             pin_type: "person",
         }));
+    });
+
+    // Live use case: mirroring an item on this list onto a
+    // cross-instance-linked "Shared" list (see the backend's own
+    // item_links.py) via the item dialog's own "Link to shared list"
+    // checkbox.
+    describe("item linking", () => {
+        async function openEditDialog(el: TodoOverlayList): Promise<Element> {
+            const treeItem = deepQueryAll(el.shadowRoot!, "todo-overlay-tree-item")[0];
+            treeItem.dispatchEvent(new CustomEvent("tree-pointer-down", {
+                detail: {id: "1"}, bubbles: true, composed: true,
+            }));
+            treeItem.dispatchEvent(new CustomEvent("tree-pointer-up", {
+                detail: {id: "1", pressDurationMs: 600, moved: false}, bubbles: true, composed: true,
+            }));
+            await el.updateComplete;
+
+            return el.shadowRoot!.querySelector("todo-overlay-item-dialog")!;
+        }
+
+        it("newly ticking the checkbox sends todo_overlay/link_item, after the rest of the edit lands", async () => {
+            const {el, hass} = await renderList({
+                entity_id: ENTITY_ID,
+                items: [makeItem({id: "1", title: "Tent", linked: false})],
+            });
+
+            const dialog = await openEditDialog(el);
+
+            dialog.dispatchEvent(new CustomEvent("dialog-save", {
+                detail: {
+                    title: "Tent", quantity: "", tags: "", description: "",
+                    dueDate: "", dueTime: "", triggerOnDue: false, pinType: "",
+                    linked: true, linkTarget: "Brodie",
+                },
+                bubbles: true, composed: true,
+            }));
+            await flushAsync();
+
+            expect(hass.connection.sent).toContainEqual(expect.objectContaining({
+                type: "todo_overlay/link_item",
+                entity_id: ENTITY_ID,
+                item_id: "1",
+                target_parent_id: "Brodie",
+            }));
+
+            // update_item (and the batched quantity/tags/trigger/pin
+            // calls) must have already been sent before link_item - the
+            // mirror copies this item's CURRENT state, not whatever it
+            // was before this same save.
+            const updateIndex = hass.connection.sent.findIndex(m => m.type === "todo_overlay/update_item");
+            const linkIndex = hass.connection.sent.findIndex(m => m.type === "todo_overlay/link_item");
+            expect(updateIndex).toBeGreaterThanOrEqual(0);
+            expect(linkIndex).toBeGreaterThan(updateIndex);
+        });
+
+        it("unticking an already-linked item's checkbox sends todo_overlay/unlink_item", async () => {
+            const {el, hass} = await renderList({
+                entity_id: ENTITY_ID,
+                items: [makeItem({id: "1", title: "Tent", linked: true})],
+            });
+
+            const dialog = await openEditDialog(el);
+
+            dialog.dispatchEvent(new CustomEvent("dialog-save", {
+                detail: {
+                    title: "Tent", quantity: "", tags: "", description: "",
+                    dueDate: "", dueTime: "", triggerOnDue: false, pinType: "",
+                    linked: false, linkTarget: "",
+                },
+                bubbles: true, composed: true,
+            }));
+            await flushAsync();
+
+            expect(hass.connection.sent).toContainEqual(expect.objectContaining({
+                type: "todo_overlay/unlink_item",
+                entity_id: ENTITY_ID,
+                item_id: "1",
+            }));
+            expect(hass.connection.sent.some(m => m.type === "todo_overlay/link_item")).toBe(false);
+        });
+
+        it("saving with the linked state unchanged sends neither link_item nor unlink_item", async () => {
+            const {el, hass} = await renderList({
+                entity_id: ENTITY_ID,
+                items: [makeItem({id: "1", title: "Tent", linked: true})],
+            });
+
+            const dialog = await openEditDialog(el);
+
+            dialog.dispatchEvent(new CustomEvent("dialog-save", {
+                detail: {
+                    title: "Tent", quantity: "", tags: "", description: "",
+                    dueDate: "", dueTime: "", triggerOnDue: false, pinType: "",
+                    linked: true, linkTarget: "",
+                },
+                bubbles: true, composed: true,
+            }));
+            await flushAsync();
+
+            expect(hass.connection.sent.some(m => m.type === "todo_overlay/link_item")).toBe(false);
+            expect(hass.connection.sent.some(m => m.type === "todo_overlay/unlink_item")).toBe(false);
+        });
     });
 
     // quantity/tags/triggerOnDue/pinType all batch into one Promise.all

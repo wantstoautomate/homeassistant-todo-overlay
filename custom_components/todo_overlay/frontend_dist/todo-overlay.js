@@ -778,6 +778,21 @@ async function setPinType(hass, entityId, itemId, pinType) {
     pin_type: pinType
   });
 }
+async function linkItem(hass, entityId, itemId, targetParentId) {
+  await hass.connection.sendMessagePromise({
+    type: "todo_overlay/link_item",
+    entity_id: entityId,
+    item_id: itemId,
+    target_parent_id: targetParentId
+  });
+}
+async function unlinkItem(hass, entityId, itemId) {
+  await hass.connection.sendMessagePromise({
+    type: "todo_overlay/unlink_item",
+    entity_id: entityId,
+    item_id: itemId
+  });
+}
 async function setTags(hass, entityId, itemId, tags) {
   await hass.connection.sendMessagePromise({
     type: "todo_overlay/set_tags",
@@ -967,7 +982,9 @@ var EMPTY_FORM_VALUE = {
   dueDate: "",
   dueTime: "",
   triggerOnDue: false,
-  pinType: ""
+  pinType: "",
+  linked: false,
+  linkTarget: ""
 };
 function digitsOnly(raw, maxLen) {
   return raw.replace(/\D/g, "").slice(0, maxLen);
@@ -997,6 +1014,14 @@ var TodoItemDialog = class extends i4 {
     this.dueMinute = "";
     this.dueAmPm = "AM";
     this.dateTimePartsInitialized = false;
+    // Captured once, at the same moment draftValue itself is seeded
+    // (see willUpdate) - NOT read live off _seedValue, which keeps
+    // getting reassigned on every parent re-render regardless of
+    // whether this dialog has actually consumed it yet (see
+    // _seedValue's own comment). isCreatingANewLink needs the ORIGINAL
+    // value this dialog session opened with, not whatever the parent
+    // happens to think right now.
+    this.originallyLinked = false;
     this.datePickerOpen = false;
     this.datePickerViewYear = 0;
     this.datePickerViewMonth = 0;
@@ -1046,6 +1071,7 @@ var TodoItemDialog = class extends i4 {
     }
     this.dateTimePartsInitialized = true;
     this.draftValue = this._seedValue;
+    this.originallyLinked = this._seedValue.linked;
     const [year, month, day] = this._seedValue.dueDate ? this._seedValue.dueDate.split("-") : ["", "", ""];
     this.dueYear = year ?? "";
     this.dueMonth = month ?? "";
@@ -1120,6 +1146,18 @@ var TodoItemDialog = class extends i4 {
   onTriggerOnDueChanged(e7) {
     const checked = e7.target.checked;
     this.draftValue = { ...this.draftValue, triggerOnDue: checked };
+  }
+  onLinkedChanged(e7) {
+    const checked = e7.target.checked;
+    this.draftValue = { ...this.draftValue, linked: checked };
+  }
+  // True only while this dialog session is creating a brand new link -
+  // the override control (see render()) only makes sense THEN, not
+  // for an item that was already linked when the dialog opened (this
+  // component has no "move an existing link" action - see
+  // item_links.py's own link_item, which only ever creates).
+  get isCreatingANewLink() {
+    return this.draftValue.linked && !this.originallyLinked;
   }
   updateField(field, fieldValue) {
     this.draftValue = { ...this.draftValue, [field]: fieldValue };
@@ -1309,6 +1347,37 @@ var TodoItemDialog = class extends i4 {
                                     Always shown as a section header, even with nothing under it yet.
                                 </div>
                             ` : ""}
+                </div>
+
+                <div class="field">
+                    <div class="complete-toggle">
+                        <ha-checkbox
+                            id="todo-item-linked"
+                            .checked=${this.draftValue.linked}
+                            @change=${this.onLinkedChanged}
+                        ></ha-checkbox>
+                        <span>Link to shared list</span>
+                    </div>
+                    ${this.isCreatingANewLink ? b2`
+                                <input
+                                    id="todo-item-link-target"
+                                    type="text"
+                                    class="link-target-input"
+                                    placeholder="Destination (optional) - e.g. Brodie"
+                                    .value=${this.draftValue.linkTarget}
+                                    @input=${(e7) => this.updateField("linkTarget", e7.target.value)}
+                                />
+                                <div class="field-hint">
+                                    Creates a copy on your configured shared list, kept in sync both ways -
+                                    completing, editing, or deleting either one affects both. Leave blank
+                                    to use the default destination.
+                                </div>
+                            ` : this.draftValue.linked ? b2`
+                                    <div class="field-hint">
+                                        Linked - unticking this only unlinks it, the item itself is
+                                        untouched.
+                                    </div>
+                                ` : ""}
                 </div>
 
                 ${showDue ? b2`
@@ -2452,6 +2521,7 @@ function groupSiblingsForDisplay(items, parentId) {
     tags: [],
     trigger_on_due: false,
     pin_type: null,
+    linked: false,
     children: plain,
     synthetic: true
   };
@@ -4966,7 +5036,9 @@ var TodoOverlayList = class extends i4 {
       dueDate: due.date,
       dueTime: due.time,
       triggerOnDue: item.trigger_on_due,
-      pinType: item.pin_type ?? ""
+      pinType: item.pin_type ?? "",
+      linked: item.linked,
+      linkTarget: ""
     };
   }
   async onDialogSave(e7) {
@@ -4997,6 +5069,11 @@ var TodoOverlayList = class extends i4 {
           setTriggerOnDue(this.hass, this.entity, this.dialogItem.id, value.triggerOnDue),
           setPinType(this.hass, this.entity, this.dialogItem.id, pinType)
         ]);
+        if (value.linked && !this.dialogItem.linked) {
+          await linkItem(this.hass, this.entity, this.dialogItem.id, value.linkTarget || void 0);
+        } else if (!value.linked && this.dialogItem.linked) {
+          await unlinkItem(this.hass, this.entity, this.dialogItem.id);
+        }
       } else {
         await createItem(this.hass, this.entity, {
           title: value.title,

@@ -37,6 +37,22 @@ export interface TodoItemFormValue {
     // so it can sit in the same string-keyed updateField() path every
     // other text field already goes through.
     pinType: "" | PinType;
+    // Mirrors this item onto another item elsewhere - possibly on a
+    // completely different todo.* entity (see the backend's own
+    // item_links.py) - e.g. "Tent" here mirrored onto "Brodie" on a
+    // separate, cross-instance-linked "Shared" list. Ticking this
+    // checkbox for the first time on an unlinked item creates that
+    // mirror on save; unticking it on an already-linked item severs
+    // the pairing (both items survive, independently).
+    linked: boolean;
+    // Only ever read on save when linked just flipped false -> true
+    // (see TodoOverlayList's own onDialogSave) - overrides the
+    // configured default destination for THIS item only, uid or title
+    // (same convention as every other "item" field), always within
+    // whichever list auto-resolves as the link target. "" means "use
+    // the configured default" (or the target list's own root, if
+    // there isn't one).
+    linkTarget: string;
 }
 
 export interface TodoItemDialogFieldSupport {
@@ -54,6 +70,8 @@ export const EMPTY_FORM_VALUE: TodoItemFormValue = {
     dueTime: "",
     triggerOnDue: false,
     pinType: "",
+    linked: false,
+    linkTarget: "",
 };
 
 // Digits only, capped to maxLen - shared by every day/month/year/hour/
@@ -489,6 +507,15 @@ export class TodoItemDialog extends LitElement {
 
     private dateTimePartsInitialized = false;
 
+    // Captured once, at the same moment draftValue itself is seeded
+    // (see willUpdate) - NOT read live off _seedValue, which keeps
+    // getting reassigned on every parent re-render regardless of
+    // whether this dialog has actually consumed it yet (see
+    // _seedValue's own comment). isCreatingANewLink needs the ORIGINAL
+    // value this dialog session opened with, not whatever the parent
+    // happens to think right now.
+    private originallyLinked = false;
+
     // The day/month/year segments are always the source of truth for
     // what's SELECTED - this panel is purely an alternate, visual way to
     // fill them in (a calendar to click through rather than digits to
@@ -551,6 +578,7 @@ export class TodoItemDialog extends LitElement {
 
         this.dateTimePartsInitialized = true;
         this.draftValue = this._seedValue;
+        this.originallyLinked = this._seedValue.linked;
 
         const [year, month, day] = this._seedValue.dueDate ? this._seedValue.dueDate.split("-") : ["", "", ""];
         this.dueYear = year ?? "";
@@ -640,7 +668,21 @@ export class TodoItemDialog extends LitElement {
         this.draftValue = {...this.draftValue, triggerOnDue: checked};
     }
 
-    private updateField(field: keyof Omit<TodoItemFormValue, "triggerOnDue">, fieldValue: string) {
+    private onLinkedChanged(e: Event) {
+        const checked = (e.target as unknown as {checked: boolean}).checked;
+        this.draftValue = {...this.draftValue, linked: checked};
+    }
+
+    // True only while this dialog session is creating a brand new link -
+    // the override control (see render()) only makes sense THEN, not
+    // for an item that was already linked when the dialog opened (this
+    // component has no "move an existing link" action - see
+    // item_links.py's own link_item, which only ever creates).
+    private get isCreatingANewLink(): boolean {
+        return this.draftValue.linked && !this.originallyLinked;
+    }
+
+    private updateField(field: keyof Omit<TodoItemFormValue, "triggerOnDue" | "linked">, fieldValue: string) {
         this.draftValue = {...this.draftValue, [field]: fieldValue};
     }
 
@@ -860,6 +902,44 @@ export class TodoItemDialog extends LitElement {
                                 </div>
                             `
                             : ""
+                    }
+                </div>
+
+                <div class="field">
+                    <div class="complete-toggle">
+                        <ha-checkbox
+                            id="todo-item-linked"
+                            .checked=${this.draftValue.linked}
+                            @change=${this.onLinkedChanged}
+                        ></ha-checkbox>
+                        <span>Link to shared list</span>
+                    </div>
+                    ${
+                        this.isCreatingANewLink
+                            ? html`
+                                <input
+                                    id="todo-item-link-target"
+                                    type="text"
+                                    class="link-target-input"
+                                    placeholder="Destination (optional) - e.g. Brodie"
+                                    .value=${this.draftValue.linkTarget}
+                                    @input=${(e: InputEvent) =>
+                                        this.updateField("linkTarget", (e.target as HTMLInputElement).value)}
+                                />
+                                <div class="field-hint">
+                                    Creates a copy on your configured shared list, kept in sync both ways -
+                                    completing, editing, or deleting either one affects both. Leave blank
+                                    to use the default destination.
+                                </div>
+                            `
+                            : this.draftValue.linked
+                                ? html`
+                                    <div class="field-hint">
+                                        Linked - unticking this only unlinks it, the item itself is
+                                        untouched.
+                                    </div>
+                                `
+                                : ""
                     }
                 </div>
 

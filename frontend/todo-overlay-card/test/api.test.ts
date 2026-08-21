@@ -5,6 +5,7 @@ import {
     createItem,
     deleteSavedList,
     getList,
+    linkItem,
     listSaved,
     loadList,
     moveItem,
@@ -16,6 +17,7 @@ import {
     setTags,
     setTriggerOnDue,
     transferItem,
+    unlinkItem,
 } from "../src/api";
 import {makeFakeHass} from "./fakes";
 
@@ -147,6 +149,36 @@ describe("api", () => {
 
         expect(hass.connection.sent).toEqual([{
             type: "todo_overlay/set_pin_type", entity_id: "todo.a", item_id: "1", pin_type: undefined,
+        }]);
+    });
+
+    it("linkItem sends item_id and the target_parent_id override", async () => {
+        const hass = makeFakeHass();
+
+        await linkItem(hass, "todo.a", "1", "Brodie");
+
+        expect(hass.connection.sent).toEqual([{
+            type: "todo_overlay/link_item", entity_id: "todo.a", item_id: "1", target_parent_id: "Brodie",
+        }]);
+    });
+
+    it("linkItem sends undefined target_parent_id to use the configured default", async () => {
+        const hass = makeFakeHass();
+
+        await linkItem(hass, "todo.a", "1", undefined);
+
+        expect(hass.connection.sent).toEqual([{
+            type: "todo_overlay/link_item", entity_id: "todo.a", item_id: "1", target_parent_id: undefined,
+        }]);
+    });
+
+    it("unlinkItem sends entity_id and item_id", async () => {
+        const hass = makeFakeHass();
+
+        await unlinkItem(hass, "todo.a", "1");
+
+        expect(hass.connection.sent).toEqual([{
+            type: "todo_overlay/unlink_item", entity_id: "todo.a", item_id: "1",
         }]);
     });
 

@@ -83,6 +83,87 @@ describe("todo-overlay-item-dialog", () => {
         });
     });
 
+    // Live use case: mirroring an item on a purely local list (e.g.
+    // "Tent" on "Travel") onto a cross-instance-linked "Shared" list, so
+    // completing/editing/deleting either one keeps the other in sync.
+    describe("item linking", () => {
+        function linkedCheckbox(el: TodoItemDialog): HTMLElement & {checked?: boolean} {
+            const rows = [...(el.shadowRoot?.querySelectorAll(".complete-toggle") ?? [])];
+            const row = rows.find(r => r.textContent?.includes("Link to shared list"))!;
+            return row.querySelector("ha-checkbox") as HTMLElement & {checked?: boolean};
+        }
+
+        function linkTargetInput(el: TodoItemDialog): HTMLInputElement | null {
+            return el.shadowRoot?.querySelector("#todo-item-link-target") as HTMLInputElement | null;
+        }
+
+        it("defaults to unchecked, with no destination override field shown", async () => {
+            const el = await renderDialog({value: {...EMPTY_FORM_VALUE, title: "Tent"}});
+
+            expect(linkedCheckbox(el).checked).toBe(false);
+            expect(linkTargetInput(el)).toBeNull();
+        });
+
+        it("seeds the checkbox as checked for an already-linked item, with no override field", async () => {
+            const el = await renderDialog({value: {...EMPTY_FORM_VALUE, title: "Tent", linked: true}});
+
+            expect(linkedCheckbox(el).checked).toBe(true);
+            // Already linked when the dialog opened - nothing new being
+            // created this session, so there's no destination to override.
+            expect(linkTargetInput(el)).toBeNull();
+        });
+
+        it("reveals the destination override only once ticked from unlinked - a NEW link being created", async () => {
+            const el = await renderDialog({value: {...EMPTY_FORM_VALUE, title: "Tent", linked: false}});
+            expect(linkTargetInput(el)).toBeNull();
+
+            const checkbox = linkedCheckbox(el);
+            (checkbox as unknown as {checked: boolean}).checked = true;
+            checkbox.dispatchEvent(new Event("change"));
+            await el.updateComplete;
+
+            expect(el.value.linked).toBe(true);
+            expect(linkTargetInput(el)).not.toBeNull();
+        });
+
+        it("emits the typed destination override on save", async () => {
+            const el = await renderDialog({value: {...EMPTY_FORM_VALUE, title: "Tent", linked: false}});
+
+            const checkbox = linkedCheckbox(el);
+            (checkbox as unknown as {checked: boolean}).checked = true;
+            checkbox.dispatchEvent(new Event("change"));
+            await el.updateComplete;
+
+            const input = linkTargetInput(el)!;
+            input.value = "Brodie";
+            input.dispatchEvent(new Event("input"));
+            await el.updateComplete;
+
+            expect(el.value.linkTarget).toBe("Brodie");
+
+            let detail: TodoItemFormValue | undefined;
+            el.addEventListener("dialog-save", (e) => {
+                detail = (e as CustomEvent<TodoItemFormValue>).detail;
+            });
+            saveButton(el).click();
+
+            expect(detail?.linked).toBe(true);
+            expect(detail?.linkTarget).toBe("Brodie");
+        });
+
+        it("unticking an already-linked item shows an unlink hint, not the destination override", async () => {
+            const el = await renderDialog({value: {...EMPTY_FORM_VALUE, title: "Tent", linked: true}});
+
+            const checkbox = linkedCheckbox(el);
+            (checkbox as unknown as {checked: boolean}).checked = false;
+            checkbox.dispatchEvent(new Event("change"));
+            await el.updateComplete;
+
+            expect(el.value.linked).toBe(false);
+            expect(linkTargetInput(el)).toBeNull();
+        });
+    });
+
     it("blocks Save (disabled, no event) when triggerOnDue is set without a due date/time", async () => {
         const value: TodoItemFormValue = {
             ...EMPTY_FORM_VALUE, title: "Renew passport", triggerOnDue: true,
@@ -142,7 +223,11 @@ describe("todo-overlay-item-dialog", () => {
             fieldSupport: {description: false, dueDate: true, dueDateTime: false},
         });
 
-        expect(el.shadowRoot?.querySelector(".complete-toggle")).toBeNull();
+        // Not "no .complete-toggle row at all" - the "Link to shared
+        // list" checkbox below uses that same row styling and always
+        // renders regardless of due-datetime support.
+        const rows = [...(el.shadowRoot?.querySelectorAll(".complete-toggle") ?? [])];
+        expect(rows.some(r => r.textContent?.includes("Trigger automation when due"))).toBe(false);
     });
 
     it("asks for confirmation before emitting dialog-delete by default", async () => {
