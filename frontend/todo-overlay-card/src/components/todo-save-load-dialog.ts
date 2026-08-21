@@ -550,17 +550,18 @@ export class TodoSaveLoadDialog extends LitElement {
         const here = this.pickerPath[this.pickerPath.length - 1];
         const nodes = this.currentLevelItems;
 
+        // Selects wherever the breadcrumb is CURRENTLY pointing - "Top
+        // level" itself (clearing the target back to "") included, not
+        // just an item you've stepped into. Without this at the root,
+        // there was no way back to "Top level" at all once you'd
+        // navigated anywhere - only entering was ever wired as an
+        // action, never returning to the untouched default. Always
+        // shown, at every depth, for exactly that reason.
         return html`
-            ${
-                here
-                    ? html`
-                        <button type="button" class="pin-row" @click=${() => this.selectTarget(here.id)}>
-                            ${CHECK_ICON}
-                            <span>Load into "${here.title}" itself</span>
-                        </button>
-                    `
-                    : ""
-            }
+            <button type="button" class="pin-row" @click=${() => this.selectTarget(here?.id ?? "")}>
+                ${CHECK_ICON}
+                <span>Load into "${here?.title ?? "Top level"}"</span>
+            </button>
             ${
                 nodes.length === 0
                     ? html`<div class="picker-empty">No items here yet.</div>`

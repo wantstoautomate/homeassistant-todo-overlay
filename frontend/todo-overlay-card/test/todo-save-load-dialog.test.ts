@@ -155,9 +155,29 @@ describe("todo-overlay-save-load-dialog", () => {
 
             const rows = [...(el.shadowRoot?.querySelectorAll(".picker-row .title-btn") ?? [])];
             expect(rows.map(r => r.textContent?.trim())).toEqual(["To buy", "Errands"]);
-            // Root level has no "select this level itself" pin - "Top
-            // level" isn't a real item, it's just the absence of a target.
-            expect(el.shadowRoot?.querySelector(".pin-row")).toBeNull();
+            // The root gets a pin row too - "Load into 'Top level'" -
+            // otherwise there'd be no way back to it once you'd
+            // navigated anywhere, only entering was ever wired as an
+            // action.
+            expect(el.shadowRoot?.querySelector(".pin-row")?.textContent).toContain("Top level");
+        });
+
+        it("selecting the root's own pin row clears the target back to Top level", async () => {
+            const el = await renderDialog({
+                action: "load", savedNames: ["a"],
+                value: {...EMPTY_SAVE_LOAD_VALUE, name: "a", targetItem: "1"},
+                items: TREE,
+            });
+
+            expect(el.shadowRoot?.querySelector(".target-summary")?.textContent).toContain("To buy");
+
+            (el.shadowRoot?.querySelector(".target-summary") as HTMLElement).click();
+            await el.updateComplete;
+            (el.shadowRoot?.querySelector(".pin-row") as HTMLElement).click();
+            await el.updateComplete;
+
+            expect(el.value.targetItem).toBe("");
+            expect(el.shadowRoot?.querySelector(".target-summary")?.textContent).toContain("Top level");
         });
 
         it("selects a leaf directly via its title, with no way to step further into it", async () => {

@@ -1950,12 +1950,10 @@ var TodoSaveLoadDialog = class extends i4 {
     const here = this.pickerPath[this.pickerPath.length - 1];
     const nodes = this.currentLevelItems;
     return b2`
-            ${here ? b2`
-                        <button type="button" class="pin-row" @click=${() => this.selectTarget(here.id)}>
-                            ${CHECK_ICON}
-                            <span>Load into "${here.title}" itself</span>
-                        </button>
-                    ` : ""}
+            <button type="button" class="pin-row" @click=${() => this.selectTarget(here?.id ?? "")}>
+                ${CHECK_ICON}
+                <span>Load into "${here?.title ?? "Top level"}"</span>
+            </button>
             ${nodes.length === 0 ? b2`<div class="picker-empty">No items here yet.</div>` : nodes.map(
       (node) => b2`
                             <div class="picker-row">
