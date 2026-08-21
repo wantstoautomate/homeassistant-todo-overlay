@@ -41,7 +41,7 @@ import type {SortBy, SortOrder} from "../sort";
 import {sortTree} from "../sort";
 import type {TodoItemDialogFieldSupport, TodoItemFormValue} from "./todo-item-dialog";
 import {EMPTY_FORM_VALUE} from "./todo-item-dialog";
-import type {LoadTargetOption, SaveLoadFormValue} from "./todo-save-load-dialog";
+import type {SaveLoadFormValue} from "./todo-save-load-dialog";
 import {EMPTY_SAVE_LOAD_VALUE} from "./todo-save-load-dialog";
 import {BEFORE_AFTER_ZONE, DROP_GAP_PX} from "./todo-tree-item";
 
@@ -561,25 +561,6 @@ function findItem(items: TodoItem[], id: string): TodoItem | undefined {
     }
 
     return undefined;
-}
-
-// Every item on the list, depth-first, as {id, label} pairs for the
-// load dialog's own "Load into" picker (see openLoadDialog) - label is
-// indented per depth so the picker reads as a tree even though a plain
-// <select> has no real nesting of its own. Every item is offered as a
-// valid target, not just ones that already have children - loading a
-// template as the FIRST children of a freshly pinned, still-childless
-// "To buy" is exactly the use case this exists for.
-function flattenForTargetPicker(items: TodoItem[], depth = 0): LoadTargetOption[] {
-    const options: LoadTargetOption[] = [];
-
-    for (const item of items) {
-        const prefix = depth > 0 ? `${"  ".repeat(depth)}— ` : "";
-        options.push({id: item.id, label: `${prefix}${item.title}`});
-        options.push(...flattenForTargetPicker(item.children, depth + 1));
-    }
-
-    return options;
 }
 
 // A dragged row's own subtree keeps rendering normally beneath its lifted
@@ -1302,13 +1283,6 @@ export class TodoOverlayList extends LitElement {
     @state()
     private savedNames: string[] = [];
 
-    // Every existing item on the list, flattened for the load dialog's
-    // own "Load into" picker - see openLoadDialog and
-    // flattenForTargetPicker. Empty outside the load dialog being open;
-    // the save half of the same dialog never reads this.
-    @state()
-    private targetOptions: LoadTargetOption[] = [];
-
     @state()
     private confirmingClearAll = false;
 
@@ -1988,7 +1962,6 @@ export class TodoOverlayList extends LitElement {
             return;
         }
 
-        this.targetOptions = flattenForTargetPicker(this.list?.items ?? []);
         this.saveLoadValue = EMPTY_SAVE_LOAD_VALUE;
         this.saveLoadAction = "load";
     }
@@ -2805,7 +2778,7 @@ export class TodoOverlayList extends LitElement {
                             .action=${this.saveLoadAction}
                             .value=${this.saveLoadValue}
                             .savedNames=${this.savedNames}
-                            .targetOptions=${this.targetOptions}
+                            .items=${this.list?.items ?? []}
 
                             @dialog-close=${this.closeSaveLoadDialog}
                             @dialog-confirm=${this.onSaveLoadConfirm}

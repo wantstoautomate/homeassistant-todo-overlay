@@ -2092,7 +2092,7 @@ describe("todo-overlay-list save-load dialog", () => {
     // Live use case: loading a saved template AS THE CHILDREN of an
     // existing parent ("To buy") rather than as new root-level siblings.
     describe("load-into target picker", () => {
-        it("offers every current item as a target, flattened and indented by depth", async () => {
+        it("passes the list's own real item tree down to the dialog's breadcrumb picker", async () => {
             const {el, hass} = await renderList({
                 entity_id: ENTITY_ID,
                 items: [
@@ -2107,11 +2107,24 @@ describe("todo-overlay-list save-load dialog", () => {
             (el.shadowRoot?.querySelector("button[aria-label='Load list']") as HTMLElement).click();
             await settle(el);
 
-            const dialog = el.shadowRoot?.querySelector("todo-overlay-save-load-dialog");
-            const select = dialog?.shadowRoot?.querySelector("#save-load-target") as HTMLSelectElement;
-            const labels = [...select.querySelectorAll("option")].map(o => o.textContent?.trim());
+            const dialog = el.shadowRoot?.querySelector("todo-overlay-save-load-dialog") as Element & {
+                shadowRoot: ShadowRoot;
+            };
+            (dialog.shadowRoot.querySelector(".target-summary") as HTMLElement).click();
+            await (dialog as unknown as {updateComplete: Promise<unknown>}).updateComplete;
 
-            expect(labels).toEqual(["Top level", "To buy", "— Milk", "Errands"]);
+            const rootTitles = [...dialog.shadowRoot.querySelectorAll(".picker-row .title-btn")]
+                .map(b => b.textContent?.trim());
+            expect(rootTitles).toEqual(["To buy", "Errands"]);
+
+            // Step into "To buy" - its real child "Milk" should show,
+            // proving the whole tree (not just the root) made it down.
+            const rows = [...dialog.shadowRoot.querySelectorAll(".picker-row")];
+            (rows.find(r => r.textContent?.includes("To buy"))!.querySelector(".enter-btn") as HTMLElement).click();
+            await (dialog as unknown as {updateComplete: Promise<unknown>}).updateComplete;
+
+            expect([...dialog.shadowRoot.querySelectorAll(".picker-row .title-btn")].map(b => b.textContent?.trim()))
+                .toEqual(["Milk"]);
         });
 
         it("sends the chosen target's id as target_item when loading", async () => {
@@ -2133,9 +2146,9 @@ describe("todo-overlay-list save-load dialog", () => {
             nameSelect.dispatchEvent(new Event("change"));
             await (dialog as unknown as {updateComplete: Promise<unknown>}).updateComplete;
 
-            const targetSelect = dialog.shadowRoot.querySelector("#save-load-target") as HTMLSelectElement;
-            targetSelect.value = "1";
-            targetSelect.dispatchEvent(new Event("change"));
+            (dialog.shadowRoot.querySelector(".target-summary") as HTMLElement).click();
+            await (dialog as unknown as {updateComplete: Promise<unknown>}).updateComplete;
+            (dialog.shadowRoot.querySelector(".picker-row .title-btn") as HTMLElement).click();
             await (dialog as unknown as {updateComplete: Promise<unknown>}).updateComplete;
 
             const buttons = [...dialog.shadowRoot.querySelectorAll("button")] as HTMLButtonElement[];

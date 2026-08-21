@@ -1,16 +1,16 @@
 import {LitElement, html, css} from "lit";
 import {customElement, property, state} from "lit/decorators.js";
 
-import type {LoadMode} from "../models";
+import type {LoadMode, TodoItem} from "../models";
 
 export interface SaveLoadFormValue {
     name: string;
     persistStates: boolean;
     mode: LoadMode;
-    // "" means "load at the list's own root" - a plain <select> value,
-    // not string | undefined, so it sits in the same draftValue shape
-    // every other field here already uses. Only meaningful for "load" -
-    // see targetOptions below.
+    // "" means "load at the list's own root" - a plain string, not
+    // string | undefined, so it sits in the same draftValue shape every
+    // other field here already uses. The id of whatever was picked in
+    // the "Load into" browser below - only meaningful for "load".
     targetItem: string;
 }
 
@@ -21,21 +21,28 @@ export const EMPTY_SAVE_LOAD_VALUE: SaveLoadFormValue = {
     targetItem: "",
 };
 
-// One option for the "Load into" picker - id is what actually gets sent
-// (uid-or-title resolution on the backend would work with title too, but
-// id is unambiguous even across same-titled items), label is the
-// indented, depth-prefixed display text (see todo-overlay-list.ts's own
-// flattenForTargetPicker).
-export interface LoadTargetOption {
-    id: string;
-    label: string;
-}
-
 const MODE_LABELS: Record<LoadMode, string> = {
     merge: "Merge (skip items already there)",
     full_merge: "Add all (allow duplicates)",
     replace: "Replace (clear the list first)",
 };
+
+// Live-reported: an earlier version offered "Load into" as a single
+// flat <select> with every item indented by depth - reads as an
+// unreadable wall once a list has any real nesting. This is a
+// breadcrumb file-explorer instead: one level of the real tree at a
+// time, entered depth-first, closer to a folder picker than a <select>.
+const CHEVRON_ICON = html`
+    <svg viewBox="0 0 24 24">
+        <path d="M8.59 16.59 13.17 12 8.59 7.41 10 6l6 6-6 6z"></path>
+    </svg>
+`;
+
+const CHECK_ICON = html`
+    <svg viewBox="0 0 24 24">
+        <path d="M9 16.2 4.8 12l-1.4 1.4L9 19 21 7l-1.4-1.4z"></path>
+    </svg>
+`;
 
 @customElement("todo-overlay-save-load-dialog")
 export class TodoSaveLoadDialog extends LitElement {
@@ -58,6 +65,206 @@ export class TodoSaveLoadDialog extends LitElement {
             font-size: 12px;
             color: var(--secondary-text-color);
             margin-top: 2px;
+        }
+
+        /* --- "Load into" breadcrumb picker ------------------------- */
+
+        .target-summary {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 8px;
+            width: 100%;
+            box-sizing: border-box;
+            border: 1px solid var(--divider-color);
+            border-radius: 8px;
+            padding: 8px 10px;
+            font-family: inherit;
+            font-size: 14px;
+            color: var(--primary-text-color);
+            background: none;
+            text-transform: none;
+            text-align: left;
+            cursor: pointer;
+        }
+
+        .target-summary:hover {
+            background: rgba(var(--rgb-primary-text-color, 0, 0, 0), 0.04);
+        }
+
+        .target-summary .value {
+            flex: 1;
+            min-width: 0;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        .target-summary .value .muted {
+            color: var(--secondary-text-color);
+        }
+
+        .target-summary .change {
+            flex-shrink: 0;
+            font-size: 11.5px;
+            font-weight: 600;
+            letter-spacing: 0.03em;
+            color: var(--primary-color);
+        }
+
+        .picker {
+            margin-top: 6px;
+            border: 1px solid var(--divider-color);
+            border-radius: 8px;
+            overflow: hidden;
+        }
+
+        .crumbs {
+            display: flex;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 2px;
+            padding: 8px 10px;
+            background: rgba(var(--rgb-primary-text-color, 0, 0, 0), 0.03);
+            border-bottom: 1px solid var(--divider-color);
+            font-size: 12.5px;
+        }
+
+        .crumbs button {
+            font-family: inherit;
+            font-size: 12.5px;
+            font-weight: 400;
+            text-transform: none;
+            background: none;
+            border: none;
+            padding: 2px 4px;
+            border-radius: 4px;
+            cursor: pointer;
+            color: var(--secondary-text-color);
+        }
+
+        .crumbs button:not(:disabled):hover {
+            background: var(--divider-color);
+            color: var(--primary-text-color);
+        }
+
+        .crumbs button.current {
+            color: var(--primary-text-color);
+            font-weight: 600;
+            cursor: default;
+        }
+
+        .crumbs .sep {
+            color: var(--secondary-text-color);
+            font-size: 11px;
+        }
+
+        .picker-list {
+            max-height: 216px;
+            overflow-y: auto;
+        }
+
+        /* Selects the level currently being browsed ITSELF - the only
+           way to target something you've stepped INTO (its own row,
+           one level up, only offers stepping in or selecting IT, not
+           targeting whatever's already inside it). */
+        .pin-row {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 9px 10px;
+            cursor: pointer;
+            border: none;
+            border-bottom: 1px solid var(--divider-color);
+            background: rgba(var(--rgb-primary-color, 3, 169, 244), 0.08);
+            color: var(--primary-color);
+            font-family: inherit;
+            font-size: 13px;
+            font-weight: 500;
+            text-align: left;
+            width: 100%;
+        }
+
+        .pin-row:hover {
+            background: rgba(var(--rgb-primary-color, 3, 169, 244), 0.14);
+        }
+
+        .pin-row svg {
+            width: 16px;
+            height: 16px;
+            fill: currentColor;
+            flex-shrink: 0;
+        }
+
+        .picker-row {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 9px 10px;
+        }
+
+        .picker-row:not(:last-child) {
+            border-bottom: 1px solid var(--divider-color);
+        }
+
+        /* Clicking the title selects THIS item as the target directly -
+           leaves included, not just items that already have children -
+           any item is a valid parent to load into. The separate
+           enter-btn (only shown when there's somewhere to go) steps
+           into it instead, without selecting it. */
+        .picker-row .title-btn {
+            flex: 1;
+            min-width: 0;
+            text-align: left;
+            background: none;
+            border: none;
+            padding: 0;
+            font-family: inherit;
+            font-size: 13.5px;
+            font-weight: 400;
+            text-transform: none;
+            color: var(--primary-text-color);
+            cursor: pointer;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        .picker-row .title-btn:hover {
+            color: var(--primary-color);
+        }
+
+        .picker-row .enter-btn {
+            flex-shrink: 0;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            width: 26px;
+            height: 26px;
+            border: none;
+            background: none;
+            border-radius: 50%;
+            padding: 0;
+            cursor: pointer;
+            color: var(--secondary-text-color);
+        }
+
+        .picker-row .enter-btn:hover {
+            background: rgba(var(--rgb-primary-text-color, 0, 0, 0), 0.06);
+            color: var(--primary-text-color);
+        }
+
+        .picker-row .enter-btn svg {
+            width: 18px;
+            height: 18px;
+            fill: currentColor;
+        }
+
+        .picker-empty {
+            padding: 14px 10px;
+            font-size: 12.5px;
+            color: var(--secondary-text-color);
+            text-align: center;
         }
 
         input,
@@ -183,13 +390,30 @@ export class TodoSaveLoadDialog extends LitElement {
     @property({attribute: false})
     savedNames: string[] = [];
 
-    // Every existing item on the list, flattened and indented by depth -
-    // see todo-overlay-list.ts's own flattenForTargetPicker, the only
-    // place this is ever built. Load-only; save has no equivalent field.
+    // The list's own real item tree - what the "Load into" browser
+    // below walks. Load-only; save has no equivalent field. The real
+    // hierarchy, not a pre-flattened list, since the browser only ever
+    // shows one level at a time (see currentLevelItems).
     @property({attribute: false})
-    targetOptions: LoadTargetOption[] = [];
+    items: TodoItem[] = [];
 
     private valueInitialized = false;
+
+    // Whether the "Load into" browser is currently expanded below its
+    // own collapsed summary row - local UI state, not part of
+    // draftValue, since it has no bearing on what actually gets
+    // submitted.
+    @state()
+    private pickerOpen = false;
+
+    // The drill-down trail for the "Load into" browser - [] means
+    // currently viewing the root. Each entry is the item that was
+    // stepped INTO to reach the level now showing; entry N's own
+    // children are exactly what's currently listed. Reset to [] every
+    // time the browser (re-)opens (see togglePicker) - it isn't part of
+    // the submitted value, just where you're currently looking.
+    @state()
+    private pickerPath: {id: string; title: string}[] = [];
 
     protected willUpdate(changed: Map<string, unknown>): void {
         if (!changed.has("value") || this.valueInitialized) {
@@ -198,6 +422,70 @@ export class TodoSaveLoadDialog extends LitElement {
 
         this.valueInitialized = true;
         this.draftValue = this._seedValue;
+    }
+
+    private findItem(id: string, nodes: TodoItem[] = this.items): TodoItem | undefined {
+        for (const node of nodes) {
+            if (node.id === id) {
+                return node;
+            }
+
+            const found = this.findItem(id, node.children);
+
+            if (found) {
+                return found;
+            }
+        }
+
+        return undefined;
+    }
+
+    // What the "Load into" browser is currently listing - the root
+    // items with an empty pickerPath, or whichever item was last
+    // stepped into's own children. Looked up fresh (rather than cached)
+    // so it stays correct if `items` itself changes while the dialog is
+    // open (e.g. a live-sync reload).
+    private get currentLevelItems(): TodoItem[] {
+        if (this.pickerPath.length === 0) {
+            return this.items;
+        }
+
+        const here = this.pickerPath[this.pickerPath.length - 1];
+
+        return this.findItem(here.id)?.children ?? [];
+    }
+
+    // The currently-selected target's own title, for the collapsed
+    // summary row - resolved by id from `items` rather than carried
+    // alongside draftValue.targetItem, since that field only ever holds
+    // the id (all the backend needs).
+    private get selectedTitle(): string | undefined {
+        return this.draftValue.targetItem
+            ? this.findItem(this.draftValue.targetItem)?.title
+            : undefined;
+    }
+
+    private togglePicker() {
+        this.pickerOpen = !this.pickerOpen;
+
+        if (this.pickerOpen) {
+            this.pickerPath = [];
+        }
+    }
+
+    private enterItem(id: string, title: string) {
+        this.pickerPath = [...this.pickerPath, {id, title}];
+    }
+
+    // index 0 means "Top level" itself (an empty path); index N means
+    // pickerPath[N - 1] - see renderCrumbs, the only caller.
+    private jumpToCrumb(index: number) {
+        this.pickerPath = this.pickerPath.slice(0, index);
+    }
+
+    private selectTarget(id: string) {
+        this.draftValue = {...this.draftValue, targetItem: id};
+        this.pickerOpen = false;
     }
 
     private close() {
@@ -238,8 +526,73 @@ export class TodoSaveLoadDialog extends LitElement {
         this.draftValue = {...this.draftValue, mode};
     }
 
-    private updateTargetItem(targetItem: string) {
-        this.draftValue = {...this.draftValue, targetItem};
+    private renderCrumbs() {
+        const crumbs = [{id: null as string | null, title: "Top level"}, ...this.pickerPath];
+
+        return crumbs.map((crumb, i) => {
+            const isCurrent = i === crumbs.length - 1;
+
+            return html`
+                ${i > 0 ? html`<span class="sep">›</span>` : ""}
+                <button
+                    type="button"
+                    class=${isCurrent ? "current" : ""}
+                    ?disabled=${isCurrent}
+                    @click=${() => this.jumpToCrumb(i)}
+                >
+                    ${crumb.title}
+                </button>
+            `;
+        });
+    }
+
+    private renderPickerList() {
+        const here = this.pickerPath[this.pickerPath.length - 1];
+        const nodes = this.currentLevelItems;
+
+        return html`
+            ${
+                here
+                    ? html`
+                        <button type="button" class="pin-row" @click=${() => this.selectTarget(here.id)}>
+                            ${CHECK_ICON}
+                            <span>Load into "${here.title}" itself</span>
+                        </button>
+                    `
+                    : ""
+            }
+            ${
+                nodes.length === 0
+                    ? html`<div class="picker-empty">No items here yet.</div>`
+                    : nodes.map(
+                        node => html`
+                            <div class="picker-row">
+                                <button
+                                    type="button"
+                                    class="title-btn"
+                                    @click=${() => this.selectTarget(node.id)}
+                                >
+                                    ${node.title}
+                                </button>
+                                ${
+                                    node.children.length > 0
+                                        ? html`
+                                            <button
+                                                type="button"
+                                                class="enter-btn"
+                                                aria-label="Open ${node.title}"
+                                                @click=${() => this.enterItem(node.id, node.title)}
+                                            >
+                                                ${CHEVRON_ICON}
+                                            </button>
+                                        `
+                                        : ""
+                                }
+                            </div>
+                        `,
+                    )
+            }
+        `;
     }
 
     render() {
@@ -330,27 +683,33 @@ export class TodoSaveLoadDialog extends LitElement {
                             </div>
 
                             <div class="field">
-                                <label for="save-load-target">Load into</label>
-                                <select
-                                    id="save-load-target"
-                                    .value=${this.draftValue.targetItem}
-                                    @change=${(e: Event) =>
-                                        this.updateTargetItem((e.target as HTMLSelectElement).value)}
+                                <label>Load into</label>
+
+                                <button
+                                    type="button"
+                                    class="target-summary"
+                                    @click=${this.togglePicker}
                                 >
-                                    <option value="" ?selected=${!this.draftValue.targetItem}>
-                                        Top level
-                                    </option>
-                                    ${this.targetOptions.map(
-                                        option => html`
-                                            <option
-                                                value=${option.id}
-                                                ?selected=${this.draftValue.targetItem === option.id}
-                                            >
-                                                ${option.label}
-                                            </option>
-                                        `,
-                                    )}
-                                </select>
+                                    <span class="value">
+                                        ${
+                                            this.selectedTitle
+                                                ?? html`<span class="muted">Top level</span>`
+                                        }
+                                    </span>
+                                    <span class="change">${this.pickerOpen ? "Close" : "Browse"}</span>
+                                </button>
+
+                                ${
+                                    this.pickerOpen
+                                        ? html`
+                                            <div class="picker">
+                                                <div class="crumbs">${this.renderCrumbs()}</div>
+                                                <div class="picker-list">${this.renderPickerList()}</div>
+                                            </div>
+                                        `
+                                        : ""
+                                }
+
                                 ${
                                     this.draftValue.targetItem && this.draftValue.mode === "replace"
                                         ? html`
