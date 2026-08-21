@@ -1977,7 +1977,7 @@ export class TodoOverlayList extends LitElement {
             if (this.saveLoadAction === "save") {
                 await saveList(this.hass, this.entity, value.name, value.persistStates);
             } else {
-                await loadList(this.hass, this.entity, value.name, value.mode);
+                await loadList(this.hass, this.entity, value.name, value.mode, value.targetItem || undefined);
             }
 
             await this.load();
@@ -2778,6 +2778,7 @@ export class TodoOverlayList extends LitElement {
                             .action=${this.saveLoadAction}
                             .value=${this.saveLoadValue}
                             .savedNames=${this.savedNames}
+                            .items=${this.list?.items ?? []}
 
                             @dialog-close=${this.closeSaveLoadDialog}
                             @dialog-confirm=${this.onSaveLoadConfirm}

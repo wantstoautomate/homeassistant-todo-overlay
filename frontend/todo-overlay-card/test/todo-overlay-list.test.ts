@@ -2088,6 +2088,107 @@ describe("todo-overlay-list save-load dialog", () => {
 
         expect(nameInput.value).toBe("weekly_groceries");
     });
+
+    // Live use case: loading a saved template AS THE CHILDREN of an
+    // existing parent ("To buy") rather than as new root-level siblings.
+    describe("load-into target picker", () => {
+        it("passes the list's own real item tree down to the dialog's breadcrumb picker", async () => {
+            const {el, hass} = await renderList({
+                entity_id: ENTITY_ID,
+                items: [
+                    makeItem({id: "1", title: "To buy", children: [
+                        makeItem({id: "2", title: "Milk"}),
+                    ]}),
+                    makeItem({id: "3", title: "Errands"}),
+                ],
+            });
+            hass.connection.responses["todo_overlay/list_saved"] = {names: []};
+
+            (el.shadowRoot?.querySelector("button[aria-label='Load list']") as HTMLElement).click();
+            await settle(el);
+
+            const dialog = el.shadowRoot?.querySelector("todo-overlay-save-load-dialog") as Element & {
+                shadowRoot: ShadowRoot;
+            };
+            (dialog.shadowRoot.querySelector(".target-summary") as HTMLElement).click();
+            await (dialog as unknown as {updateComplete: Promise<unknown>}).updateComplete;
+
+            const rootTitles = [...dialog.shadowRoot.querySelectorAll(".picker-row .title-btn")]
+                .map(b => b.textContent?.trim());
+            expect(rootTitles).toEqual(["To buy", "Errands"]);
+
+            // Step into "To buy" - its real child "Milk" should show,
+            // proving the whole tree (not just the root) made it down.
+            const rows = [...dialog.shadowRoot.querySelectorAll(".picker-row")];
+            (rows.find(r => r.textContent?.includes("To buy"))!.querySelector(".enter-btn") as HTMLElement).click();
+            await (dialog as unknown as {updateComplete: Promise<unknown>}).updateComplete;
+
+            expect([...dialog.shadowRoot.querySelectorAll(".picker-row .title-btn")].map(b => b.textContent?.trim()))
+                .toEqual(["Milk"]);
+        });
+
+        it("sends the chosen target's id as target_item when loading", async () => {
+            const {el, hass} = await renderList({
+                entity_id: ENTITY_ID,
+                items: [makeItem({id: "1", title: "To buy"})],
+            });
+            hass.connection.responses["todo_overlay/list_saved"] = {names: ["template"]};
+
+            (el.shadowRoot?.querySelector("button[aria-label='Load list']") as HTMLElement).click();
+            await settle(el);
+
+            const dialog = el.shadowRoot?.querySelector("todo-overlay-save-load-dialog") as Element & {
+                shadowRoot: ShadowRoot;
+            };
+
+            const nameSelect = dialog.shadowRoot.querySelector("#save-load-select") as HTMLSelectElement;
+            nameSelect.value = "template";
+            nameSelect.dispatchEvent(new Event("change"));
+            await (dialog as unknown as {updateComplete: Promise<unknown>}).updateComplete;
+
+            (dialog.shadowRoot.querySelector(".target-summary") as HTMLElement).click();
+            await (dialog as unknown as {updateComplete: Promise<unknown>}).updateComplete;
+            (dialog.shadowRoot.querySelector(".picker-row .title-btn") as HTMLElement).click();
+            await (dialog as unknown as {updateComplete: Promise<unknown>}).updateComplete;
+
+            const buttons = [...dialog.shadowRoot.querySelectorAll("button")] as HTMLButtonElement[];
+            buttons.find(b => b.textContent?.trim() === "Load")!.click();
+            await flushAsync();
+
+            expect(hass.connection.sent).toContainEqual(expect.objectContaining({
+                type: "todo_overlay/load_list",
+                name: "template",
+                target_item: "1",
+            }));
+        });
+
+        it("sends no target_item at all when 'Top level' (the default) is left chosen", async () => {
+            const {el, hass} = await renderList({
+                entity_id: ENTITY_ID,
+                items: [makeItem({id: "1", title: "To buy"})],
+            });
+            hass.connection.responses["todo_overlay/list_saved"] = {names: ["template"]};
+
+            (el.shadowRoot?.querySelector("button[aria-label='Load list']") as HTMLElement).click();
+            await settle(el);
+
+            const dialog = el.shadowRoot?.querySelector("todo-overlay-save-load-dialog") as Element & {
+                shadowRoot: ShadowRoot;
+            };
+
+            const nameSelect = dialog.shadowRoot.querySelector("#save-load-select") as HTMLSelectElement;
+            nameSelect.value = "template";
+            nameSelect.dispatchEvent(new Event("change"));
+            await (dialog as unknown as {updateComplete: Promise<unknown>}).updateComplete;
+
+            const buttons = [...dialog.shadowRoot.querySelectorAll("button")] as HTMLButtonElement[];
+            buttons.find(b => b.textContent?.trim() === "Load")!.click();
+            await flushAsync();
+
+            const sentLoad = hass.connection.sent.find(m => m.type === "todo_overlay/load_list");
+            expect(sentLoad?.target_item).toBeUndefined();
+        });
+    });
 });
 
 // A plain tap on the clear-completed (trash) toolbar button keeps doing

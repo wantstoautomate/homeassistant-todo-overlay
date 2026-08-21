@@ -358,6 +358,32 @@ class PositionMixin:
         return position.order if position else 0
 
     @staticmethod
+    def _descendant_ids(
+        items: list[TodoItem],
+        positions: dict[str, ItemPosition],
+        parent_id: str,
+    ) -> list[str]:
+        """Every descendant of parent_id, at ANY depth - not just its
+        direct children (see _siblings, which this calls one level at a
+        time). Order is unspecified (a plain iterative walk, parents
+        collected before their own children); callers that need a
+        particular order should sort the result themselves. Used by
+        load_list's own scoped "replace" (see manager_snapshots.py) to
+        clear an existing subtree entirely before loading a snapshot
+        back in under it, rather than leaving orphaned grandchildren
+        behind if only the direct children were removed."""
+
+        result: list[str] = []
+        frontier = [parent_id]
+
+        while frontier:
+            children = PositionMixin._siblings(items, positions, frontier.pop())
+            result.extend(children)
+            frontier.extend(children)
+
+        return result
+
+    @staticmethod
     def _parent_id_of(
         item_id: str,
         positions: dict[str, ItemPosition],

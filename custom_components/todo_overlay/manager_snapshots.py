@@ -50,11 +50,14 @@ class SnapshotMixin:
         entity_id: str,
         name: str,
         mode: LoadMode = "merge",
+        target_item: str | None = None,
     ) -> None:
         """Recreate a named snapshot's items on the list.
 
-        - "replace": every current item is removed first, so the list
-          ends up matching the snapshot exactly.
+        - "replace": every current item is removed first (or, with
+          target_item set - see below - just that item's own existing
+          children), so the affected part of the list ends up matching
+          the snapshot exactly.
         - "merge": items already on the list are matched against
           snapshot items by title path (own title plus ancestor
           titles) and left untouched rather than duplicated - only
@@ -62,6 +65,14 @@ class SnapshotMixin:
           existing item matched their snapshot parent.
         - "full_merge": the whole snapshot is (re)created as new items
           regardless of what's already on the list, duplicates and all.
+
+        target_item, when given (identified by uid or title, same
+        uid-or-title convention as every other "item" field - see
+        _resolve_item), loads the snapshot as children of that existing
+        item instead of at the list's root - e.g. loading a saved
+        "Fruit & veg" template into an existing "To buy" parent rather
+        than appending it as new top-level siblings. Raises
+        ItemNotFoundError if it doesn't resolve to a real item.
         """
 
         snapshot = await self._metadata_store.get_snapshot(name)
@@ -70,11 +81,48 @@ class SnapshotMixin:
             raise SnapshotNotFoundError(f"No saved list named {name!r}")
 
         async with self._lock_for(entity_id):
-            if mode == "replace":
-                for item in await self._adapter.get_items(entity_id):
-                    await self._adapter.remove_item(entity_id, item.id)
+            target_id: str | None = None
+            ancestor_path: tuple[str, ...] = ()
 
-                await self._metadata_store.clear_positions(entity_id)
+            if target_item is not None:
+                resolved_target = await self._resolve_item(entity_id, target_item)
+                target_id = resolved_target.id
+
+                items = await self._adapter.get_items(entity_id)
+                positions = await self._metadata_store.get_relationships(entity_id)
+                item_by_id = {item.id: item for item in items}
+                ancestor_path = self._path_of(target_id, item_by_id, positions)
+
+            if mode == "replace":
+                if target_id is None:
+                    for item in await self._adapter.get_items(entity_id):
+                        await self._adapter.remove_item(entity_id, item.id)
+
+                    await self._metadata_store.clear_positions(entity_id)
+                else:
+                    # Scoped to the target's own subtree, not the whole
+                    # list - the whole point of loading INTO a parent is
+                    # that everything else in the list is left alone.
+                    # The full subtree (every depth, not just direct
+                    # children - see _descendant_ids' own comment) is
+                    # cleared so nothing gets left behind as an orphaned
+                    # grandchild before the snapshot loads back in fresh.
+                    items = await self._adapter.get_items(entity_id)
+                    positions = await self._metadata_store.get_relationships(entity_id)
+                    item_by_id = {item.id: item for item in items}
+
+                    for descendant_id in self._descendant_ids(items, positions, target_id):
+                        await self._adapter.remove_item(entity_id, descendant_id)
+                        descendant = item_by_id.get(descendant_id)
+
+                        # Previously-silent-elsewhere gap this project has
+                        # already hit twice (duplicate-title merges,
+                        # quick-add creates) - a removal that never fires
+                        # this never propagates to a linked peer, the
+                        # open-items sensor, or the todo_overlay.removed
+                        # automation trigger.
+                        if descendant is not None:
+                            self._fire_event(entity_id, descendant_id, descendant.title, "removed")
 
             existing_by_path: dict[tuple[str, ...], str] = {}
 
@@ -86,8 +134,8 @@ class SnapshotMixin:
             await self._create_snapshot_nodes(
                 entity_id,
                 snapshot,
-                parent_id=None,
-                ancestor_path=(),
+                parent_id=target_id,
+                ancestor_path=ancestor_path,
                 existing_by_path=existing_by_path,
             )
 
@@ -121,6 +169,26 @@ class SnapshotMixin:
         }
 
     @staticmethod
+    def _path_of(
+        item_id: str,
+        item_by_id: dict[str, TodoItem],
+        positions: dict[str, ItemPosition],
+    ) -> tuple[str, ...]:
+        """An item's own (ancestor titles..., own title) path - factored
+        out of _title_path_index so load_list's own target_item can get
+        just the one path it needs without building the whole-list
+        index only to throw the rest away."""
+
+        position = positions.get(item_id)
+        parent_id = position.parent_id if position else None
+        title = item_by_id[item_id].title
+
+        if parent_id is None:
+            return (title,)
+
+        return (*SnapshotMixin._path_of(parent_id, item_by_id, positions), title)
+
+    @staticmethod
     def _title_path_index(
         items: list[TodoItem],
         positions: dict[str, ItemPosition],
@@ -131,17 +199,10 @@ class SnapshotMixin:
 
         item_by_id = {item.id: item for item in items}
 
-        def parent_id_of(item_id: str) -> str | None:
-            position = positions.get(item_id)
-            return position.parent_id if position else None
-
-        def path_of(item_id: str) -> tuple[str, ...]:
-            parent_id = parent_id_of(item_id)
-            title = item_by_id[item_id].title
-
-            return (*path_of(parent_id), title) if parent_id is not None else (title,)
-
-        return {path_of(item.id): item.id for item in items}
+        return {
+            SnapshotMixin._path_of(item.id, item_by_id, positions): item.id
+            for item in items
+        }
 
     async def _create_snapshot_nodes(
         self,

@@ -15,6 +15,7 @@ import voluptuous as vol
 
 from custom_components.todo_overlay.const import DOMAIN
 from custom_components.todo_overlay.manager import TodoManager
+from custom_components.todo_overlay.models import ItemPosition, TodoItem
 from custom_components.todo_overlay.services import JOIN_LINK_SCHEMA, async_register_services
 
 from fakes import FakeAdapter, FakeConfigEntries, FakeMetadataStore
@@ -89,6 +90,31 @@ async def test_service_save_list_and_load_list_round_trip():
 
     todo_list = await manager.get_list("todo.other")
     assert any(item.title == "Shopping" for item in todo_list.items)
+
+
+@pytest.mark.asyncio
+async def test_service_load_list_with_target_item_loads_as_its_children():
+    manager = make_manager(
+        items=[TodoItem(id="parent", title="To buy", completed=False)],
+        positions={"parent": ItemPosition(parent_id=None, order=0)},
+    )
+    _, services = make_hass(manager)
+
+    await manager._metadata_store.save_snapshot("template", [
+        {
+            "title": "Apples", "description": None, "due_date": None, "due_datetime": None,
+            "completed": False, "children": [],
+        },
+    ])
+
+    await services.handlers["load_list"](FakeServiceCall({
+        "entity_id": ENTITY_ID, "name": "template", "mode": "merge", "target_item": "To buy",
+    }))
+
+    todo_list = await manager.get_list(ENTITY_ID)
+    assert len(todo_list.items) == 1
+    assert todo_list.items[0].title == "To buy"
+    assert [c.title for c in todo_list.items[0].children] == ["Apples"]
 
 
 @pytest.mark.asyncio

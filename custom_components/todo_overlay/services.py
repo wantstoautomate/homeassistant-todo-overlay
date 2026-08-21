@@ -20,6 +20,7 @@ from .const import (
     ATTR_QUANTITY,
     ATTR_TAG,
     ATTR_TAGS,
+    ATTR_TARGET_ITEM,
     ATTR_TITLE,
     ATTR_TRIGGER_ON_DUE,
     DOMAIN,
@@ -55,6 +56,7 @@ LOAD_LIST_SCHEMA = vol.Schema(
         vol.Optional(ATTR_MODE, default="merge"): vol.In(
             ["replace", "merge", "full_merge"]
         ),
+        vol.Optional(ATTR_TARGET_ITEM): str,
     }
 )
 
@@ -150,6 +152,7 @@ def async_register_services(hass: HomeAssistant) -> None:
             entity_id=call.data["entity_id"],
             name=call.data[ATTR_NAME],
             mode=call.data[ATTR_MODE],
+            target_item=call.data.get(ATTR_TARGET_ITEM),
         )
 
     async def handle_delete_saved_list(call: ServiceCall) -> None:

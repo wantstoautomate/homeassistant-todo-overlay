@@ -294,6 +294,7 @@ export async function loadList(
     entityId: string,
     name: string,
     mode: LoadMode,
+    targetItem?: string,
 ): Promise<void> {
 
     await hass.connection.sendMessagePromise<void>({
@@ -301,6 +302,7 @@ export async function loadList(
         entity_id: entityId,
         name,
         mode,
+        target_item: targetItem,
     });
 
 }

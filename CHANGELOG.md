@@ -3,6 +3,24 @@
 All notable changes to this project are documented here. Versions follow the
 integration's `manifest.json`/card's `package.json` (kept in lockstep).
 
+## 1.3.0
+
+**New: load a saved template into an existing parent, not just at the
+list's root.** Live use case: "To buy" already exists as a parent, and a
+saved "Fruit & veg" template should load as ITS children, not as new
+top-level siblings next to it. The load dialog's "Load into" field
+offers every current item as a target (flattened, indented to show
+nesting) - pick one, or leave it "Top level" for the original,
+unscoped behavior. "Merge" mode matches existing children of the
+target specifically (not root-level items that happen to share a
+title); "Replace" mode, once a target is picked, only clears that
+item's own existing subtree first - the rest of the list is
+untouched, unlike the unscoped "Replace" which still clears
+everything when no target is given. Also available from
+`todo_overlay.load_list` (a new `target_item` field, id or title) and
+the `todo_overlay/load_list` websocket command, for automations that
+want to do the same thing.
+
 ## 1.2.1
 
 CI-only fix, no functional change to the integration or card.

@@ -808,12 +808,13 @@ async function saveList(hass, entityId, name, persistStates) {
     persist_states: persistStates
   });
 }
-async function loadList(hass, entityId, name, mode) {
+async function loadList(hass, entityId, name, mode, targetItem) {
   await hass.connection.sendMessagePromise({
     type: "todo_overlay/load_list",
     entity_id: entityId,
     name,
-    mode
+    mode,
+    target_item: targetItem
   });
 }
 async function listSaved(hass) {
@@ -1799,13 +1800,24 @@ TodoItemDialog = __decorateClass([
 var EMPTY_SAVE_LOAD_VALUE = {
   name: "",
   persistStates: false,
-  mode: "merge"
+  mode: "merge",
+  targetItem: ""
 };
 var MODE_LABELS = {
   merge: "Merge (skip items already there)",
   full_merge: "Add all (allow duplicates)",
   replace: "Replace (clear the list first)"
 };
+var CHEVRON_ICON = b2`
+    <svg viewBox="0 0 24 24">
+        <path d="M8.59 16.59 13.17 12 8.59 7.41 10 6l6 6-6 6z"></path>
+    </svg>
+`;
+var CHECK_ICON = b2`
+    <svg viewBox="0 0 24 24">
+        <path d="M9 16.2 4.8 12l-1.4 1.4L9 19 21 7l-1.4-1.4z"></path>
+    </svg>
+`;
 var TodoSaveLoadDialog = class extends i4 {
   constructor() {
     super(...arguments);
@@ -1818,7 +1830,10 @@ var TodoSaveLoadDialog = class extends i4 {
     this._seedValue = EMPTY_SAVE_LOAD_VALUE;
     this.draftValue = EMPTY_SAVE_LOAD_VALUE;
     this.savedNames = [];
+    this.items = [];
     this.valueInitialized = false;
+    this.pickerOpen = false;
+    this.pickerPath = [];
   }
   set value(newValue) {
     this._seedValue = newValue;
@@ -1832,6 +1847,55 @@ var TodoSaveLoadDialog = class extends i4 {
     }
     this.valueInitialized = true;
     this.draftValue = this._seedValue;
+  }
+  findItem(id, nodes = this.items) {
+    for (const node of nodes) {
+      if (node.id === id) {
+        return node;
+      }
+      const found = this.findItem(id, node.children);
+      if (found) {
+        return found;
+      }
+    }
+    return void 0;
+  }
+  // What the "Load into" browser is currently listing - the root
+  // items with an empty pickerPath, or whichever item was last
+  // stepped into's own children. Looked up fresh (rather than cached)
+  // so it stays correct if `items` itself changes while the dialog is
+  // open (e.g. a live-sync reload).
+  get currentLevelItems() {
+    if (this.pickerPath.length === 0) {
+      return this.items;
+    }
+    const here = this.pickerPath[this.pickerPath.length - 1];
+    return this.findItem(here.id)?.children ?? [];
+  }
+  // The currently-selected target's own title, for the collapsed
+  // summary row - resolved by id from `items` rather than carried
+  // alongside draftValue.targetItem, since that field only ever holds
+  // the id (all the backend needs).
+  get selectedTitle() {
+    return this.draftValue.targetItem ? this.findItem(this.draftValue.targetItem)?.title : void 0;
+  }
+  togglePicker() {
+    this.pickerOpen = !this.pickerOpen;
+    if (this.pickerOpen) {
+      this.pickerPath = [];
+    }
+  }
+  enterItem(id, title) {
+    this.pickerPath = [...this.pickerPath, { id, title }];
+  }
+  // index 0 means "Top level" itself (an empty path); index N means
+  // pickerPath[N - 1] - see renderCrumbs, the only caller.
+  jumpToCrumb(index) {
+    this.pickerPath = this.pickerPath.slice(0, index);
+  }
+  selectTarget(id) {
+    this.draftValue = { ...this.draftValue, targetItem: id };
+    this.pickerOpen = false;
   }
   close() {
     this.dispatchEvent(
@@ -1864,6 +1928,56 @@ var TodoSaveLoadDialog = class extends i4 {
   }
   updateMode(mode) {
     this.draftValue = { ...this.draftValue, mode };
+  }
+  renderCrumbs() {
+    const crumbs = [{ id: null, title: "Top level" }, ...this.pickerPath];
+    return crumbs.map((crumb, i7) => {
+      const isCurrent = i7 === crumbs.length - 1;
+      return b2`
+                ${i7 > 0 ? b2`<span class="sep">›</span>` : ""}
+                <button
+                    type="button"
+                    class=${isCurrent ? "current" : ""}
+                    ?disabled=${isCurrent}
+                    @click=${() => this.jumpToCrumb(i7)}
+                >
+                    ${crumb.title}
+                </button>
+            `;
+    });
+  }
+  renderPickerList() {
+    const here = this.pickerPath[this.pickerPath.length - 1];
+    const nodes = this.currentLevelItems;
+    return b2`
+            <button type="button" class="pin-row" @click=${() => this.selectTarget(here?.id ?? "")}>
+                ${CHECK_ICON}
+                <span>Load into "${here?.title ?? "Top level"}"</span>
+            </button>
+            ${nodes.length === 0 ? b2`<div class="picker-empty">No items here yet.</div>` : nodes.map(
+      (node) => b2`
+                            <div class="picker-row">
+                                <button
+                                    type="button"
+                                    class="title-btn"
+                                    @click=${() => this.selectTarget(node.id)}
+                                >
+                                    ${node.title}
+                                </button>
+                                ${node.children.length > 0 ? b2`
+                                            <button
+                                                type="button"
+                                                class="enter-btn"
+                                                aria-label="Open ${node.title}"
+                                                @click=${() => this.enterItem(node.id, node.title)}
+                                            >
+                                                ${CHEVRON_ICON}
+                                            </button>
+                                        ` : ""}
+                            </div>
+                        `
+    )}
+        `;
   }
   render() {
     const isSave = this.action === "save";
@@ -1939,6 +2053,35 @@ var TodoSaveLoadDialog = class extends i4 {
     )}
                                 </select>
                             </div>
+
+                            <div class="field">
+                                <label>Load into</label>
+
+                                <button
+                                    type="button"
+                                    class="target-summary"
+                                    @click=${this.togglePicker}
+                                >
+                                    <span class="value">
+                                        ${this.selectedTitle ?? b2`<span class="muted">Top level</span>`}
+                                    </span>
+                                    <span class="change">${this.pickerOpen ? "Close" : "Browse"}</span>
+                                </button>
+
+                                ${this.pickerOpen ? b2`
+                                            <div class="picker">
+                                                <div class="crumbs">${this.renderCrumbs()}</div>
+                                                <div class="picker-list">${this.renderPickerList()}</div>
+                                            </div>
+                                        ` : ""}
+
+                                ${this.draftValue.targetItem && this.draftValue.mode === "replace" ? b2`
+                                            <div class="field-hint">
+                                                Only this item's own existing children are cleared first -
+                                                the rest of the list is untouched.
+                                            </div>
+                                        ` : ""}
+                            </div>
                         `}
 
                 <div class="actions" slot="footer">
@@ -1963,6 +2106,212 @@ TodoSaveLoadDialog.styles = i`
         label {
             font-size: 12px;
             color: var(--secondary-text-color);
+        }
+
+        .field-hint {
+            font-size: 12px;
+            color: var(--secondary-text-color);
+            margin-top: 2px;
+        }
+
+        /* --- "Load into" breadcrumb picker ------------------------- */
+
+        .target-summary {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 8px;
+            width: 100%;
+            box-sizing: border-box;
+            border: 1px solid var(--divider-color);
+            border-radius: 8px;
+            padding: 8px 10px;
+            font-family: inherit;
+            font-size: 14px;
+            color: var(--primary-text-color);
+            background: none;
+            text-transform: none;
+            text-align: left;
+            cursor: pointer;
+        }
+
+        .target-summary:hover {
+            background: rgba(var(--rgb-primary-text-color, 0, 0, 0), 0.04);
+        }
+
+        .target-summary .value {
+            flex: 1;
+            min-width: 0;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        .target-summary .value .muted {
+            color: var(--secondary-text-color);
+        }
+
+        .target-summary .change {
+            flex-shrink: 0;
+            font-size: 11.5px;
+            font-weight: 600;
+            letter-spacing: 0.03em;
+            color: var(--primary-color);
+        }
+
+        .picker {
+            margin-top: 6px;
+            border: 1px solid var(--divider-color);
+            border-radius: 8px;
+            overflow: hidden;
+        }
+
+        .crumbs {
+            display: flex;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 2px;
+            padding: 8px 10px;
+            background: rgba(var(--rgb-primary-text-color, 0, 0, 0), 0.03);
+            border-bottom: 1px solid var(--divider-color);
+            font-size: 12.5px;
+        }
+
+        .crumbs button {
+            font-family: inherit;
+            font-size: 12.5px;
+            font-weight: 400;
+            text-transform: none;
+            background: none;
+            border: none;
+            padding: 2px 4px;
+            border-radius: 4px;
+            cursor: pointer;
+            color: var(--secondary-text-color);
+        }
+
+        .crumbs button:not(:disabled):hover {
+            background: var(--divider-color);
+            color: var(--primary-text-color);
+        }
+
+        .crumbs button.current {
+            color: var(--primary-text-color);
+            font-weight: 600;
+            cursor: default;
+        }
+
+        .crumbs .sep {
+            color: var(--secondary-text-color);
+            font-size: 11px;
+        }
+
+        .picker-list {
+            max-height: 216px;
+            overflow-y: auto;
+        }
+
+        /* Selects the level currently being browsed ITSELF - the only
+           way to target something you've stepped INTO (its own row,
+           one level up, only offers stepping in or selecting IT, not
+           targeting whatever's already inside it). */
+        .pin-row {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 9px 10px;
+            cursor: pointer;
+            border: none;
+            border-bottom: 1px solid var(--divider-color);
+            background: rgba(var(--rgb-primary-color, 3, 169, 244), 0.08);
+            color: var(--primary-color);
+            font-family: inherit;
+            font-size: 13px;
+            font-weight: 500;
+            text-align: left;
+            width: 100%;
+        }
+
+        .pin-row:hover {
+            background: rgba(var(--rgb-primary-color, 3, 169, 244), 0.14);
+        }
+
+        .pin-row svg {
+            width: 16px;
+            height: 16px;
+            fill: currentColor;
+            flex-shrink: 0;
+        }
+
+        .picker-row {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 9px 10px;
+        }
+
+        .picker-row:not(:last-child) {
+            border-bottom: 1px solid var(--divider-color);
+        }
+
+        /* Clicking the title selects THIS item as the target directly -
+           leaves included, not just items that already have children -
+           any item is a valid parent to load into. The separate
+           enter-btn (only shown when there's somewhere to go) steps
+           into it instead, without selecting it. */
+        .picker-row .title-btn {
+            flex: 1;
+            min-width: 0;
+            text-align: left;
+            background: none;
+            border: none;
+            padding: 0;
+            font-family: inherit;
+            font-size: 13.5px;
+            font-weight: 400;
+            text-transform: none;
+            color: var(--primary-text-color);
+            cursor: pointer;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        .picker-row .title-btn:hover {
+            color: var(--primary-color);
+        }
+
+        .picker-row .enter-btn {
+            flex-shrink: 0;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            width: 26px;
+            height: 26px;
+            border: none;
+            background: none;
+            border-radius: 50%;
+            padding: 0;
+            cursor: pointer;
+            color: var(--secondary-text-color);
+        }
+
+        .picker-row .enter-btn:hover {
+            background: rgba(var(--rgb-primary-text-color, 0, 0, 0), 0.06);
+            color: var(--primary-text-color);
+        }
+
+        .picker-row .enter-btn svg {
+            width: 18px;
+            height: 18px;
+            fill: currentColor;
+        }
+
+        .picker-empty {
+            padding: 14px 10px;
+            font-size: 12.5px;
+            color: var(--secondary-text-color);
+            text-align: center;
         }
 
         input,
@@ -2057,6 +2406,15 @@ __decorateClass([
 __decorateClass([
   n4({ attribute: false })
 ], TodoSaveLoadDialog.prototype, "savedNames", 2);
+__decorateClass([
+  n4({ attribute: false })
+], TodoSaveLoadDialog.prototype, "items", 2);
+__decorateClass([
+  r5()
+], TodoSaveLoadDialog.prototype, "pickerOpen", 2);
+__decorateClass([
+  r5()
+], TodoSaveLoadDialog.prototype, "pickerPath", 2);
 TodoSaveLoadDialog = __decorateClass([
   t3("todo-overlay-save-load-dialog")
 ], TodoSaveLoadDialog);
@@ -2120,7 +2478,7 @@ var CLOCK_ICON = b2`
         ></path>
     </svg>
 `;
-var CHEVRON_ICON = b2`
+var CHEVRON_ICON2 = b2`
     <svg viewBox="0 0 24 24">
         <path d="M8.59 16.59 13.17 12 8.59 7.41 10 6l6 6-6 6z"></path>
     </svg>
@@ -2707,7 +3065,7 @@ var TodoTreeItem = class extends i4 {
                                                 @click=${this.toggleCollapse}
                                                 @pointerdown=${(e7) => e7.stopPropagation()}
                                             >
-                                                ${CHEVRON_ICON}
+                                                ${CHEVRON_ICON2}
                                             </button>
                                         ` : this.isStructural ? b2`
                                                 <span class="structural-placeholder" aria-hidden="true">
@@ -4546,7 +4904,7 @@ var TodoOverlayList = class extends i4 {
       if (this.saveLoadAction === "save") {
         await saveList(this.hass, this.entity, value.name, value.persistStates);
       } else {
-        await loadList(this.hass, this.entity, value.name, value.mode);
+        await loadList(this.hass, this.entity, value.name, value.mode, value.targetItem || void 0);
       }
       await this.load();
     } catch (err) {
@@ -5121,6 +5479,7 @@ var TodoOverlayList = class extends i4 {
                             .action=${this.saveLoadAction}
                             .value=${this.saveLoadValue}
                             .savedNames=${this.savedNames}
+                            .items=${this.list?.items ?? []}
 
                             @dialog-close=${this.closeSaveLoadDialog}
                             @dialog-confirm=${this.onSaveLoadConfirm}
