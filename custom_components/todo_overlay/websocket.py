@@ -15,6 +15,7 @@ from .const import (
     WS_TYPE_DELETE_ITEM,
     WS_TYPE_DELETE_SAVED_LIST,
     WS_TYPE_GET_LIST,
+    WS_TYPE_LINK_ITEM,
     WS_TYPE_LIST_SAVED,
     WS_TYPE_LOAD_LIST,
     WS_TYPE_MOVE_ITEM,
@@ -27,6 +28,7 @@ from .const import (
     WS_TYPE_SET_TAGS,
     WS_TYPE_SET_TRIGGER_ON_DUE,
     WS_TYPE_TRANSFER_ITEM,
+    WS_TYPE_UNLINK_ITEM,
     WS_TYPE_UPDATE_ITEM,
 )
 from .errors import (
@@ -34,10 +36,11 @@ from .errors import (
     DueTimeRequiredError,
     EntityNotFoundError,
     InvalidPinTypeError,
+    ItemLinkTargetNotFoundError,
     ItemNotFoundError,
     SnapshotNotFoundError,
 )
-from .runtime_data import get_manager, get_metadata_store
+from .runtime_data import get_item_links, get_manager, get_metadata_store
 
 # Every TodoManager method that validates its input (a missing item,
 # entity, or saved list) raises one of these - all ValueError subclasses,
@@ -54,6 +57,7 @@ _ERROR_CODES: dict[type[Exception], str] = {
     SnapshotNotFoundError: "not_found",
     DueTimeRequiredError: "due_time_required",
     InvalidPinTypeError: "invalid_pin_type",
+    ItemLinkTargetNotFoundError: "item_link_target_not_found",
 }
 
 WebSocketHandler = Callable[
@@ -566,6 +570,66 @@ async def websocket_set_pin_type(
 
 @websocket_api.websocket_command(
     {
+        vol.Required("type"): WS_TYPE_LINK_ITEM,
+        vol.Required("entity_id"): cv.entity_id,
+        vol.Required("item_id"): str,
+        vol.Optional("target_entity_id"): cv.entity_id,
+        vol.Optional("target_parent_id"): str,
+    }
+)
+@websocket_api.async_response
+@_handle_manager_errors
+async def websocket_link_item(
+    hass: HomeAssistant,
+    connection: websocket_api.ActiveConnection,
+    msg,
+) -> None:
+    """Mirror an item onto another list (see item_links.py) - creates
+    the mirror item there and records the pairing. target_entity_id/
+    target_parent_id, given together or not at all, override the
+    configured default destination entirely - see the item dialog's own
+    "change destination" control."""
+
+    item_links = get_item_links(hass)
+
+    new_item_id = await item_links.link_item(
+        entity_id=msg["entity_id"],
+        item_id=msg["item_id"],
+        target_entity_id=msg.get("target_entity_id"),
+        target_parent_id=msg.get("target_parent_id"),
+    )
+
+    connection.send_result(msg["id"], {"id": new_item_id})
+
+
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): WS_TYPE_UNLINK_ITEM,
+        vol.Required("entity_id"): cv.entity_id,
+        vol.Required("item_id"): str,
+    }
+)
+@websocket_api.async_response
+@_handle_manager_errors
+async def websocket_unlink_item(
+    hass: HomeAssistant,
+    connection: websocket_api.ActiveConnection,
+    msg,
+) -> None:
+    """Sever an item link - both items survive, independently."""
+
+    item_links = get_item_links(hass)
+
+    await item_links.unlink_item(
+        entity_id=msg["entity_id"],
+        item_id=msg["item_id"],
+    )
+
+    connection.send_result(msg["id"])
+
+
+@websocket_api.websocket_command(
+    {
         vol.Required("type"): WS_TYPE_SET_TAGS,
         vol.Required("entity_id"): cv.entity_id,
         vol.Required("item_id"): str,
@@ -694,6 +758,8 @@ def async_register_websocket(hass: HomeAssistant) -> None:
         websocket_delete_item,
         websocket_set_quantity,
         websocket_set_pin_type,
+        websocket_link_item,
+        websocket_unlink_item,
         websocket_set_tags,
         websocket_add_tag,
         websocket_remove_tag,

@@ -60,6 +60,16 @@ LINK_ITEM_STATE_KEY = "_link_item_state"
 # every MQTT message this instance publishes so it can recognize and
 # discard its own messages echoed back by the broker.
 INSTANCE_ID_KEY = "_instance_id"
+# Bidirectional item-to-item mirror pairs (see item_links.py) - distinct
+# from LINKS_KEY above, which is about whole ENTITIES synced cross-
+# instance over MQTT. This is same-instance, item-granularity: each
+# linked item's own entry points directly at its partner's (entity_id,
+# item_id), so BOTH sides are recorded independently rather than once
+# under a shared id - a plain local reference is enough here (unlike
+# LINKS_KEY's own sync-id indirection, which exists specifically because
+# an MQTT message needs a transport-stable id independent of either
+# side's native uid; nothing here ever crosses an instance boundary).
+ITEM_LINKS_KEY = "_item_links"
 
 
 class _TodoOverlayStore(Store):
@@ -208,6 +218,7 @@ class MetadataStore:
         self._cache.get(DUE_FIRED_KEY, {}).pop(entity_id, None)
         self._cache.get(LINKS_KEY, {}).pop(entity_id, None)
         self._cache.get(LINK_ITEM_STATE_KEY, {}).pop(entity_id, None)
+        self._cache.get(ITEM_LINKS_KEY, {}).pop(entity_id, None)
 
         self._save()
 
@@ -231,7 +242,7 @@ class MetadataStore:
 
         for key in (
             QUANTITIES_KEY, TAGS_KEY, PIN_TYPE_KEY, TRIGGER_ON_DUE_KEY, DUE_FIRED_KEY,
-            LINKS_KEY, LINK_ITEM_STATE_KEY,
+            LINKS_KEY, LINK_ITEM_STATE_KEY, ITEM_LINKS_KEY,
         ):
             bucket = self._cache.get(key, {})
 
@@ -373,6 +384,80 @@ class MetadataStore:
 
         for item_id in item_ids:
             entity_pin_types.pop(item_id, None)
+
+        self._save()
+
+    async def get_item_link(
+        self,
+        entity_id: str,
+        item_id: str,
+    ) -> dict[str, str] | None:
+        """This item's own mirror partner, if any - {"entity_id":...,
+        "item_id":...}, or None if it isn't linked to anything. See
+        item_links.py for what actually keeps the two sides in sync."""
+
+        await self._load()
+
+        assert self._cache is not None
+
+        return self._cache.get(ITEM_LINKS_KEY, {}).get(entity_id, {}).get(item_id)
+
+    async def get_item_links(
+        self,
+        entity_id: str,
+    ) -> dict[str, dict[str, str]]:
+        """Every item link on this entity, keyed by item_id - used by the
+        orphan-reconciliation sweep to notice a linked item that's
+        vanished through a path item_links.py never saw."""
+
+        await self._load()
+
+        assert self._cache is not None
+
+        return dict(self._cache.get(ITEM_LINKS_KEY, {}).get(entity_id, {}))
+
+    async def set_item_link(
+        self,
+        entity_id: str,
+        item_id: str,
+        linked_entity_id: str,
+        linked_item_id: str,
+    ) -> None:
+        """Point this one item at its mirror partner - only ever called
+        twice in a row, once for each side (see ItemLinkManager.link_item),
+        since each side's own entry is independent, not a shared record."""
+
+        await self._load()
+
+        assert self._cache is not None
+
+        self._cache.setdefault(ITEM_LINKS_KEY, {}).setdefault(entity_id, {})[item_id] = {
+            "entity_id": linked_entity_id,
+            "item_id": linked_item_id,
+        }
+
+        self._save()
+
+    async def remove_item_link(
+        self,
+        entity_id: str,
+        item_id: str,
+    ) -> None:
+        """Clear this one item's own link record - a no-op if it wasn't
+        linked at all. Only ever removes THIS side; the caller is
+        responsible for removing the partner's own entry too when both
+        need to go (see ItemLinkManager, which always does both)."""
+
+        await self._load()
+
+        assert self._cache is not None
+
+        entity_links = self._cache.get(ITEM_LINKS_KEY, {}).get(entity_id)
+
+        if not entity_links:
+            return
+
+        entity_links.pop(item_id, None)
 
         self._save()
 

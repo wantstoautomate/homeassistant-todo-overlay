@@ -11,6 +11,8 @@ from homeassistant.helpers.typing import ConfigType
 from homeassistant.loader import async_get_integration
 
 from .const import (
+    CONF_ITEM_LINK_DEFAULT_ENABLED,
+    CONF_ITEM_LINK_DEFAULT_TARGET_ITEM_ID,
     CONF_MQTT_HOST,
     CONF_MQTT_PASSWORD,
     CONF_MQTT_PORT,
@@ -22,6 +24,7 @@ from .const import (
 )
 from .due_scheduler import DueScheduler
 from .ha_adapter import HomeAssistantTodoProvider
+from .item_links import ItemLinkManager
 from .link_sync import LinkSyncManager
 from .manager import TodoManager
 from .metadata_store import MetadataStore
@@ -107,12 +110,24 @@ async def async_setup_entry(hass: HomeAssistant, entry: TodoOverlayConfigEntry) 
 
     link_sync = await _async_setup_link_sync(hass, entry, manager, metadata_store)
 
+    item_links = ItemLinkManager(
+        hass,
+        manager,
+        metadata_store,
+        HomeAssistantTodoProvider(hass),
+        default_enabled=entry.options.get(CONF_ITEM_LINK_DEFAULT_ENABLED, False),
+        default_target_item_id=entry.options.get(CONF_ITEM_LINK_DEFAULT_TARGET_ITEM_ID),
+    )
+    item_links.async_setup()
+    manager.set_item_link_hook(item_links.link_item)
+
     entry.runtime_data = TodoOverlayData(
         manager=manager,
         metadata_store=metadata_store,
         due_scheduler=due_scheduler,
         open_items_registry=open_items_registry,
         unsub_entity_registry=unsub_entity_registry,
+        item_links=item_links,
         link_sync=link_sync,
     )
 
@@ -132,6 +147,7 @@ async def async_unload_entry(hass: HomeAssistant, entry: TodoOverlayConfigEntry)
 
     entry.runtime_data.due_scheduler.async_stop()
     entry.runtime_data.unsub_entity_registry()
+    entry.runtime_data.item_links.async_shutdown()
 
     if entry.runtime_data.link_sync is not None:
         await entry.runtime_data.link_sync.async_shutdown()

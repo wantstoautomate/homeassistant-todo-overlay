@@ -151,6 +151,7 @@ class FakeMetadataStore:
         self._instance_id: str | None = None
         self._links: dict[str, dict] = {}
         self._link_item_state: dict[str, dict] = {}
+        self._item_links: dict[str, dict] = {}
 
     async def get_relationships(self, entity_id: str) -> dict[str, ItemPosition]:
         return dict(self._positions)
@@ -198,6 +199,24 @@ class FakeMetadataStore:
     ) -> None:
         for item_id in item_ids:
             self._pin_types.pop(item_id, None)
+
+    async def get_item_link(self, entity_id: str, item_id: str) -> dict | None:
+        return self._item_links.get(item_id)
+
+    async def get_item_links(self, entity_id: str) -> dict[str, dict]:
+        return dict(self._item_links)
+
+    async def set_item_link(
+        self,
+        entity_id: str,
+        item_id: str,
+        linked_entity_id: str,
+        linked_item_id: str,
+    ) -> None:
+        self._item_links[item_id] = {"entity_id": linked_entity_id, "item_id": linked_item_id}
+
+    async def remove_item_link(self, entity_id: str, item_id: str) -> None:
+        self._item_links.pop(item_id, None)
 
     async def get_tags(self, entity_id: str) -> dict[str, list[str]]:
         return {k: list(v) for k, v in self._tags.items()}
@@ -453,6 +472,24 @@ class FakeMultiEntityAdapter:
 
         return new_id
 
+    async def update_item(
+        self,
+        entity_id: str,
+        item_id: str,
+        *,
+        title: str | None = None,
+        description: str | None = None,
+        due_date: str | None = None,
+        due_datetime: str | None = None,
+    ) -> None:
+        for item in self._items.get(entity_id, []):
+            if item.id == item_id:
+                if title is not None:
+                    item.title = title
+                item.description = description
+                item.due_date = due_date
+                item.due_datetime = due_datetime
+
 
 class FakeMultiEntityMetadataStore:
     """Like FakeMetadataStore, but genuinely keyed per entity_id - the
@@ -467,6 +504,8 @@ class FakeMultiEntityMetadataStore:
         self._pin_types: dict[str, dict[str, str]] = {}
         self._trigger_on_due: dict[str, set[str]] = {}
         self._due_fired: dict[str, dict[str, str]] = {}
+        self._item_links: dict[str, dict[str, dict]] = {}
+        self._links: dict[str, dict] = {}
         self.set_positions_calls: list[tuple[str, dict[str, ItemPosition]]] = []
 
     async def get_relationships(self, entity_id: str) -> dict[str, ItemPosition]:
@@ -505,6 +544,32 @@ class FakeMultiEntityMetadataStore:
 
         for item_id in item_ids:
             bucket.pop(item_id, None)
+
+    async def get_item_link(self, entity_id: str, item_id: str) -> dict | None:
+        return self._item_links.get(entity_id, {}).get(item_id)
+
+    async def get_item_links(self, entity_id: str) -> dict[str, dict]:
+        return dict(self._item_links.get(entity_id, {}))
+
+    async def set_item_link(
+        self,
+        entity_id: str,
+        item_id: str,
+        linked_entity_id: str,
+        linked_item_id: str,
+    ) -> None:
+        self._item_links.setdefault(entity_id, {})[item_id] = {
+            "entity_id": linked_entity_id, "item_id": linked_item_id,
+        }
+
+    async def remove_item_link(self, entity_id: str, item_id: str) -> None:
+        self._item_links.get(entity_id, {}).pop(item_id, None)
+
+    async def get_all_linked_entity_ids(self) -> list[str]:
+        return list(self._links)
+
+    async def set_link(self, entity_id: str, link_id: str) -> None:
+        self._links[entity_id] = {"link_id": link_id, "native_to_sync": {}, "sync_to_native": {}}
 
     async def get_tags(self, entity_id: str) -> dict[str, list[str]]:
         return {k: list(v) for k, v in self._tags.get(entity_id, {}).items()}

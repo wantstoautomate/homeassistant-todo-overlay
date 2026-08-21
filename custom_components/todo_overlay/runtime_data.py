@@ -9,6 +9,7 @@ from homeassistant.core import HomeAssistant
 
 from .const import DOMAIN
 from .due_scheduler import DueScheduler
+from .item_links import ItemLinkManager
 from .link_sync import LinkSyncManager
 from .manager import TodoManager
 from .metadata_store import MetadataStore
@@ -32,9 +33,12 @@ class TodoOverlayData:
     due_scheduler: DueScheduler
     open_items_registry: OpenItemsSensorRegistry
     unsub_entity_registry: Callable[[], None]
+    item_links: ItemLinkManager
     # None unless an MQTT broker is configured for linked lists (see
     # config_flow.py's options flow) - linking services no-op with a
     # clear error if this is unset rather than failing obscurely.
+    # Deliberately last (the only field with a default) - a dataclass
+    # can't have a required field after one with a default.
     link_sync: LinkSyncManager | None = None
 
 
@@ -64,3 +68,12 @@ def get_link_sync(hass: HomeAssistant) -> LinkSyncManager | None:
 
     entry = hass.config_entries.async_entries(DOMAIN)[0]
     return entry.runtime_data.link_sync
+
+
+def get_item_links(hass: HomeAssistant) -> ItemLinkManager:
+    """Unlike link_sync above, always present - item links (see
+    item_links.py) don't need an MQTT broker at all, since they never
+    cross an instance boundary."""
+
+    entry = hass.config_entries.async_entries(DOMAIN)[0]
+    return entry.runtime_data.item_links

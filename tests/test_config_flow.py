@@ -174,7 +174,7 @@ async def test_options_init_offers_only_configure_when_no_broker_set():
     result = await flow.async_step_init()
 
     assert result["type"] == FlowResultType.MENU
-    assert result["menu_options"] == ["configure_broker"]
+    assert result["menu_options"] == ["configure_broker", "configure_item_links"]
 
 
 @pytest.mark.asyncio
@@ -183,7 +183,7 @@ async def test_options_init_also_offers_remove_when_broker_already_configured():
 
     result = await flow.async_step_init()
 
-    assert result["menu_options"] == ["configure_broker", "remove_broker"]
+    assert result["menu_options"] == ["configure_broker", "remove_broker", "configure_item_links"]
 
 
 @pytest.mark.asyncio

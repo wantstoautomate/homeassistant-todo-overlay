@@ -66,6 +66,7 @@ async def test_manager_returns_serialisable_list():
                 "tags": [],
                 "trigger_on_due": False,
                 "pin_type": None,
+                "linked": False,
                 "children": [
                     {
                         "id": "2",
@@ -78,6 +79,7 @@ async def test_manager_returns_serialisable_list():
                         "tags": [],
                         "trigger_on_due": False,
                         "pin_type": None,
+                        "linked": False,
                         "children": [],
                     }
                 ],

@@ -20,6 +20,8 @@ WS_TYPE_SET_PIN_TYPE = "todo_overlay/set_pin_type"
 WS_TYPE_ADD_TAG = "todo_overlay/add_tag"
 WS_TYPE_REMOVE_TAG = "todo_overlay/remove_tag"
 WS_TYPE_SET_TRIGGER_ON_DUE = "todo_overlay/set_trigger_on_due"
+WS_TYPE_LINK_ITEM = "todo_overlay/link_item"
+WS_TYPE_UNLINK_ITEM = "todo_overlay/unlink_item"
 
 SERVICE_SAVE_LIST = "save_list"
 SERVICE_LOAD_LIST = "load_list"
@@ -49,6 +51,15 @@ CONF_MQTT_TLS = "mqtt_tls"
 # use tcp while the other uses websockets against the very same broker.
 CONF_MQTT_TRANSPORT = "mqtt_transport"
 CONF_MQTT_WS_PATH = "mqtt_ws_path"
+
+# Options-flow keys for item links (see item_links.py) - a single,
+# once-off default parent that new/loaded links auto-file under,
+# distinct from the MQTT broker settings above. Both absent unless the
+# user has actually configured a default via the options flow; either
+# missing just means "file new links at the target list's own root"
+# (see ItemLinkManager.link_item's own resolution order).
+CONF_ITEM_LINK_DEFAULT_ENABLED = "item_link_default_enabled"
+CONF_ITEM_LINK_DEFAULT_TARGET_ITEM_ID = "item_link_default_target_item_id"
 
 ATTR_NAME = "name"
 ATTR_PERSIST_STATES = "persist_states"

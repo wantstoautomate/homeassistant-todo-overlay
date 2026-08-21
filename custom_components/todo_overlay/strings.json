@@ -16,7 +16,8 @@
         "title": "Todo Overlay options",
         "menu_options": {
           "configure_broker": "Configure MQTT link",
-          "remove_broker": "Disable MQTT link"
+          "remove_broker": "Disable MQTT link",
+          "configure_item_links": "Configure item links"
         }
       },
       "configure_broker": {
@@ -34,6 +35,14 @@
         "data_description": {
           "mqtt_transport": "\"tcp\" for a direct/LAN broker, \"websockets\" for one reached through a reverse proxy's WSS (e.g. Nginx Proxy Manager) without needing a dedicated forwarded port.",
           "mqtt_ws_path": "Only used when connection type is websockets - the path the broker's websocket listener expects (Mosquitto's default is /mqtt)."
+        }
+      },
+      "configure_item_links": {
+        "title": "Item links",
+        "description": "Optional - a once-off default parent (e.g. a \"Brodie\" section) that new item links auto-file under, so linking an item to your shared list doesn't need a picker every time. The target list itself is picked automatically too, whenever exactly one MQTT-linked list is configured ({linked_list_count} found right now) - with zero or several, only the toggle below applies; item links still work, they just file at the target list's own root instead. Leaving all of this alone changes nothing.",
+        "data": {
+          "item_link_default_enabled": "File new item links under the default below",
+          "item_link_default_target_item_id": "Default parent"
         }
       }
     }

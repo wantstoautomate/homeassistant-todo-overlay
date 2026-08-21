@@ -649,6 +649,8 @@ def test_async_register_websocket_registers_every_handler():
         "todo_overlay/delete_item",
         "todo_overlay/set_quantity",
         "todo_overlay/set_pin_type",
+        "todo_overlay/link_item",
+        "todo_overlay/unlink_item",
         "todo_overlay/set_tags",
         "todo_overlay/add_tag",
         "todo_overlay/remove_tag",

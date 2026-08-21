@@ -10,6 +10,8 @@ ever needs. See __init__.py's async_setup() for how an existing
 
 from __future__ import annotations
 
+from typing import Any
+
 import voluptuous as vol
 
 from homeassistant.config_entries import (
@@ -26,6 +28,8 @@ from homeassistant.helpers.selector import (
 )
 
 from .const import (
+    CONF_ITEM_LINK_DEFAULT_ENABLED,
+    CONF_ITEM_LINK_DEFAULT_TARGET_ITEM_ID,
     CONF_MQTT_HOST,
     CONF_MQTT_PASSWORD,
     CONF_MQTT_PORT,
@@ -35,6 +39,10 @@ from .const import (
     CONF_MQTT_WS_PATH,
     DOMAIN,
 )
+from .ha_adapter import HomeAssistantTodoProvider
+from .metadata_store import MetadataStore
+from .models import TodoItem
+from .tree import build_tree
 
 # Never redisplayed to the user - a stored password comes back from the
 # broker options form as this sentinel rather than the real value (same
@@ -43,6 +51,25 @@ from .const import (
 # broker password into the page's DOM/autofill history.
 PASSWORD_NOT_CHANGED = "__**password_not_changed**__"
 PASSWORD_SELECTOR = TextSelector(TextSelectorConfig(type=TextSelectorType.PASSWORD))
+
+# The literal value meaning "no default parent - file new links at the
+# target list's own root" in the item-link target dropdown below - a
+# plain vol.In selector has no room for a real breadcrumb browser (see
+# the card's own "Load into" picker, which has the luxury of a full Lit
+# component to work with), so this is a flat, indented list instead,
+# same shape as that picker's own original (pre-breadcrumb) design.
+_NO_DEFAULT_TARGET = ""
+
+
+def _flatten_for_options(items: list[TodoItem], depth: int = 0) -> dict[str, str]:
+    options: dict[str, str] = {}
+
+    for item in items:
+        prefix = f"{'  ' * depth}— " if depth else ""
+        options[item.id] = f"{prefix}{item.title}"
+        options.update(_flatten_for_options(item.children, depth + 1))
+
+    return options
 
 
 class TodoOverlayConfigFlow(ConfigFlow, domain=DOMAIN):
@@ -94,6 +121,8 @@ class TodoOverlayOptionsFlow(OptionsFlowWithReload):
         if self.config_entry.options.get(CONF_MQTT_HOST):
             menu_options.append("remove_broker")
 
+        menu_options.append("configure_item_links")
+
         return self.async_show_menu(step_id="init", menu_options=menu_options)
 
     async def async_step_configure_broker(self, user_input: dict | None = None) -> ConfigFlowResult:
@@ -133,3 +162,59 @@ class TodoOverlayOptionsFlow(OptionsFlowWithReload):
             new_options.pop(key, None)
 
         return self.async_create_entry(data=new_options)
+
+    async def async_step_configure_item_links(self, user_input: dict | None = None) -> ConfigFlowResult:
+        """A once-off default parent new/loaded item links auto-file
+        under (see item_links.py) - entirely optional; leaving the
+        target unset (or the toggle off) just files new links at the
+        target list's own root instead, same as it always did before
+        this step existed.
+
+        The target dropdown only ever appears when exactly ONE
+        cross-instance linked list (see link_sync.py) is currently
+        configured - with zero or several, there's no single obvious
+        list to offer a parent picker for at all, so only the toggle
+        itself shows (item_links.py falls back to the same "no default"
+        behavior at link-creation time in either case, logged rather
+        than guessed)."""
+
+        current = self.config_entry.options
+
+        if user_input is not None:
+            new_options = {**current, **user_input}
+
+            if new_options.get(CONF_ITEM_LINK_DEFAULT_TARGET_ITEM_ID) == _NO_DEFAULT_TARGET:
+                new_options.pop(CONF_ITEM_LINK_DEFAULT_TARGET_ITEM_ID, None)
+
+            return self.async_create_entry(data=new_options)
+
+        schema_dict: dict[Any, Any] = {
+            vol.Required(
+                CONF_ITEM_LINK_DEFAULT_ENABLED,
+                default=current.get(CONF_ITEM_LINK_DEFAULT_ENABLED, False),
+            ): bool,
+        }
+
+        metadata_store = MetadataStore(self.hass)
+        linked_entities = await metadata_store.get_all_linked_entity_ids()
+
+        if len(linked_entities) == 1:
+            entity_id = linked_entities[0]
+            adapter = HomeAssistantTodoProvider(self.hass)
+            items = await adapter.get_items(entity_id)
+            positions = await metadata_store.get_relationships(entity_id)
+            tree = build_tree(items, positions)
+
+            target_options = {_NO_DEFAULT_TARGET: "(none - file at the list's own root)"}
+            target_options.update(_flatten_for_options(tree))
+
+            schema_dict[vol.Optional(
+                CONF_ITEM_LINK_DEFAULT_TARGET_ITEM_ID,
+                default=current.get(CONF_ITEM_LINK_DEFAULT_TARGET_ITEM_ID, _NO_DEFAULT_TARGET),
+            )] = vol.In(target_options)
+
+        return self.async_show_form(
+            step_id="configure_item_links",
+            data_schema=vol.Schema(schema_dict),
+            description_placeholders={"linked_list_count": str(len(linked_entities))},
+        )
