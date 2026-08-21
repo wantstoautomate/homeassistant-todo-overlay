@@ -334,6 +334,7 @@ async def websocket_save_list(
         vol.Required("entity_id"): cv.entity_id,
         vol.Required("name"): str,
         vol.Optional("mode", default="merge"): vol.In(["replace", "merge", "full_merge"]),
+        vol.Optional("target_item"): str,
     }
 )
 @websocket_api.async_response
@@ -351,6 +352,7 @@ async def websocket_load_list(
         entity_id=msg["entity_id"],
         name=msg["name"],
         mode=msg["mode"],
+        target_item=msg.get("target_item"),
     )
 
     connection.send_result(msg["id"])

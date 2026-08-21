@@ -919,6 +919,211 @@ async def test_manager_load_list_replace_clears_existing_items_first():
     assert [item.title for item in todo_list.items] == ["New item"]
 
 
+# --- load_list target_item -------------------------------------------------
+# Live use case: "To buy" already exists as a parent (with or without its
+# own children yet) and a saved template should load AS ITS CHILDREN,
+# not as new top-level siblings.
+
+@pytest.mark.asyncio
+async def test_manager_load_list_merge_into_target_item_loads_as_its_children():
+
+    adapter = FakeAdapter(items=[
+        TodoItem(id="parent", title="To buy", completed=False),
+        TodoItem(id="other", title="Unrelated", completed=False),
+    ])
+    metadata_store = FakeMetadataStore({
+        "parent": ItemPosition(parent_id=None, order=0),
+        "other": ItemPosition(parent_id=None, order=1),
+    })
+    manager = TodoManager(adapter=adapter, metadata_store=metadata_store)
+
+    await metadata_store.save_snapshot("Fruit & veg", [
+        {
+            "title": "Apples", "description": None, "due_date": None, "due_datetime": None,
+            "completed": False, "children": [],
+        },
+    ])
+
+    await manager.load_list(
+        entity_id="todo.shopping", name="Fruit & veg", mode="merge", target_item="To buy",
+    )
+
+    todo_list = await manager.get_list("todo.shopping")
+    by_title = {item.title: item for item in todo_list.items}
+
+    # "Apples" landed under "To buy", not as a new root sibling -
+    # "Unrelated" is untouched.
+    assert set(by_title) == {"To buy", "Unrelated"}
+    assert [child.title for child in by_title["To buy"].children] == ["Apples"]
+
+
+@pytest.mark.asyncio
+async def test_manager_load_list_target_item_resolves_by_title_or_id_the_same_way():
+
+    adapter = FakeAdapter(items=[TodoItem(id="parent", title="To buy", completed=False)])
+    metadata_store = FakeMetadataStore({"parent": ItemPosition(parent_id=None, order=0)})
+    manager = TodoManager(adapter=adapter, metadata_store=metadata_store)
+
+    await metadata_store.save_snapshot("t", [
+        {
+            "title": "Apples", "description": None, "due_date": None, "due_datetime": None,
+            "completed": False, "children": [],
+        },
+    ])
+
+    await manager.load_list(entity_id="todo.shopping", name="t", mode="merge", target_item="parent")
+
+    todo_list = await manager.get_list("todo.shopping")
+    assert [child.title for child in todo_list.items[0].children] == ["Apples"]
+
+
+@pytest.mark.asyncio
+async def test_manager_load_list_merge_into_target_matches_existing_children_by_path_not_root():
+
+    # "Milk" already exists as a child of "To buy" - merge-mode should
+    # recognise it there and only add the genuinely new "Apples", NOT
+    # duplicate "Milk" just because it isn't a ROOT-level match.
+    adapter = FakeAdapter(items=[
+        TodoItem(id="parent", title="To buy", completed=False),
+        TodoItem(id="milk", title="Milk", completed=False),
+    ])
+    metadata_store = FakeMetadataStore({
+        "parent": ItemPosition(parent_id=None, order=0),
+        "milk": ItemPosition(parent_id="parent", order=0),
+    })
+    manager = TodoManager(adapter=adapter, metadata_store=metadata_store)
+
+    await metadata_store.save_snapshot("t", [
+        {
+            "title": "Milk", "description": None, "due_date": None, "due_datetime": None,
+            "completed": False, "children": [],
+        },
+        {
+            "title": "Apples", "description": None, "due_date": None, "due_datetime": None,
+            "completed": False, "children": [],
+        },
+    ])
+
+    await manager.load_list(entity_id="todo.shopping", name="t", mode="merge", target_item="To buy")
+
+    todo_list = await manager.get_list("todo.shopping")
+    children = todo_list.items[0].children
+    assert sorted(c.title for c in children) == ["Apples", "Milk"]
+    # "Milk" kept its original id - it was matched, not recreated.
+    assert next(c for c in children if c.title == "Milk").id == "milk"
+
+
+@pytest.mark.asyncio
+async def test_manager_load_list_replace_with_target_only_clears_that_targets_subtree():
+
+    adapter = FakeAdapter(items=[
+        TodoItem(id="parent", title="To buy", completed=False),
+        TodoItem(id="child", title="Old child", completed=False),
+        TodoItem(id="grandchild", title="Old grandchild", completed=False),
+        TodoItem(id="sibling", title="Untouched sibling", completed=False),
+    ])
+    metadata_store = FakeMetadataStore({
+        "parent": ItemPosition(parent_id=None, order=0),
+        "child": ItemPosition(parent_id="parent", order=0),
+        "grandchild": ItemPosition(parent_id="child", order=0),
+        "sibling": ItemPosition(parent_id=None, order=1),
+    })
+    manager = TodoManager(adapter=adapter, metadata_store=metadata_store)
+
+    await metadata_store.save_snapshot("t", [
+        {
+            "title": "New child", "description": None, "due_date": None, "due_datetime": None,
+            "completed": False, "children": [],
+        },
+    ])
+
+    await manager.load_list(entity_id="todo.shopping", name="t", mode="replace", target_item="To buy")
+
+    # Both the old child AND grandchild are gone - a scoped replace has
+    # to clear the WHOLE subtree, not just the direct children, or the
+    # grandchild would be left behind as an orphan under a deleted parent.
+    assert set(adapter.remove_item_calls) == {
+        ("todo.shopping", "child"), ("todo.shopping", "grandchild"),
+    }
+
+    todo_list = await manager.get_list("todo.shopping")
+    by_title = {item.title: item for item in todo_list.items}
+
+    # The rest of the list (the unrelated root sibling) is completely
+    # untouched - the whole point of targeting a parent is that nothing
+    # else in the list gets cleared.
+    assert set(by_title) == {"To buy", "Untouched sibling"}
+    assert [child.title for child in by_title["To buy"].children] == ["New child"]
+
+
+@pytest.mark.asyncio
+async def test_manager_load_list_replace_with_target_fires_removed_for_every_cleared_descendant():
+
+    hass = _FakeEventHass()
+    adapter = FakeAdapter(items=[
+        TodoItem(id="parent", title="To buy", completed=False),
+        TodoItem(id="child", title="Old child", completed=False),
+    ])
+    metadata_store = FakeMetadataStore({
+        "parent": ItemPosition(parent_id=None, order=0),
+        "child": ItemPosition(parent_id="parent", order=0),
+    })
+    manager = TodoManager(adapter=adapter, metadata_store=metadata_store, hass=hass)
+
+    await metadata_store.save_snapshot("t", [])
+
+    await manager.load_list(entity_id="todo.shopping", name="t", mode="replace", target_item="To buy")
+
+    removed = [data for _event, data in hass.calls if data["action"] == "removed"]
+    assert removed == [
+        {"entity_id": "todo.shopping", "item_id": "child", "title": "Old child", "action": "removed"},
+    ]
+
+
+@pytest.mark.asyncio
+async def test_manager_load_list_full_merge_into_target_appends_under_it_duplicates_and_all():
+
+    adapter = FakeAdapter(items=[
+        TodoItem(id="parent", title="To buy", completed=False),
+        TodoItem(id="milk", title="Milk", completed=False),
+    ])
+    metadata_store = FakeMetadataStore({
+        "parent": ItemPosition(parent_id=None, order=0),
+        "milk": ItemPosition(parent_id="parent", order=0),
+    })
+    manager = TodoManager(adapter=adapter, metadata_store=metadata_store)
+
+    await metadata_store.save_snapshot("t", [
+        {
+            "title": "Milk", "description": None, "due_date": None, "due_datetime": None,
+            "completed": False, "children": [],
+        },
+    ])
+
+    await manager.load_list(
+        entity_id="todo.shopping", name="t", mode="full_merge", target_item="To buy",
+    )
+
+    todo_list = await manager.get_list("todo.shopping")
+    children = todo_list.items[0].children
+    assert sorted(c.title for c in children) == ["Milk", "Milk"]
+
+
+@pytest.mark.asyncio
+async def test_manager_load_list_raises_item_not_found_for_an_unresolvable_target():
+
+    adapter = FakeAdapter(items=[TodoItem(id="1", title="Something", completed=False)])
+    metadata_store = FakeMetadataStore({"1": ItemPosition(parent_id=None, order=0)})
+    manager = TodoManager(adapter=adapter, metadata_store=metadata_store)
+
+    await metadata_store.save_snapshot("t", [])
+
+    with pytest.raises(ItemNotFoundError):
+        await manager.load_list(
+            entity_id="todo.shopping", name="t", mode="merge", target_item="Does not exist",
+        )
+
+
 @pytest.mark.asyncio
 async def test_manager_save_and_load_list_works_across_different_entities():
 

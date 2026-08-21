@@ -109,6 +109,76 @@ describe("todo-overlay-save-load-dialog", () => {
         expect(el.value.name).toBe("my_template");
     });
 
+    // Live use case: loading a saved template AS THE CHILDREN of an
+    // existing parent ("To buy") rather than as new root-level siblings.
+    describe("load-into target picker", () => {
+        it("defaults to 'Top level' with no target set", async () => {
+            const el = await renderDialog({
+                action: "load", savedNames: ["a"], value: {...EMPTY_SAVE_LOAD_VALUE, name: "a"},
+                targetOptions: [{id: "1", label: "To buy"}],
+            });
+
+            const select = el.shadowRoot?.querySelector("#save-load-target") as HTMLSelectElement;
+            expect(select).not.toBeNull();
+            expect(select.value).toBe("");
+        });
+
+        it("renders every offered target, indented labels intact", async () => {
+            const el = await renderDialog({
+                action: "load", savedNames: ["a"], value: {...EMPTY_SAVE_LOAD_VALUE, name: "a"},
+                targetOptions: [{id: "1", label: "To buy"}, {id: "2", label: "  — Milk"}],
+            });
+
+            const select = el.shadowRoot?.querySelector("#save-load-target") as HTMLSelectElement;
+            const labels = [...select.querySelectorAll("option")].map(o => o.textContent?.trim());
+            expect(labels).toEqual(["Top level", "To buy", "— Milk"]);
+        });
+
+        it("updates the draft value when a target is chosen", async () => {
+            const el = await renderDialog({
+                action: "load", savedNames: ["a"], value: {...EMPTY_SAVE_LOAD_VALUE, name: "a"},
+                targetOptions: [{id: "parent-1", label: "To buy"}],
+            });
+
+            const select = el.shadowRoot?.querySelector("#save-load-target") as HTMLSelectElement;
+            select.value = "parent-1";
+            select.dispatchEvent(new Event("change"));
+            await el.updateComplete;
+
+            expect(el.value.targetItem).toBe("parent-1");
+        });
+
+        it("shows the scoped-replace hint only when Replace mode AND a target are both set", async () => {
+            const neitherSet = await renderDialog({
+                action: "load", savedNames: ["a"],
+                value: {...EMPTY_SAVE_LOAD_VALUE, name: "a", mode: "merge", targetItem: ""},
+                targetOptions: [{id: "1", label: "To buy"}],
+            });
+            expect(neitherSet.shadowRoot?.querySelector(".field-hint")).toBeNull();
+
+            const replaceOnly = await renderDialog({
+                action: "load", savedNames: ["a"],
+                value: {...EMPTY_SAVE_LOAD_VALUE, name: "a", mode: "replace", targetItem: ""},
+                targetOptions: [{id: "1", label: "To buy"}],
+            });
+            expect(replaceOnly.shadowRoot?.querySelector(".field-hint")).toBeNull();
+
+            const targetOnly = await renderDialog({
+                action: "load", savedNames: ["a"],
+                value: {...EMPTY_SAVE_LOAD_VALUE, name: "a", mode: "merge", targetItem: "1"},
+                targetOptions: [{id: "1", label: "To buy"}],
+            });
+            expect(targetOnly.shadowRoot?.querySelector(".field-hint")).toBeNull();
+
+            const both = await renderDialog({
+                action: "load", savedNames: ["a"],
+                value: {...EMPTY_SAVE_LOAD_VALUE, name: "a", mode: "replace", targetItem: "1"},
+                targetOptions: [{id: "1", label: "To buy"}],
+            });
+            expect(both.shadowRoot?.querySelector(".field-hint")).not.toBeNull();
+        });
+    });
+
     it("does not clobber an in-progress unsaved name when the parent re-passes value", async () => {
         // Live-reported bug: "typing a name to save the list in the
         // mobile browser wipes it occasionally." The parent

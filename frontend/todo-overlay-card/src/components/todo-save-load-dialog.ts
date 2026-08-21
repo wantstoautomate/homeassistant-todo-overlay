@@ -7,13 +7,29 @@ export interface SaveLoadFormValue {
     name: string;
     persistStates: boolean;
     mode: LoadMode;
+    // "" means "load at the list's own root" - a plain <select> value,
+    // not string | undefined, so it sits in the same draftValue shape
+    // every other field here already uses. Only meaningful for "load" -
+    // see targetOptions below.
+    targetItem: string;
 }
 
 export const EMPTY_SAVE_LOAD_VALUE: SaveLoadFormValue = {
     name: "",
     persistStates: false,
     mode: "merge",
+    targetItem: "",
 };
+
+// One option for the "Load into" picker - id is what actually gets sent
+// (uid-or-title resolution on the backend would work with title too, but
+// id is unambiguous even across same-titled items), label is the
+// indented, depth-prefixed display text (see todo-overlay-list.ts's own
+// flattenForTargetPicker).
+export interface LoadTargetOption {
+    id: string;
+    label: string;
+}
 
 const MODE_LABELS: Record<LoadMode, string> = {
     merge: "Merge (skip items already there)",
@@ -36,6 +52,12 @@ export class TodoSaveLoadDialog extends LitElement {
         label {
             font-size: 12px;
             color: var(--secondary-text-color);
+        }
+
+        .field-hint {
+            font-size: 12px;
+            color: var(--secondary-text-color);
+            margin-top: 2px;
         }
 
         input,
@@ -161,6 +183,12 @@ export class TodoSaveLoadDialog extends LitElement {
     @property({attribute: false})
     savedNames: string[] = [];
 
+    // Every existing item on the list, flattened and indented by depth -
+    // see todo-overlay-list.ts's own flattenForTargetPicker, the only
+    // place this is ever built. Load-only; save has no equivalent field.
+    @property({attribute: false})
+    targetOptions: LoadTargetOption[] = [];
+
     private valueInitialized = false;
 
     protected willUpdate(changed: Map<string, unknown>): void {
@@ -208,6 +236,10 @@ export class TodoSaveLoadDialog extends LitElement {
 
     private updateMode(mode: LoadMode) {
         this.draftValue = {...this.draftValue, mode};
+    }
+
+    private updateTargetItem(targetItem: string) {
+        this.draftValue = {...this.draftValue, targetItem};
     }
 
     render() {
@@ -295,6 +327,40 @@ export class TodoSaveLoadDialog extends LitElement {
                                         `,
                                     )}
                                 </select>
+                            </div>
+
+                            <div class="field">
+                                <label for="save-load-target">Load into</label>
+                                <select
+                                    id="save-load-target"
+                                    .value=${this.draftValue.targetItem}
+                                    @change=${(e: Event) =>
+                                        this.updateTargetItem((e.target as HTMLSelectElement).value)}
+                                >
+                                    <option value="" ?selected=${!this.draftValue.targetItem}>
+                                        Top level
+                                    </option>
+                                    ${this.targetOptions.map(
+                                        option => html`
+                                            <option
+                                                value=${option.id}
+                                                ?selected=${this.draftValue.targetItem === option.id}
+                                            >
+                                                ${option.label}
+                                            </option>
+                                        `,
+                                    )}
+                                </select>
+                                ${
+                                    this.draftValue.targetItem && this.draftValue.mode === "replace"
+                                        ? html`
+                                            <div class="field-hint">
+                                                Only this item's own existing children are cleared first -
+                                                the rest of the list is untouched.
+                                            </div>
+                                        `
+                                        : ""
+                                }
                             </div>
                         `
                 }

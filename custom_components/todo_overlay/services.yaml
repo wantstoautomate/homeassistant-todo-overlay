@@ -41,6 +41,12 @@ load_list:
             - replace
             - merge
             - full_merge
+    target_item:
+      required: false
+      example: To buy
+      description: Load the snapshot as children of this existing item (id or title) instead of at the list's root. With mode "replace", only this item's own children are cleared first - the rest of the list is untouched.
+      selector:
+        text:
 
 delete_saved_list:
   name: Delete saved list

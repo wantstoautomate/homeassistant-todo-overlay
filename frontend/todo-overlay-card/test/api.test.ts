@@ -200,6 +200,17 @@ describe("api", () => {
         }]);
     });
 
+    it("loadList sends target_item when given - loads the snapshot as that item's children", async () => {
+        const hass = makeFakeHass();
+
+        await loadList(hass, "todo.a", "template", "merge", "parent-1");
+
+        expect(hass.connection.sent).toEqual([{
+            type: "todo_overlay/load_list", entity_id: "todo.a", name: "template", mode: "merge",
+            target_item: "parent-1",
+        }]);
+    });
+
     it("listSaved returns the saved names", async () => {
         const hass = makeFakeHass();
         hass.connection.responses["todo_overlay/list_saved"] = {names: ["a", "b"]};

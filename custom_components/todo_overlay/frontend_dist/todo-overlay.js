@@ -808,12 +808,13 @@ async function saveList(hass, entityId, name, persistStates) {
     persist_states: persistStates
   });
 }
-async function loadList(hass, entityId, name, mode) {
+async function loadList(hass, entityId, name, mode, targetItem) {
   await hass.connection.sendMessagePromise({
     type: "todo_overlay/load_list",
     entity_id: entityId,
     name,
-    mode
+    mode,
+    target_item: targetItem
   });
 }
 async function listSaved(hass) {
@@ -1799,7 +1800,8 @@ TodoItemDialog = __decorateClass([
 var EMPTY_SAVE_LOAD_VALUE = {
   name: "",
   persistStates: false,
-  mode: "merge"
+  mode: "merge",
+  targetItem: ""
 };
 var MODE_LABELS = {
   merge: "Merge (skip items already there)",
@@ -1818,6 +1820,7 @@ var TodoSaveLoadDialog = class extends i4 {
     this._seedValue = EMPTY_SAVE_LOAD_VALUE;
     this.draftValue = EMPTY_SAVE_LOAD_VALUE;
     this.savedNames = [];
+    this.targetOptions = [];
     this.valueInitialized = false;
   }
   set value(newValue) {
@@ -1864,6 +1867,9 @@ var TodoSaveLoadDialog = class extends i4 {
   }
   updateMode(mode) {
     this.draftValue = { ...this.draftValue, mode };
+  }
+  updateTargetItem(targetItem) {
+    this.draftValue = { ...this.draftValue, targetItem };
   }
   render() {
     const isSave = this.action === "save";
@@ -1939,6 +1945,35 @@ var TodoSaveLoadDialog = class extends i4 {
     )}
                                 </select>
                             </div>
+
+                            <div class="field">
+                                <label for="save-load-target">Load into</label>
+                                <select
+                                    id="save-load-target"
+                                    .value=${this.draftValue.targetItem}
+                                    @change=${(e7) => this.updateTargetItem(e7.target.value)}
+                                >
+                                    <option value="" ?selected=${!this.draftValue.targetItem}>
+                                        Top level
+                                    </option>
+                                    ${this.targetOptions.map(
+      (option) => b2`
+                                            <option
+                                                value=${option.id}
+                                                ?selected=${this.draftValue.targetItem === option.id}
+                                            >
+                                                ${option.label}
+                                            </option>
+                                        `
+    )}
+                                </select>
+                                ${this.draftValue.targetItem && this.draftValue.mode === "replace" ? b2`
+                                            <div class="field-hint">
+                                                Only this item's own existing children are cleared first -
+                                                the rest of the list is untouched.
+                                            </div>
+                                        ` : ""}
+                            </div>
                         `}
 
                 <div class="actions" slot="footer">
@@ -1963,6 +1998,12 @@ TodoSaveLoadDialog.styles = i`
         label {
             font-size: 12px;
             color: var(--secondary-text-color);
+        }
+
+        .field-hint {
+            font-size: 12px;
+            color: var(--secondary-text-color);
+            margin-top: 2px;
         }
 
         input,
@@ -2057,6 +2098,9 @@ __decorateClass([
 __decorateClass([
   n4({ attribute: false })
 ], TodoSaveLoadDialog.prototype, "savedNames", 2);
+__decorateClass([
+  n4({ attribute: false })
+], TodoSaveLoadDialog.prototype, "targetOptions", 2);
 TodoSaveLoadDialog = __decorateClass([
   t3("todo-overlay-save-load-dialog")
 ], TodoSaveLoadDialog);
@@ -3996,6 +4040,15 @@ function findItem(items, id) {
   }
   return void 0;
 }
+function flattenForTargetPicker(items, depth = 0) {
+  const options = [];
+  for (const item of items) {
+    const prefix = depth > 0 ? `${"  ".repeat(depth)}\u2014 ` : "";
+    options.push({ id: item.id, label: `${prefix}${item.title}` });
+    options.push(...flattenForTargetPicker(item.children, depth + 1));
+  }
+  return options;
+}
 function collectDescendantIds(item, into = /* @__PURE__ */ new Set()) {
   for (const child of item.children) {
     into.add(child.id);
@@ -4070,6 +4123,7 @@ var TodoOverlayList = class extends i4 {
     this.quickAddValue = "";
     this.saveLoadValue = EMPTY_SAVE_LOAD_VALUE;
     this.savedNames = [];
+    this.targetOptions = [];
     this.confirmingClearAll = false;
     this.itemChangedSubscribeStarted = false;
     this.onGlobalPointerMove = (e7) => {
@@ -4534,6 +4588,7 @@ var TodoOverlayList = class extends i4 {
       this.reportError("loading saved list names", err);
       return;
     }
+    this.targetOptions = flattenForTargetPicker(this.list?.items ?? []);
     this.saveLoadValue = EMPTY_SAVE_LOAD_VALUE;
     this.saveLoadAction = "load";
   }
@@ -4546,7 +4601,7 @@ var TodoOverlayList = class extends i4 {
       if (this.saveLoadAction === "save") {
         await saveList(this.hass, this.entity, value.name, value.persistStates);
       } else {
-        await loadList(this.hass, this.entity, value.name, value.mode);
+        await loadList(this.hass, this.entity, value.name, value.mode, value.targetItem || void 0);
       }
       await this.load();
     } catch (err) {
@@ -5121,6 +5176,7 @@ var TodoOverlayList = class extends i4 {
                             .action=${this.saveLoadAction}
                             .value=${this.saveLoadValue}
                             .savedNames=${this.savedNames}
+                            .targetOptions=${this.targetOptions}
 
                             @dialog-close=${this.closeSaveLoadDialog}
                             @dialog-confirm=${this.onSaveLoadConfirm}
@@ -5656,6 +5712,9 @@ __decorateClass([
 __decorateClass([
   r5()
 ], TodoOverlayList.prototype, "savedNames", 2);
+__decorateClass([
+  r5()
+], TodoOverlayList.prototype, "targetOptions", 2);
 __decorateClass([
   r5()
 ], TodoOverlayList.prototype, "confirmingClearAll", 2);

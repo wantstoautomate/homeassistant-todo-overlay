@@ -303,6 +303,56 @@ async def test_websocket_load_list_unknown_snapshot_sends_not_found_error():
     assert code == "not_found"
 
 
+@pytest.mark.asyncio
+async def test_websocket_load_list_with_target_item_loads_as_its_children():
+    manager = make_manager(
+        items=[TodoItem(id="parent", title="To buy", completed=False)],
+        positions={"parent": ItemPosition(parent_id=None, order=0)},
+    )
+    await manager._metadata_store.save_snapshot("template", [
+        {
+            "title": "Apples", "description": None, "due_date": None, "due_datetime": None,
+            "completed": False, "children": [],
+        },
+    ])
+
+    connection = await call_handler(
+        websocket.websocket_load_list, manager,
+        {
+            "entity_id": ENTITY_ID, "name": "template", "mode": "merge",
+            "target_item": "To buy",
+        },
+    )
+
+    assert connection.errors == []
+
+    list_connection = await call_handler(
+        websocket.websocket_get_list, manager, {"entity_id": ENTITY_ID, "group_completed": False},
+    )
+    items = list_connection.results[0][1]["items"]
+    assert len(items) == 1
+    assert items[0]["title"] == "To buy"
+    assert [child["title"] for child in items[0]["children"]] == ["Apples"]
+
+
+@pytest.mark.asyncio
+async def test_websocket_load_list_with_an_unresolvable_target_item_sends_not_found_error():
+    manager = make_manager()
+    await manager.save_list(ENTITY_ID, "template")
+
+    connection = await call_handler(
+        websocket.websocket_load_list, manager,
+        {
+            "entity_id": ENTITY_ID, "name": "template", "mode": "merge",
+            "target_item": "Does not exist",
+        },
+    )
+
+    assert connection.results == []
+    msg_id, code, message = connection.errors[0]
+    assert code == "not_found"
+
+
 # --- create_item / set_quantity / set_tags --------------------------------
 
 @pytest.mark.asyncio

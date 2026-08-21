@@ -2088,6 +2088,94 @@ describe("todo-overlay-list save-load dialog", () => {
 
         expect(nameInput.value).toBe("weekly_groceries");
     });
+
+    // Live use case: loading a saved template AS THE CHILDREN of an
+    // existing parent ("To buy") rather than as new root-level siblings.
+    describe("load-into target picker", () => {
+        it("offers every current item as a target, flattened and indented by depth", async () => {
+            const {el, hass} = await renderList({
+                entity_id: ENTITY_ID,
+                items: [
+                    makeItem({id: "1", title: "To buy", children: [
+                        makeItem({id: "2", title: "Milk"}),
+                    ]}),
+                    makeItem({id: "3", title: "Errands"}),
+                ],
+            });
+            hass.connection.responses["todo_overlay/list_saved"] = {names: []};
+
+            (el.shadowRoot?.querySelector("button[aria-label='Load list']") as HTMLElement).click();
+            await settle(el);
+
+            const dialog = el.shadowRoot?.querySelector("todo-overlay-save-load-dialog");
+            const select = dialog?.shadowRoot?.querySelector("#save-load-target") as HTMLSelectElement;
+            const labels = [...select.querySelectorAll("option")].map(o => o.textContent?.trim());
+
+            expect(labels).toEqual(["Top level", "To buy", "— Milk", "Errands"]);
+        });
+
+        it("sends the chosen target's id as target_item when loading", async () => {
+            const {el, hass} = await renderList({
+                entity_id: ENTITY_ID,
+                items: [makeItem({id: "1", title: "To buy"})],
+            });
+            hass.connection.responses["todo_overlay/list_saved"] = {names: ["template"]};
+
+            (el.shadowRoot?.querySelector("button[aria-label='Load list']") as HTMLElement).click();
+            await settle(el);
+
+            const dialog = el.shadowRoot?.querySelector("todo-overlay-save-load-dialog") as Element & {
+                shadowRoot: ShadowRoot;
+            };
+
+            const nameSelect = dialog.shadowRoot.querySelector("#save-load-select") as HTMLSelectElement;
+            nameSelect.value = "template";
+            nameSelect.dispatchEvent(new Event("change"));
+            await (dialog as unknown as {updateComplete: Promise<unknown>}).updateComplete;
+
+            const targetSelect = dialog.shadowRoot.querySelector("#save-load-target") as HTMLSelectElement;
+            targetSelect.value = "1";
+            targetSelect.dispatchEvent(new Event("change"));
+            await (dialog as unknown as {updateComplete: Promise<unknown>}).updateComplete;
+
+            const buttons = [...dialog.shadowRoot.querySelectorAll("button")] as HTMLButtonElement[];
+            buttons.find(b => b.textContent?.trim() === "Load")!.click();
+            await flushAsync();
+
+            expect(hass.connection.sent).toContainEqual(expect.objectContaining({
+                type: "todo_overlay/load_list",
+                name: "template",
+                target_item: "1",
+            }));
+        });
+
+        it("sends no target_item at all when 'Top level' (the default) is left chosen", async () => {
+            const {el, hass} = await renderList({
+                entity_id: ENTITY_ID,
+                items: [makeItem({id: "1", title: "To buy"})],
+            });
+            hass.connection.responses["todo_overlay/list_saved"] = {names: ["template"]};
+
+            (el.shadowRoot?.querySelector("button[aria-label='Load list']") as HTMLElement).click();
+            await settle(el);
+
+            const dialog = el.shadowRoot?.querySelector("todo-overlay-save-load-dialog") as Element & {
+                shadowRoot: ShadowRoot;
+            };
+
+            const nameSelect = dialog.shadowRoot.querySelector("#save-load-select") as HTMLSelectElement;
+            nameSelect.value = "template";
+            nameSelect.dispatchEvent(new Event("change"));
+            await (dialog as unknown as {updateComplete: Promise<unknown>}).updateComplete;
+
+            const buttons = [...dialog.shadowRoot.querySelectorAll("button")] as HTMLButtonElement[];
+            buttons.find(b => b.textContent?.trim() === "Load")!.click();
+            await flushAsync();
+
+            const sentLoad = hass.connection.sent.find(m => m.type === "todo_overlay/load_list");
+            expect(sentLoad?.target_item).toBeUndefined();
+        });
+    });
 });
 
 // A plain tap on the clear-completed (trash) toolbar button keeps doing
