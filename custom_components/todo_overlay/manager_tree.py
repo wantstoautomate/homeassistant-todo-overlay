@@ -54,18 +54,26 @@ class TreeMixin:
         tags = await self._metadata_store.get_tags(entity_id)
         trigger_on_due = await self._metadata_store.get_trigger_on_due(entity_id)
         pin_types = await self._metadata_store.get_pin_types(entity_id)
+        item_links = await self._metadata_store.get_item_links(entity_id)
 
-        items, positions, quantities, tags, trigger_on_due, pin_types = await self._reconcile_orphaned_metadata(
-            entity_id, items, positions, quantities, tags, trigger_on_due, pin_types,
+        items, positions, quantities, tags, trigger_on_due, pin_types, item_links = (
+            await self._reconcile_orphaned_metadata(
+                entity_id, items, positions, quantities, tags, trigger_on_due, pin_types, item_links,
+            )
         )
 
-        items, positions, quantities, tags, trigger_on_due, pin_types = await self._merge_duplicate_titles(
-            entity_id, items, positions, quantities, tags, trigger_on_due, pin_types,
+        items, positions, quantities, tags, trigger_on_due, pin_types, item_links = (
+            await self._merge_duplicate_titles(
+                entity_id, items, positions, quantities, tags, trigger_on_due, pin_types, item_links,
+            )
         )
 
         return TodoList(
             entity_id=entity_id,
-            items=build_tree(items, positions, quantities, tags, trigger_on_due, group_completed, pin_types),
+            items=build_tree(
+                items, positions, quantities, tags, trigger_on_due, group_completed, pin_types,
+                set(item_links),
+            ),
         )
 
     async def _reconcile_orphaned_metadata(
@@ -77,12 +85,14 @@ class TreeMixin:
         tags: dict[str, list[str]],
         trigger_on_due: set[str],
         pin_types: dict[str, str],
+        item_links: dict[str, dict[str, str]],
     ) -> tuple[
         list[TodoItem], dict[str, ItemPosition], dict[str, str], dict[str, list[str]], set[str], dict[str, str],
+        dict[str, dict[str, str]],
     ]:
-        """Drop stored positions/quantities/tags/trigger_on_due/pin_type
-        (and the scheduler's due_fired bookkeeping) for ids that no
-        longer exist on the native list.
+        """Drop stored positions/quantities/tags/trigger_on_due/pin_type/
+        item_link (and the scheduler's due_fired bookkeeping) for ids
+        that no longer exist on the native list.
 
         An item can disappear through paths this integration never sees -
         the native todo card, a voice assistant, an automation calling
@@ -91,16 +101,24 @@ class TreeMixin:
         forever. Runs on every read since it's cheap (the ids needed are
         already fetched for this call) and catches removals regardless
         of which path did the removing.
+
+        Deliberately passive for item_links specifically, unlike
+        item_links.py's own event-driven deletion cascade: an item
+        vanishing through a path this integration never saw also means
+        ItemLinkManager never saw it either, so its own partner is left
+        alone here - just the dangling reference on THIS side is
+        dropped, not an active cross-entity delete triggered from a
+        routine read-time cleanup pass.
         """
 
         live_ids = {item.id for item in items}
         orphaned_set = set()
 
-        for source in (positions, quantities, tags, trigger_on_due, pin_types):
+        for source in (positions, quantities, tags, trigger_on_due, pin_types, item_links):
             orphaned_set.update(item_id for item_id in source if item_id not in live_ids)
 
         if not orphaned_set:
-            return items, positions, quantities, tags, trigger_on_due, pin_types
+            return items, positions, quantities, tags, trigger_on_due, pin_types, item_links
 
         orphaned = list(orphaned_set)
 
@@ -111,13 +129,17 @@ class TreeMixin:
         await self._metadata_store.remove_due_fired_for_items(entity_id, orphaned)
         await self._metadata_store.remove_pin_types(entity_id, orphaned)
 
+        for item_id in orphaned:
+            await self._metadata_store.remove_item_link(entity_id, item_id)
+
         positions = {k: v for k, v in positions.items() if k not in orphaned_set}
         quantities = {k: v for k, v in quantities.items() if k not in orphaned_set}
         tags = {k: v for k, v in tags.items() if k not in orphaned_set}
         trigger_on_due = {item_id for item_id in trigger_on_due if item_id not in orphaned_set}
         pin_types = {k: v for k, v in pin_types.items() if k not in orphaned_set}
+        item_links = {k: v for k, v in item_links.items() if k not in orphaned_set}
 
-        return items, positions, quantities, tags, trigger_on_due, pin_types
+        return items, positions, quantities, tags, trigger_on_due, pin_types, item_links
 
     async def _merge_duplicate_titles(
         self,
@@ -128,8 +150,10 @@ class TreeMixin:
         tags: dict[str, list[str]],
         trigger_on_due: set[str],
         pin_types: dict[str, str],
+        item_links: dict[str, dict[str, str]],
     ) -> tuple[
         list[TodoItem], dict[str, ItemPosition], dict[str, str], dict[str, list[str]], set[str], dict[str, str],
+        dict[str, dict[str, str]],
     ]:
         """Collapse sibling items that share a title into one, combining
         their quantities where possible (see _combine_quantities) and
@@ -172,6 +196,12 @@ class TreeMixin:
             # survivor has none at all, so a merge never silently drops
             # a pin that was only ever set on the duplicate being removed.
             combined_pin_type = pin_types.get(survivor.id)
+            # Same "survivor wins, duplicate only fills a gap" rule as
+            # pin_type above - but a link is a TWO-sided relationship
+            # (see item_links.py), so adopting the duplicate's own link
+            # also means repointing the partner's own record at the
+            # survivor, not just writing the survivor's own side.
+            combined_item_link = item_links.get(survivor.id)
             # A duplicate's own due_datetime never transfers to the
             # survivor (only the survivor's own due_datetime matters), so
             # this only ever turns the flag on, and only when the
@@ -190,6 +220,9 @@ class TreeMixin:
 
                 if combined_pin_type is None:
                     combined_pin_type = pin_types.get(duplicate.id)
+
+                if combined_item_link is None:
+                    combined_item_link = item_links.get(duplicate.id)
 
                 if duplicate.id in trigger_on_due:
                     survivor_trigger_on_due = True
@@ -232,6 +265,21 @@ class TreeMixin:
                 await self._metadata_store.set_pin_type(entity_id, survivor.id, combined_pin_type)
                 pin_types[survivor.id] = combined_pin_type
 
+            if combined_item_link and item_links.get(survivor.id) != combined_item_link:
+                await self._metadata_store.set_item_link(
+                    entity_id, survivor.id,
+                    combined_item_link["entity_id"], combined_item_link["item_id"],
+                )
+                # The partner's own record still pointed at the
+                # duplicate's (about to be removed) id - repoint it at
+                # the survivor, or the next change on the partner's side
+                # would try to mirror into an item that no longer exists.
+                await self._metadata_store.set_item_link(
+                    combined_item_link["entity_id"], combined_item_link["item_id"],
+                    entity_id, survivor.id,
+                )
+                item_links[survivor.id] = combined_item_link
+
             if survivor_trigger_on_due and survivor.due_datetime and survivor.id not in trigger_on_due:
                 await self._metadata_store.set_trigger_on_due(entity_id, survivor.id, True)
                 trigger_on_due.add(survivor.id)
@@ -240,7 +288,7 @@ class TreeMixin:
             await self._metadata_store.set_positions(entity_id, reparented)
 
         if not removed_ids:
-            return items, positions, quantities, tags, trigger_on_due, pin_types
+            return items, positions, quantities, tags, trigger_on_due, pin_types, item_links
 
         await self._metadata_store.remove_positions(entity_id, removed_ids)
         await self._metadata_store.remove_quantities(entity_id, removed_ids)
@@ -249,6 +297,9 @@ class TreeMixin:
         await self._metadata_store.remove_due_fired_for_items(entity_id, removed_ids)
         await self._metadata_store.remove_pin_types(entity_id, removed_ids)
 
+        for removed_id in removed_ids:
+            await self._metadata_store.remove_item_link(entity_id, removed_id)
+
         removed_id_set = set(removed_ids)
         items = [item for item in items if item.id not in removed_id_set]
         positions = {k: v for k, v in positions.items() if k not in removed_id_set}
@@ -256,5 +307,6 @@ class TreeMixin:
         tags = {k: v for k, v in tags.items() if k not in removed_id_set}
         trigger_on_due = {item_id for item_id in trigger_on_due if item_id not in removed_id_set}
         pin_types = {k: v for k, v in pin_types.items() if k not in removed_id_set}
+        item_links = {k: v for k, v in item_links.items() if k not in removed_id_set}
 
-        return items, positions, quantities, tags, trigger_on_due, pin_types
+        return items, positions, quantities, tags, trigger_on_due, pin_types, item_links

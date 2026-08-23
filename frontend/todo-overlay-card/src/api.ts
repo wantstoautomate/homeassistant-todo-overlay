@@ -229,6 +229,41 @@ export async function setPinType(
 
 }
 
+// entityId/itemId are the SOURCE item being linked - targetParentId
+// (uid or title, same convention as every other "item" field) is the
+// one thing the item dialog's own override control ever chooses; the
+// target LIST itself is always auto-resolved server-side (see
+// item_links.py's own link_item), never picked here.
+export async function linkItem(
+    hass: HassLike,
+    entityId: string,
+    itemId: string,
+    targetParentId: string | undefined,
+): Promise<void> {
+
+    await hass.connection.sendMessagePromise<{id: string}>({
+        type: "todo_overlay/link_item",
+        entity_id: entityId,
+        item_id: itemId,
+        target_parent_id: targetParentId,
+    });
+
+}
+
+export async function unlinkItem(
+    hass: HassLike,
+    entityId: string,
+    itemId: string,
+): Promise<void> {
+
+    await hass.connection.sendMessagePromise<void>({
+        type: "todo_overlay/unlink_item",
+        entity_id: entityId,
+        item_id: itemId,
+    });
+
+}
+
 export async function setTags(
     hass: HassLike,
     entityId: string,

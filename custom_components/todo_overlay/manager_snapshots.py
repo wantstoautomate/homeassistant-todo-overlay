@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import logging
 import re
 
-from .errors import SnapshotNotFoundError
+from .errors import ItemLinkTargetNotFoundError, SnapshotNotFoundError
 from .manager_types import LoadMode
 from .models import ItemPosition, TodoItem
+
+_LOGGER = logging.getLogger(__name__)
 
 # A leading numeric amount, an optional separating space, then a unit
 # (which may itself be empty for a bare count like "3"). Used to combine
@@ -161,6 +164,7 @@ class SnapshotMixin:
             "tags": item.tags,
             "trigger_on_due": item.trigger_on_due,
             "pin_type": item.pin_type,
+            "linked": item.linked,
             "completed": item.completed if persist_states else False,
             "children": [
                 SnapshotMixin._snapshot_node(child, persist_states)
@@ -325,6 +329,8 @@ class SnapshotMixin:
                     pin_type=node.get("pin_type"),
                 )
 
+            await self._maybe_auto_link(entity_id, target_id, node)
+
             if node.get("children"):
                 await self._create_snapshot_nodes(
                     entity_id,
@@ -333,6 +339,41 @@ class SnapshotMixin:
                     ancestor_path=path,
                     existing_by_path=existing_by_path,
                 )
+
+    async def _maybe_auto_link(self, entity_id: str, item_id: str, node: dict) -> None:
+        """Re-create an item link a snapshot node was captured with (see
+        _snapshot_node's own "linked" field) - a no-op unless the node
+        actually asked for it, the target is genuinely unlinked already
+        (a merge-matched existing item may already have its own real
+        link, in which case this must NOT try to link it a second time),
+        and item_links.py's own hook is even wired up (manager.py's
+        __init__.py wiring - absent in tests that construct a bare
+        TodoManager with no ItemLinkManager at all).
+
+        Uses the exact same auto-resolution item_links.py's own
+        link_item() always uses (exactly one cross-instance linked list
+        configured -> use it; anything else -> raise) - deliberately NOT
+        a hard failure here, unlike the item dialog's own explicit
+        "link this" checkbox: a stale "was linked when saved" marker on
+        one item is never worth aborting the rest of a load over, so
+        this only ever logs and moves on.
+        """
+
+        if not node.get("linked") or self._item_link_hook is None:
+            return
+
+        if await self._metadata_store.get_item_link(entity_id, item_id) is not None:
+            return
+
+        try:
+            await self._item_link_hook(entity_id, item_id)
+        except ItemLinkTargetNotFoundError:
+            _LOGGER.error(
+                "Snapshot item %r (%s/%s) was linked when saved, but no default "
+                "item-link target could be auto-resolved right now - loaded as a "
+                "plain, unlinked item instead",
+                node["title"], entity_id, item_id,
+            )
 
     @staticmethod
     def _combine_quantities(

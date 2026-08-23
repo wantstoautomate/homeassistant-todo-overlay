@@ -11,6 +11,7 @@ import {
     deleteItem,
     deleteSavedList,
     getList,
+    linkItem,
     listSaved,
     loadList,
     moveItem,
@@ -22,6 +23,7 @@ import {
     setTags,
     setTriggerOnDue,
     transferItem,
+    unlinkItem,
     updateItem,
 } from "../api";
 import {loadCollapsedIds, saveCollapsedIds} from "../collapse-storage";
@@ -2058,6 +2060,8 @@ export class TodoOverlayList extends LitElement {
             dueTime: due.time,
             triggerOnDue: item.trigger_on_due,
             pinType: item.pin_type ?? "",
+            linked: item.linked,
+            linkTarget: "",
         };
     }
 
@@ -2116,6 +2120,18 @@ export class TodoOverlayList extends LitElement {
                     setTriggerOnDue(this.hass, this.entity, this.dialogItem.id, value.triggerOnDue),
                     setPinType(this.hass, this.entity, this.dialogItem.id, pinType),
                 ]);
+
+                // Deliberately AFTER the batch above, not inside it -
+                // linking copies this item's CURRENT title/description/
+                // due/quantity/tags/completed onto the new mirror (see
+                // item_links.py's own link_item), so it has to run once
+                // everything just edited in this same save has actually
+                // landed, not race it.
+                if (value.linked && !this.dialogItem.linked) {
+                    await linkItem(this.hass, this.entity, this.dialogItem.id, value.linkTarget || undefined);
+                } else if (!value.linked && this.dialogItem.linked) {
+                    await unlinkItem(this.hass, this.entity, this.dialogItem.id);
+                }
             } else {
                 await createItem(this.hass, this.entity, {
                     title: value.title,

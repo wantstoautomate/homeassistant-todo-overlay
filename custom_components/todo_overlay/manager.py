@@ -64,6 +64,15 @@ class TodoManager(
         # own state - so the scheduler's state_changed listener would never
         # notice a toggle happened at all without this explicit nudge.
         self._due_schedule_hook: Callable[[str], Awaitable[None]] | None = None
+        # Set by __init__.py to item_links.py's own ItemLinkManager.link_item,
+        # after both it and this manager exist - load_list() calls this for
+        # any snapshot node captured with linked=True (see
+        # manager_snapshots.py), same "an external system needs to react
+        # to something happening inside here" shape as the due-schedule
+        # hook above. A plain attribute, not a full mixin dependency,
+        # since ItemLinkManager is a standalone object (like
+        # LinkSyncManager), never part of TodoManager itself.
+        self._item_link_hook: Callable[[str, str], Awaitable[str]] | None = None
 
     def set_due_schedule_hook(self, hook: Callable[[str], Awaitable[None]] | None) -> None:
         """Register the callback due_scheduler.py uses to immediately
@@ -75,6 +84,13 @@ class TodoManager(
     async def _notify_due_schedule_changed(self, entity_id: str) -> None:
         if self._due_schedule_hook is not None:
             await self._due_schedule_hook(entity_id)
+
+    def set_item_link_hook(self, hook: Callable[[str, str], Awaitable[str]] | None) -> None:
+        """Register item_links.py's own ItemLinkManager.link_item as the
+        callback load_list() uses to auto-link a snapshot node captured
+        with linked=True (see manager_snapshots.py)."""
+
+        self._item_link_hook = hook
 
     def _lock_for(self, entity_id: str) -> asyncio.Lock:
         lock = self._locks.get(entity_id)

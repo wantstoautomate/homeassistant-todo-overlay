@@ -42,3 +42,12 @@ class DueTimeRequiredError(TodoOverlayError):
 class InvalidPinTypeError(TodoOverlayError):
     """Raised when set_pin_type is given a value other than one of
     PIN_TYPES (see manager_types.py) or None."""
+
+
+class ItemLinkTargetNotFoundError(TodoOverlayError):
+    """Raised by ItemLinkManager.link_item when no target list could be
+    resolved at all - no explicit target was given, and there isn't
+    exactly one cross-instance linked list configured to fall back on
+    (see get_all_linked_entity_ids). A missing/stale configured default
+    PARENT item is not this - that degrades to filing at the target
+    list's own root instead, logged but not raised."""

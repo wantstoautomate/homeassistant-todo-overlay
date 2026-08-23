@@ -102,6 +102,7 @@ export function groupSiblingsForDisplay(
         tags: [],
         trigger_on_due: false,
         pin_type: null,
+        linked: false,
         children: plain,
         synthetic: true,
     };

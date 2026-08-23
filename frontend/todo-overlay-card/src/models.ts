@@ -14,6 +14,14 @@ export interface TodoItem {
     // presentational (a person gets an initial avatar), see
     // todo-tree-item.ts's own isStructural.
     pin_type: PinType | null;
+    // Whether this item is mirrored to a partner item elsewhere -
+    // possibly on a completely different todo.* entity (see the
+    // backend's own item_links.py) - e.g. "Tent" on a purely local
+    // "Travel" list, mirrored onto "Brodie" on a cross-instance-linked
+    // "Shared" list, so completing one completes the other. Only a
+    // boolean here (seeds the item dialog's own "Link to shared list"
+    // checkbox) - the partner's own details live entirely server-side.
+    linked: boolean;
     children: TodoItem[];
 }
 

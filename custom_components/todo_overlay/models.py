@@ -36,6 +36,14 @@ class TodoItem:
     # gets an initial avatar); nothing on the backend treats them
     # differently - see manager_items.py's set_pin_type.
     pin_type: str | None = None
+    # Whether this item is mirrored to a partner item elsewhere (possibly
+    # on a completely different todo.* entity) - see item_links.py. Only
+    # a boolean here, not the partner's own details (which entity, which
+    # item, its title) - the frontend only needs this to seed the item
+    # dialog's own "Link to shared list" checkbox; the actual link record
+    # lives in metadata_store, keyed by (entity_id, item_id), and is
+    # looked up directly wherever the full detail is actually needed.
+    linked: bool = False
     children: list["TodoItem"] = field(default_factory=list)
 
     def to_dict(self) -> dict:
@@ -50,6 +58,7 @@ class TodoItem:
             "tags": self.tags,
             "trigger_on_due": self.trigger_on_due,
             "pin_type": self.pin_type,
+            "linked": self.linked,
             "children": [child.to_dict() for child in self.children],
         }
 

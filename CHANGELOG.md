@@ -3,6 +3,37 @@
 All notable changes to this project are documented here. Versions follow the
 integration's `manifest.json`/card's `package.json` (kept in lockstep).
 
+## 1.4.0
+
+**New: item links - mirror an item onto a shared list.** Any item can now
+be "linked" to a shared/cross-instance list without having to load it
+into two lists separately. A "Link to shared list" checkbox in the item
+dialog creates a matching item under a target parent (e.g. "Brodie" or
+"Anna") on the linked entity, then keeps the two bidirectionally in
+sync from then on - completing, uncompleting, editing, or deleting
+either side applies to both. Deleting one deletes both. Which parent a
+link lands under defaults to a once-off setting (`Settings > Todo
+Overlay > Configure > Configure item links`), only offered when exactly
+one cross-instance linked list is currently configured; the checkbox's
+own override field can target a different parent for a one-off item
+without touching the default. A saved template that included linked
+items re-links automatically on load the same way - auto-resolving to
+the single configured linked list if there is one, logging (not
+blocking) if there isn't. New `todo_overlay/link_item` and
+`todo_overlay/unlink_item` websocket commands; no HA service yet, this
+is UI-driven for now.
+
+- **Fixed: swiping a row could navigate the dashboard instead** on
+  setups with the `hass-swipe-navigation` HACS add-on installed.
+  1.1.0/1.1.1 already addressed this once, but the add-on's own
+  rewrite (raw Touch Events on a specific layout element, not
+  `window`) exposed a gap: the guard's arm/no-arm decision was being
+  made off Pointer Events, a separate stream from the raw Touch Events
+  it was actually trying to intercept, and the two aren't guaranteed to
+  stay in lockstep on every device. The guard now decides off the raw
+  touch stream directly, closing that gap regardless of how the two
+  streams are timed relative to each other.
+
 ## 1.3.0
 
 **New: load a saved template into an existing parent, not just at the

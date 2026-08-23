@@ -1027,6 +1027,23 @@ export class TodoTreeItem extends LitElement {
     // attached (see detachWindowListeners' own deferred cleanup),
     // spanning past that gap on purpose.
     private touchTailArmed = false;
+    // Seeded from the touch stream's OWN touchstart (see
+    // onWindowTouchStart), not from pointerDownScreenPos - live-confirmed
+    // (real device, hass-swipe-navigation installed) that Pointer Events
+    // and raw Touch Events are two independently-dispatched streams for
+    // the same physical gesture, and a WebView's own internal coalescing
+    // can let one lag the other by more than one frame. touchTailArmed
+    // used to be armed by trackSwipe's pointer-event-driven axis lock
+    // (see swipeAxis), which meant the guard's own arming decision
+    // depended on the POINTER stream keeping pace with the TOUCH stream
+    // it was meant to protect - on a device where the touch stream ran
+    // ahead, several unstopped touchmove events (and, in the worst case,
+    // touchend itself) could reach hass-swipe-navigation's own bubble
+    // listener on haAppLayoutDomNode before the pointer-driven arm ever
+    // set in. Deciding the axis directly from touch coordinates removes
+    // that cross-stream dependency entirely - the same event stream now
+    // both decides "is this a horizontal swipe" and gets stopped.
+    private touchTailStartPos?: {x: number; y: number};
 
     private get isPressed(): boolean {
         return this.draggedId === this.item.id;
@@ -1277,6 +1294,7 @@ export class TodoTreeItem extends LitElement {
         // press never inherits a stale armed state from a prior
         // gesture whose deferred touch-tail cleanup hasn't run yet.
         this.touchTailArmed = false;
+        this.touchTailStartPos = undefined;
         this.pointerIsMouse = e.pointerType === "mouse";
 
         // Always the ROW's rect, even when this fires from the small
@@ -1313,7 +1331,11 @@ export class TodoTreeItem extends LitElement {
         // add-on (confirmed live: github.com/zanna-37/hass-swipe-
         // navigation, which listens for these specifically, not
         // Pointer Events) from also treating a row's own swipe gesture
-        // as a dashboard tab change.
+        // as a dashboard tab change. touchstart is captured too, purely
+        // to seed touchTailStartPos - see its own comment for why the
+        // guard's arming decision needs to come from this same stream
+        // rather than from trackSwipe's pointer-driven one.
+        window.addEventListener("touchstart", this.onWindowTouchStart, {capture: true});
         window.addEventListener("touchmove", this.onWindowTouchTail, {capture: true});
         window.addEventListener("touchend", this.onWindowTouchTail, {capture: true});
         window.addEventListener("touchcancel", this.onWindowTouchTail, {capture: true});
@@ -1462,7 +1484,10 @@ export class TodoTreeItem extends LitElement {
 
             if (this.swipeAxis === "horizontal") {
                 this.swipeDragging = true;
-                this.touchTailArmed = true;
+                // touchTailArmed is NOT set here - see its own comment
+                // and onWindowTouchTail's for why it's armed off the raw
+                // touch stream directly instead of this (pointer-event-
+                // driven) axis lock.
             }
         }
 
@@ -1485,6 +1510,20 @@ export class TodoTreeItem extends LitElement {
         this.pointerUp();
     };
 
+    // Seeds touchTailStartPos from the raw touch stream's own
+    // touchstart - see that field's own comment for why onWindowTouchTail
+    // needs a start position sourced from THIS stream rather than reusing
+    // pointerDownScreenPos (a Pointer Event coordinate). Purely an
+    // observer: never stops or prevents this event, so hass-swipe-
+    // navigation's own touchstart handling (recording its own start
+    // position) is completely unaffected, same as before this fix.
+    private onWindowTouchStart = (e: TouchEvent) => {
+        const touch = e.touches[0];
+        if (touch) {
+            this.touchTailStartPos = {x: touch.clientX, y: touch.clientY};
+        }
+    };
+
     // Stops a locked-in horizontal swipe's raw touch events from ever
     // reaching a page-level gesture recognizer attached higher up the
     // DOM (e.g. a swipe-between-tabs add-on listening on the app's own
@@ -1496,9 +1535,31 @@ export class TodoTreeItem extends LitElement {
     // entirely for anything that isn't a locked-in horizontal swipe on
     // THIS row (an ambiguous press, a vertical scroll, a reorder-handle
     // drag) - swiping to navigate everywhere else on the dashboard is
-    // completely unaffected. Gated on touchTailArmed, not swipeAxis
-    // directly - see that field's own comment for why.
+    // completely unaffected.
+    //
+    // touchTailArmed is decided HERE, directly from this same touch
+    // stream's own coordinates vs. touchTailStartPos - deliberately not
+    // a re-read of swipeAxis or anything else trackSwipe (a Pointer
+    // Event handler) decides. See touchTailStartPos's own comment: two
+    // independently-dispatched event streams for one physical gesture
+    // aren't guaranteed to stay in lockstep on every device, and this
+    // guard only protects what it can see arm in time if its own arming
+    // signal never has to wait on the other stream to catch up.
     private onWindowTouchTail = (e: TouchEvent) => {
+        if (!this.touchTailArmed && e.type === "touchmove" && this.touchTailStartPos) {
+            const touch = e.touches?.[0] ?? e.changedTouches?.[0];
+            if (touch) {
+                const dx = touch.clientX - this.touchTailStartPos.x;
+                const dy = touch.clientY - this.touchTailStartPos.y;
+                if (
+                    (Math.abs(dx) >= SWIPE_AXIS_LOCK_PX || Math.abs(dy) >= SWIPE_AXIS_LOCK_PX)
+                    && Math.abs(dx) > Math.abs(dy)
+                ) {
+                    this.touchTailArmed = true;
+                }
+            }
+        }
+
         if (this.touchTailArmed) {
             e.stopPropagation();
         }
@@ -1527,6 +1588,8 @@ export class TodoTreeItem extends LitElement {
         // gesture even if this hasn't fired yet by then.
         window.setTimeout(() => {
             this.touchTailArmed = false;
+            this.touchTailStartPos = undefined;
+            window.removeEventListener("touchstart", this.onWindowTouchStart, {capture: true});
             window.removeEventListener("touchmove", this.onWindowTouchTail, {capture: true});
             window.removeEventListener("touchend", this.onWindowTouchTail, {capture: true});
             window.removeEventListener("touchcancel", this.onWindowTouchTail, {capture: true});

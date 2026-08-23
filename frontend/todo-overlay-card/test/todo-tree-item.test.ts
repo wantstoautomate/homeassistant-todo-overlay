@@ -18,6 +18,7 @@ function makeItem(overrides: Partial<TodoItem> = {}): TodoItem {
         tags: [],
         trigger_on_due: false,
         pin_type: null,
+        linked: false,
         children: [],
         ...overrides,
     };
@@ -435,6 +436,17 @@ describe("todo-overlay-tree-item", () => {
                 expect(dragStarted).toBe(false);
             } finally {
                 window.dispatchEvent(new PointerEvent("pointerup", {clientX: 0, clientY: 0, pointerType: "touch"}));
+                // detachWindowListeners' own touch-tail cleanup is a
+                // window.setTimeout(0) (see its own comment) - scheduled
+                // just now, under the fake timers still active here.
+                // Switching back to real timers without firing it first
+                // discards it outright rather than letting it run late,
+                // permanently leaking this row's window-level, capture-
+                // phase touchstart/touchmove/touchend listeners for the
+                // rest of the whole test file. Harmless as long as
+                // nothing later dispatches a real TouchEvent for them to
+                // catch - stops being harmless the moment something does.
+                vi.advanceTimersByTime(0);
                 vi.useRealTimers();
             }
         });
@@ -675,10 +687,40 @@ describe("todo-overlay-tree-item", () => {
                 return new Promise(r => setTimeout(r, 0));
             }
 
+            // Real TouchEvents dispatched at window, parallel to (and
+            // independent of) the PointerEvents touchPress/move/
+            // touchRelease already simulate - these are what actually
+            // arm the touch-tail guard now (see onWindowTouchTail's own
+            // comment for why it's decided off this stream directly
+            // rather than off onWindowPointerMove's pointer-event one).
+            // Deliberately scoped to just this describe block, not
+            // folded into the shared touchPress/move/touchRelease above
+            // - most of this file's other swipe tests call touchRelease
+            // without awaiting flushDeferredCleanup, which is harmless
+            // for them today (nothing dispatches a real touchmove/
+            // touchend for a leaked listener to catch) but would stop
+            // being harmless the moment they did too. happy-dom supports
+            // real Touch/TouchEvent construction, so this is a faithful
+            // reproduction of the two independently-dispatched event
+            // streams a real touch gesture produces, not a stand-in.
+            function dispatchRealTouch(type: string, x: number, y: number, ended = false): void {
+                const touch = new Touch({identifier: 1, target: window, clientX: x, clientY: y});
+                window.dispatchEvent(
+                    new TouchEvent(type, {
+                        touches: ended ? [] : [touch],
+                        changedTouches: [touch],
+                        bubbles: true,
+                        cancelable: true,
+                    }),
+                );
+            }
+
             it("stops a locked-in horizontal swipe's touchmove from reaching a bubble-phase listener higher up the page", async () => {
                 const el = await renderItem(makeItem({id: "1"}));
                 touchPress(el);
+                dispatchRealTouch("touchstart", 0, 0);
                 move(el, -(SWIPE_AXIS_LOCK_PX + 5), 0);
+                dispatchRealTouch("touchmove", -(SWIPE_AXIS_LOCK_PX + 5), 0);
                 await el.updateComplete;
 
                 let sawItOnDocument = false;
@@ -691,6 +733,7 @@ describe("todo-overlay-tree-item", () => {
                 } finally {
                     document.removeEventListener("touchmove", onDocumentTouchMove);
                     touchRelease();
+                    dispatchRealTouch("touchend", 0, 0, true);
                     await flushDeferredCleanup();
                 }
             });
@@ -709,7 +752,9 @@ describe("todo-overlay-tree-item", () => {
                 // separate flag instead.
                 const el = await renderItem(makeItem({id: "1"}));
                 touchPress(el);
+                dispatchRealTouch("touchstart", 0, 0);
                 move(el, -(SWIPE_AXIS_LOCK_PX + 5), 0);
+                dispatchRealTouch("touchmove", -(SWIPE_AXIS_LOCK_PX + 5), 0);
                 await el.updateComplete;
                 touchRelease();
 
@@ -722,6 +767,7 @@ describe("todo-overlay-tree-item", () => {
                     expect(sawItOnDocument).toBe(false);
                 } finally {
                     document.removeEventListener("touchend", onDocumentTouchEnd);
+                    dispatchRealTouch("touchend", 0, 0, true);
                     await flushDeferredCleanup();
                 }
             });
@@ -729,7 +775,9 @@ describe("todo-overlay-tree-item", () => {
             it("leaves a vertical (non-swipe) touch gesture's touchmove alone - normal scrolling and page-level swipes elsewhere are unaffected", async () => {
                 const el = await renderItem(makeItem({id: "1"}));
                 touchPress(el);
+                dispatchRealTouch("touchstart", 0, 0);
                 move(el, 2, SWIPE_AXIS_LOCK_PX + 20);
+                dispatchRealTouch("touchmove", 2, SWIPE_AXIS_LOCK_PX + 20);
                 await el.updateComplete;
 
                 let sawItOnDocument = false;
@@ -742,6 +790,41 @@ describe("todo-overlay-tree-item", () => {
                 } finally {
                     document.removeEventListener("touchmove", onDocumentTouchMove);
                     touchRelease();
+                    dispatchRealTouch("touchend", 0, 0, true);
+                    await flushDeferredCleanup();
+                }
+            });
+
+            // Live-reported (again, after the fix above): the guard still
+            // wasn't stopping hass-swipe-navigation on a real device. Root
+            // cause: touchTailArmed used to be armed by trackSwipe, a
+            // Pointer Event handler - so the guard's own arming depended
+            // on the pointer-event stream keeping pace with the raw touch
+            // stream it was meant to protect. Reproduces that gap
+            // directly: a real touchmove stream crosses the lock
+            // threshold with onWindowPointerMove never once invoked (the
+            // pointer stream stalled/lagged, as observed live) - the
+            // guard must still arm off the touch stream alone.
+            it("arms from the raw touch stream alone, even if the pointer-event stream never fires at all", async () => {
+                const el = await renderItem(makeItem({id: "1"}));
+                touchPress(el);
+                dispatchRealTouch("touchstart", 0, 0);
+                // Deliberately NOT calling move()/onWindowPointerMove -
+                // only the real touch stream moves here.
+                dispatchRealTouch("touchmove", -(SWIPE_AXIS_LOCK_PX + 5), 0);
+                await el.updateComplete;
+
+                let sawItOnDocument = false;
+                const onDocumentTouchMove = () => { sawItOnDocument = true; };
+                document.addEventListener("touchmove", onDocumentTouchMove);
+
+                try {
+                    document.body.dispatchEvent(new Event("touchmove", {bubbles: true, cancelable: true}));
+                    expect(sawItOnDocument).toBe(false);
+                } finally {
+                    document.removeEventListener("touchmove", onDocumentTouchMove);
+                    touchRelease();
+                    dispatchRealTouch("touchend", 0, 0, true);
                     await flushDeferredCleanup();
                 }
             });
@@ -749,9 +832,12 @@ describe("todo-overlay-tree-item", () => {
             it("no longer intercepts touchmove once the gesture's own deferred cleanup has run", async () => {
                 const el = await renderItem(makeItem({id: "1"}));
                 touchPress(el);
+                dispatchRealTouch("touchstart", 0, 0);
                 move(el, -(SWIPE_AXIS_LOCK_PX + 5), 0);
+                dispatchRealTouch("touchmove", -(SWIPE_AXIS_LOCK_PX + 5), 0);
                 await el.updateComplete;
                 touchRelease();
+                dispatchRealTouch("touchend", 0, 0, true);
                 await flushDeferredCleanup();
 
                 let sawItOnDocument = false;
