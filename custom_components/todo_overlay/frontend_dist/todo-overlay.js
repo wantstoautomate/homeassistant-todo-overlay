@@ -2705,6 +2705,19 @@ var TodoTreeItem = class extends i4 {
     this.onWindowPointerUp = () => {
       this.pointerUp();
     };
+    // Seeds touchTailStartPos from the raw touch stream's own
+    // touchstart - see that field's own comment for why onWindowTouchTail
+    // needs a start position sourced from THIS stream rather than reusing
+    // pointerDownScreenPos (a Pointer Event coordinate). Purely an
+    // observer: never stops or prevents this event, so hass-swipe-
+    // navigation's own touchstart handling (recording its own start
+    // position) is completely unaffected, same as before this fix.
+    this.onWindowTouchStart = (e7) => {
+      const touch = e7.touches[0];
+      if (touch) {
+        this.touchTailStartPos = { x: touch.clientX, y: touch.clientY };
+      }
+    };
     // Stops a locked-in horizontal swipe's raw touch events from ever
     // reaching a page-level gesture recognizer attached higher up the
     // DOM (e.g. a swipe-between-tabs add-on listening on the app's own
@@ -2716,9 +2729,27 @@ var TodoTreeItem = class extends i4 {
     // entirely for anything that isn't a locked-in horizontal swipe on
     // THIS row (an ambiguous press, a vertical scroll, a reorder-handle
     // drag) - swiping to navigate everywhere else on the dashboard is
-    // completely unaffected. Gated on touchTailArmed, not swipeAxis
-    // directly - see that field's own comment for why.
+    // completely unaffected.
+    //
+    // touchTailArmed is decided HERE, directly from this same touch
+    // stream's own coordinates vs. touchTailStartPos - deliberately not
+    // a re-read of swipeAxis or anything else trackSwipe (a Pointer
+    // Event handler) decides. See touchTailStartPos's own comment: two
+    // independently-dispatched event streams for one physical gesture
+    // aren't guaranteed to stay in lockstep on every device, and this
+    // guard only protects what it can see arm in time if its own arming
+    // signal never has to wait on the other stream to catch up.
     this.onWindowTouchTail = (e7) => {
+      if (!this.touchTailArmed && e7.type === "touchmove" && this.touchTailStartPos) {
+        const touch = e7.touches?.[0] ?? e7.changedTouches?.[0];
+        if (touch) {
+          const dx = touch.clientX - this.touchTailStartPos.x;
+          const dy = touch.clientY - this.touchTailStartPos.y;
+          if ((Math.abs(dx) >= SWIPE_AXIS_LOCK_PX || Math.abs(dy) >= SWIPE_AXIS_LOCK_PX) && Math.abs(dx) > Math.abs(dy)) {
+            this.touchTailArmed = true;
+          }
+        }
+      }
       if (this.touchTailArmed) {
         e7.stopPropagation();
       }
@@ -2917,6 +2948,7 @@ var TodoTreeItem = class extends i4 {
     this.initiatedFromHandle = false;
     this.swipeAxis = void 0;
     this.touchTailArmed = false;
+    this.touchTailStartPos = void 0;
     this.pointerIsMouse = e7.pointerType === "mouse";
     const rect = this.shadowRoot?.querySelector(".row")?.getBoundingClientRect() ?? e7.currentTarget.getBoundingClientRect();
     this.holdRippleOrigin = { x: e7.clientX - rect.left, y: e7.clientY - rect.top };
@@ -2927,6 +2959,7 @@ var TodoTreeItem = class extends i4 {
     window.addEventListener("pointermove", this.onWindowPointerMove, { capture: true });
     window.addEventListener("pointerup", this.onWindowPointerUp, { capture: true });
     window.addEventListener("pointercancel", this.onWindowPointerUp, { capture: true });
+    window.addEventListener("touchstart", this.onWindowTouchStart, { capture: true });
     window.addEventListener("touchmove", this.onWindowTouchTail, { capture: true });
     window.addEventListener("touchend", this.onWindowTouchTail, { capture: true });
     window.addEventListener("touchcancel", this.onWindowTouchTail, { capture: true });
@@ -2971,7 +3004,6 @@ var TodoTreeItem = class extends i4 {
       this.swipeAxis = Math.abs(dx) > Math.abs(dy) ? "horizontal" : "vertical";
       if (this.swipeAxis === "horizontal") {
         this.swipeDragging = true;
-        this.touchTailArmed = true;
       }
     }
     if (this.swipeAxis !== "horizontal") {
@@ -2986,6 +3018,8 @@ var TodoTreeItem = class extends i4 {
     window.removeEventListener("pointercancel", this.onWindowPointerUp, { capture: true });
     window.setTimeout(() => {
       this.touchTailArmed = false;
+      this.touchTailStartPos = void 0;
+      window.removeEventListener("touchstart", this.onWindowTouchStart, { capture: true });
       window.removeEventListener("touchmove", this.onWindowTouchTail, { capture: true });
       window.removeEventListener("touchend", this.onWindowTouchTail, { capture: true });
       window.removeEventListener("touchcancel", this.onWindowTouchTail, { capture: true });
