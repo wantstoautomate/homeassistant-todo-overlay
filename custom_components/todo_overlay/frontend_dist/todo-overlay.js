@@ -2537,6 +2537,12 @@ var dropGapPx = r(`${DROP_GAP_PX}px`);
 var MOVE_CANCEL_THRESHOLD_PX = 6;
 var HOLD_RIPPLE_SIZE = 72;
 var holdRippleSizePx = r(`${HOLD_RIPPLE_SIZE}px`);
+function vibrate(ms) {
+  try {
+    navigator.vibrate?.(ms);
+  } catch {
+  }
+}
 var CLICK_DEBOUNCE_MS = 250;
 var SWIPE_AXIS_LOCK_PX = 12;
 var SWIPE_ACTION_THRESHOLD_PX = 88;
@@ -2622,6 +2628,15 @@ var TodoTreeItem = class extends i4 {
     this.confirmingDelete = false;
     this.swipeOffsetX = 0;
     this.swipeDragging = false;
+    // Tracks the SAME "armed" condition the template's own .swipe-
+    // action.armed class computes from swipeOffsetX (see render) - kept
+    // as an explicit field, not re-derived where it's used, purely so
+    // trackSwipe can detect the RISING edge (crossing INTO armed) to
+    // fire a single haptic pulse, rather than one every frame while
+    // held past the threshold. Reset alongside swipeOffsetX wherever
+    // that resets (pointerDown, resolveSwipe) so a fresh gesture always
+    // starts unarmed regardless of where the previous one left off.
+    this.swipeArmed = false;
     this.childQuickAddValue = "";
     this.pointerDownAt = 0;
     this.hasMoved = false;
@@ -2947,6 +2962,7 @@ var TodoTreeItem = class extends i4 {
     this.dragEngaged = false;
     this.initiatedFromHandle = false;
     this.swipeAxis = void 0;
+    this.swipeArmed = false;
     this.touchTailArmed = false;
     this.touchTailStartPos = void 0;
     this.pointerIsMouse = e7.pointerType === "mouse";
@@ -3011,6 +3027,11 @@ var TodoTreeItem = class extends i4 {
     }
     e7.preventDefault();
     this.swipeOffsetX = Math.max(-SWIPE_MAX_REVEAL_PX, Math.min(SWIPE_MAX_REVEAL_PX, dx));
+    const nowArmed = Math.abs(this.swipeOffsetX) >= SWIPE_ACTION_THRESHOLD_PX;
+    if (nowArmed && !this.swipeArmed) {
+      vibrate(10);
+    }
+    this.swipeArmed = nowArmed;
   }
   detachWindowListeners() {
     window.removeEventListener("pointermove", this.onWindowPointerMove, { capture: true });
@@ -3077,6 +3098,7 @@ var TodoTreeItem = class extends i4 {
   resolveSwipe() {
     const offset = this.swipeOffsetX;
     this.swipeAxis = void 0;
+    this.swipeArmed = false;
     this.swipeDragging = false;
     this.swipeOffsetX = 0;
     if (offset <= -SWIPE_ACTION_THRESHOLD_PX) {
@@ -3283,6 +3305,15 @@ var TodoTreeItem = class extends i4 {
 
                 ${this.childQuickAddParentIds.has(this.item.id) ? b2`
                             <div class="child-quick-add-row">
+                                <span class="collapse-toggle-spacer" aria-hidden="true"></span>
+                                ${// The item this creates is always a
+    // fresh leaf (zero children), so its
+    // own checkboxHidden would reduce to
+    // just !showCheckboxes - matching
+    // that here, not hideCompleteForParents
+    // too, which only ever applies to a
+    // row that already has children.
+    this.showCheckboxes ? b2`<div class="checkbox-slot" aria-hidden="true"></div>` : ""}
                                 <input
                                     type="text"
                                     placeholder="Add item"
@@ -3795,8 +3826,16 @@ TodoTreeItem.styles = i`
         /* Directly below the parent's own row, above its existing
            children (see the template) - indented to the SAME depth a
            real child would be (matches the child <ul>'s own
-           padding-inline-start), so it's unambiguous this is adding a
-           child of THIS row, not a sibling of it. Same field styling as
+           padding-inline-start, plus .row's own padding: 5px 12px on
+           top of that - this row sits as a SIBLING of .row-wrapper/<ul>,
+           not inside the <ul> itself, so it needs its own copy of both).
+           Live-reported: without that second part, the input's own text
+           landed flush at the depth indent alone - well left of where a
+           real sibling row's title actually starts once its own
+           collapse-toggle-spacer/checkbox-slot are accounted for. Those
+           two are rendered for real below (see the template), not
+           reproduced here as a hardcoded width, so this can't drift out
+           of sync with .row's own layout later. Same field styling as
            the toolbar's own root-level quick-add row
            (todo-overlay-list.ts's .quick-add-row) - a different
            attachment point, not a different-looking control. */
@@ -3805,7 +3844,8 @@ TodoTreeItem.styles = i`
             align-items: center;
             gap: 8px;
             margin: 4px 0;
-            padding-inline-start: ${rowIndentPx};
+            padding-inline-start: calc(${rowIndentPx} + 12px);
+            padding-inline-end: 12px;
         }
 
         .child-quick-add-row input {

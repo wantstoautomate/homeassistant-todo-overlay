@@ -3,6 +3,31 @@
 All notable changes to this project are documented here. Versions follow the
 integration's `manifest.json`/card's `package.json` (kept in lockstep).
 
+## 1.4.1
+
+Two small UX fixes to the mobile swipe/quick-add gestures, following live
+use of 1.4.0.
+
+- **New: a short haptic pulse when a swipe crosses into "release now
+  commits" territory.** Live-reported: the visual reveal alone didn't
+  make it obvious exactly when a left/right swipe had crossed the
+  threshold where releasing would actually delete or open the add-child
+  field. Fires once on crossing (not once per frame while held past it),
+  and again if the swipe backs out and re-crosses in the same gesture -
+  same feel as a native iOS/Android swipe-to-delete row. Best-effort:
+  the Vibration API has no iOS Safari/WKWebView support at all (which is
+  what the HA Companion App uses on iOS), so this is silently a no-op
+  there - there's no web-exposed alternative to reach for instead.
+- **Fixed: the inline "Add item" field that opens under a row (swipe
+  right, or its desktop toggle) didn't visually line up with where the
+  new item's own title would actually appear once created.** It was
+  indented to the right DEPTH, but not accounting for the row's own
+  internal padding or its leading collapse-toggle/checkbox column - so
+  the input's text sat well left of a sibling row's title. It now
+  reserves the same spacer width a real leaf child's row would (checkbox
+  slot included, exactly when `showCheckboxes` would show one for it),
+  rather than a guessed pixel value.
+
 ## 1.4.0
 
 **New: item links - mirror an item onto a shared list.** Any item can now
