@@ -580,6 +580,105 @@ describe("todo-overlay-tree-item", () => {
             touchRelease();
         });
 
+        // Live-reported: with no feedback beyond the visual reveal, it
+        // wasn't obvious to the eye alone exactly when a swipe had
+        // crossed into "release now commits" territory. happy-dom has
+        // no navigator.vibrate at all (matches real iOS Safari/
+        // WKWebView, which the HA Companion App uses on iOS - see
+        // vibrate's own comment), so this stubs it in per-test rather
+        // than relying on it existing.
+        describe("haptic feedback on crossing the swipe-action threshold", () => {
+            afterEach(() => {
+                delete (navigator as unknown as {vibrate?: unknown}).vibrate;
+            });
+
+            it("vibrates once as soon as a leftward (delete) swipe crosses the threshold", async () => {
+                const vibrateSpy = vi.fn();
+                (navigator as unknown as {vibrate: (ms: number) => boolean}).vibrate = vibrateSpy;
+
+                const el = await renderItem(makeItem({id: "1"}));
+                touchPress(el);
+                move(el, -(SWIPE_ACTION_THRESHOLD_PX + 10), 0);
+
+                expect(vibrateSpy).toHaveBeenCalledTimes(1);
+
+                touchRelease();
+            });
+
+            it("vibrates once as soon as a rightward (add-child) swipe crosses the threshold", async () => {
+                const vibrateSpy = vi.fn();
+                (navigator as unknown as {vibrate: (ms: number) => boolean}).vibrate = vibrateSpy;
+
+                const el = await renderItem(makeItem({id: "1"}));
+                touchPress(el);
+                move(el, SWIPE_ACTION_THRESHOLD_PX + 10, 0);
+
+                expect(vibrateSpy).toHaveBeenCalledTimes(1);
+
+                touchRelease();
+            });
+
+            it("does not vibrate for a swipe that stays short of the threshold", async () => {
+                const vibrateSpy = vi.fn();
+                (navigator as unknown as {vibrate: (ms: number) => boolean}).vibrate = vibrateSpy;
+
+                const el = await renderItem(makeItem({id: "1"}));
+                touchPress(el);
+                move(el, -(SWIPE_ACTION_THRESHOLD_PX - 20), 0);
+
+                expect(vibrateSpy).not.toHaveBeenCalled();
+
+                touchRelease();
+            });
+
+            it("does not vibrate again on every further frame while held past the threshold", async () => {
+                const vibrateSpy = vi.fn();
+                (navigator as unknown as {vibrate: (ms: number) => boolean}).vibrate = vibrateSpy;
+
+                const el = await renderItem(makeItem({id: "1"}));
+                touchPress(el);
+                move(el, -(SWIPE_ACTION_THRESHOLD_PX + 10), 0);
+                move(el, -(SWIPE_ACTION_THRESHOLD_PX + 30), 0);
+                move(el, -(SWIPE_ACTION_THRESHOLD_PX + 50), 0);
+
+                expect(vibrateSpy).toHaveBeenCalledTimes(1);
+
+                touchRelease();
+            });
+
+            it("re-arms if the swipe backs out under the threshold and crosses it again", async () => {
+                const vibrateSpy = vi.fn();
+                (navigator as unknown as {vibrate: (ms: number) => boolean}).vibrate = vibrateSpy;
+
+                const el = await renderItem(makeItem({id: "1"}));
+                touchPress(el);
+                move(el, -(SWIPE_ACTION_THRESHOLD_PX + 10), 0);
+                move(el, -(SWIPE_ACTION_THRESHOLD_PX - 20), 0);
+                move(el, -(SWIPE_ACTION_THRESHOLD_PX + 10), 0);
+
+                expect(vibrateSpy).toHaveBeenCalledTimes(2);
+
+                touchRelease();
+            });
+
+            it("starts a fresh gesture unarmed, even right after a swipe that ended armed", async () => {
+                const vibrateSpy = vi.fn();
+                (navigator as unknown as {vibrate: (ms: number) => boolean}).vibrate = vibrateSpy;
+
+                const el = await renderItem(makeItem({id: "1"}));
+                touchPress(el);
+                move(el, -(SWIPE_ACTION_THRESHOLD_PX + 10), 0);
+                touchRelease();
+
+                touchPress(el);
+                move(el, -(SWIPE_ACTION_THRESHOLD_PX + 10), 0);
+
+                expect(vibrateSpy).toHaveBeenCalledTimes(2);
+
+                touchRelease();
+            });
+        });
+
         it("does not engage swipe at all for a mostly-vertical gesture - native scroll owns it", async () => {
             const el = await renderItem(makeItem({id: "1"}));
             touchPress(el);
@@ -1228,6 +1327,37 @@ describe("todo-overlay-tree-item per-parent quick add", () => {
         const ulIndex = children.findIndex(c => c.tagName === "UL");
         expect(fieldIndex).toBeGreaterThan(-1);
         expect(ulIndex).toBeGreaterThan(fieldIndex);
+    });
+
+    // Live-reported: the field's own input text landed well left of
+    // where a real sibling row's title actually starts, since it was
+    // only indented to the depth a child <li> box would sit at, not
+    // also accounting for .row's own internal padding and its leading
+    // collapse-toggle-spacer/checkbox-slot. Checks for the SAME spacer
+    // elements .row itself would render for a fresh leaf child (not
+    // pixel measurements - happy-dom doesn't lay out a real box model -
+    // see reference-frontend-tooling), so this can't silently start
+    // passing again just because a completely different element happens
+    // to occupy the same DOM position.
+    it("reserves the same leading collapse-toggle-spacer / checkbox-slot width a real child row would show, so the input text lines up with a sibling's title", async () => {
+        const withCheckboxes = await renderItem(
+            makeItem({id: "parent", children: [makeItem({id: "child"})]}),
+            {childQuickAddParentIds: new Set(["parent"]), showCheckboxes: true},
+        );
+        const fieldWithCheckboxes = withCheckboxes.shadowRoot?.querySelector(".child-quick-add-row");
+        expect(fieldWithCheckboxes?.querySelector(":scope > .collapse-toggle-spacer")).not.toBeNull();
+        expect(fieldWithCheckboxes?.querySelector(":scope > .checkbox-slot")).not.toBeNull();
+
+        const withoutCheckboxes = await renderItem(
+            makeItem({id: "parent", children: [makeItem({id: "child"})]}),
+            {childQuickAddParentIds: new Set(["parent"]), showCheckboxes: false},
+        );
+        const fieldWithoutCheckboxes = withoutCheckboxes.shadowRoot?.querySelector(".child-quick-add-row");
+        expect(fieldWithoutCheckboxes?.querySelector(":scope > .collapse-toggle-spacer")).not.toBeNull();
+        expect(
+            fieldWithoutCheckboxes?.querySelector(":scope > .checkbox-slot"),
+            "no checkbox-slot spacer once real leaf rows wouldn't show one either",
+        ).toBeNull();
     });
 
     it("submits the typed title via tree-quick-add-child on Enter, then clears the field", async () => {

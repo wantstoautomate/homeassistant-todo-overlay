@@ -42,6 +42,23 @@ const MOVE_CANCEL_THRESHOLD_PX = 6;
 const HOLD_RIPPLE_SIZE = 72;
 const holdRippleSizePx = unsafeCSS(`${HOLD_RIPPLE_SIZE}px`);
 
+// Best-effort haptic pulse (see trackSwipe's own use) - the Vibration
+// API has real gaps in support (notably: no iOS Safari/WKWebView at
+// all, which is what the HA Companion App uses on iOS, so this is
+// silently a no-op there - there's no web-exposed alternative to reach
+// for instead) and can throw in some embedded/permission-restricted
+// contexts even where the property exists, so this is deliberately
+// wrapped rather than called inline at each site that wants one.
+// Exported purely so tests can spy on a single, stable entry point
+// instead of reaching into navigator directly.
+export function vibrate(ms: number): void {
+    try {
+        navigator.vibrate?.(ms);
+    } catch {
+        // Best-effort - see the comment above.
+    }
+}
+
 // A plain tap is delayed this long before it commits to toggling
 // completion, so a following second click can still cancel it and open
 // the edit dialog instead (see pointerUp's own double-click detection).
@@ -669,8 +686,16 @@ export class TodoTreeItem extends LitElement {
         /* Directly below the parent's own row, above its existing
            children (see the template) - indented to the SAME depth a
            real child would be (matches the child <ul>'s own
-           padding-inline-start), so it's unambiguous this is adding a
-           child of THIS row, not a sibling of it. Same field styling as
+           padding-inline-start, plus .row's own padding: 5px 12px on
+           top of that - this row sits as a SIBLING of .row-wrapper/<ul>,
+           not inside the <ul> itself, so it needs its own copy of both).
+           Live-reported: without that second part, the input's own text
+           landed flush at the depth indent alone - well left of where a
+           real sibling row's title actually starts once its own
+           collapse-toggle-spacer/checkbox-slot are accounted for. Those
+           two are rendered for real below (see the template), not
+           reproduced here as a hardcoded width, so this can't drift out
+           of sync with .row's own layout later. Same field styling as
            the toolbar's own root-level quick-add row
            (todo-overlay-list.ts's .quick-add-row) - a different
            attachment point, not a different-looking control. */
@@ -679,7 +704,8 @@ export class TodoTreeItem extends LitElement {
             align-items: center;
             gap: 8px;
             margin: 4px 0;
-            padding-inline-start: ${rowIndentPx};
+            padding-inline-start: calc(${rowIndentPx} + 12px);
+            padding-inline-end: 12px;
         }
 
         .child-quick-add-row input {
@@ -976,6 +1002,16 @@ export class TodoTreeItem extends LitElement {
     // false on release.
     @state()
     private swipeDragging = false;
+
+    // Tracks the SAME "armed" condition the template's own .swipe-
+    // action.armed class computes from swipeOffsetX (see render) - kept
+    // as an explicit field, not re-derived where it's used, purely so
+    // trackSwipe can detect the RISING edge (crossing INTO armed) to
+    // fire a single haptic pulse, rather than one every frame while
+    // held past the threshold. Reset alongside swipeOffsetX wherever
+    // that resets (pointerDown, resolveSwipe) so a fresh gesture always
+    // starts unarmed regardless of where the previous one left off.
+    private swipeArmed = false;
 
     // Local to this row, not lifted to todo-overlay-list.ts - only the
     // OPEN/CLOSED state of a parent's quick-add field needs to be known
@@ -1289,6 +1325,7 @@ export class TodoTreeItem extends LitElement {
         this.dragEngaged = false;
         this.initiatedFromHandle = false;
         this.swipeAxis = undefined;
+        this.swipeArmed = false;
         // Reset here too (not just left to the previous gesture's own
         // deferred cleanup - see detachWindowListeners) so a fresh
         // press never inherits a stale armed state from a prior
@@ -1504,6 +1541,24 @@ export class TodoTreeItem extends LitElement {
         e.preventDefault();
 
         this.swipeOffsetX = Math.max(-SWIPE_MAX_REVEAL_PX, Math.min(SWIPE_MAX_REVEAL_PX, dx));
+
+        // Same "armed" condition the template's own .swipe-action.armed
+        // class computes - checked here too, against the swipeArmed
+        // field (not read from the DOM), purely to catch the RISING
+        // edge and fire exactly one pulse per crossing, not one per
+        // frame for as long as the finger stays past the threshold.
+        // Live-reported: without any feedback, it wasn't obvious to the
+        // eye alone exactly when a swipe had crossed into "release now
+        // commits" territory. Re-arms if the finger drags back out and
+        // past the threshold again in the same gesture, same as a
+        // native iOS/Android swipe-to-delete row would.
+        const nowArmed = Math.abs(this.swipeOffsetX) >= SWIPE_ACTION_THRESHOLD_PX;
+
+        if (nowArmed && !this.swipeArmed) {
+            vibrate(10);
+        }
+
+        this.swipeArmed = nowArmed;
     }
 
     private onWindowPointerUp = () => {
@@ -1672,6 +1727,7 @@ export class TodoTreeItem extends LitElement {
         const offset = this.swipeOffsetX;
 
         this.swipeAxis = undefined;
+        this.swipeArmed = false;
         this.swipeDragging = false;
         this.swipeOffsetX = 0;
 
@@ -1959,6 +2015,19 @@ export class TodoTreeItem extends LitElement {
                     this.childQuickAddParentIds.has(this.item.id)
                         ? html`
                             <div class="child-quick-add-row">
+                                <span class="collapse-toggle-spacer" aria-hidden="true"></span>
+                                ${
+                                    // The item this creates is always a
+                                    // fresh leaf (zero children), so its
+                                    // own checkboxHidden would reduce to
+                                    // just !showCheckboxes - matching
+                                    // that here, not hideCompleteForParents
+                                    // too, which only ever applies to a
+                                    // row that already has children.
+                                    this.showCheckboxes
+                                        ? html`<div class="checkbox-slot" aria-hidden="true"></div>`
+                                        : ""
+                                }
                                 <input
                                     type="text"
                                     placeholder="Add item"
