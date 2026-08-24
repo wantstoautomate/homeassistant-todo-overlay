@@ -2537,11 +2537,8 @@ var dropGapPx = r(`${DROP_GAP_PX}px`);
 var MOVE_CANCEL_THRESHOLD_PX = 6;
 var HOLD_RIPPLE_SIZE = 72;
 var holdRippleSizePx = r(`${HOLD_RIPPLE_SIZE}px`);
-function vibrate(ms) {
-  try {
-    navigator.vibrate?.(ms);
-  } catch {
-  }
+function triggerHaptic(type) {
+  window.dispatchEvent(new CustomEvent("haptic", { detail: type }));
 }
 var CLICK_DEBOUNCE_MS = 250;
 var SWIPE_AXIS_LOCK_PX = 12;
@@ -3029,7 +3026,7 @@ var TodoTreeItem = class extends i4 {
     this.swipeOffsetX = Math.max(-SWIPE_MAX_REVEAL_PX, Math.min(SWIPE_MAX_REVEAL_PX, dx));
     const nowArmed = Math.abs(this.swipeOffsetX) >= SWIPE_ACTION_THRESHOLD_PX;
     if (nowArmed && !this.swipeArmed) {
-      vibrate(10);
+      triggerHaptic("selection");
     }
     this.swipeArmed = nowArmed;
   }

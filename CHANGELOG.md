@@ -3,6 +3,10 @@
 All notable changes to this project are documented here. Versions follow the
 integration's `manifest.json`/card's `package.json` (kept in lockstep).
 
+## 1.4.2
+
+**Changed: the swipe-armed haptic pulse (1.4.1) now uses HA's own sanctioned mechanism instead of the raw Web Vibration API.** 1.4.1 called `navigator.vibrate()` directly, which worked on Android but was never going to reach iOS at all - WKWebView (what the Companion App uses there) has no Vibration API whatsoever, no web-exposed workaround either. Switched to dispatching HA's own `"haptic"` event on `window` instead - the same mechanism `home-assistant/frontend`'s own `forwardHaptic()` uses, which both Companion Apps are actually built to listen for and translate into a real native haptic call through their own bridge. No other behavior changed - same threshold-crossing trigger as 1.4.1, just resolved through the sanctioned path this time, and now working on both platforms.
+
 ## 1.4.1
 
 Two small UX fixes to the mobile swipe/quick-add gestures, following live
