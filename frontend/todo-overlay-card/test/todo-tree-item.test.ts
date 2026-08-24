@@ -582,58 +582,71 @@ describe("todo-overlay-tree-item", () => {
 
         // Live-reported: with no feedback beyond the visual reveal, it
         // wasn't obvious to the eye alone exactly when a swipe had
-        // crossed into "release now commits" territory. happy-dom has
-        // no navigator.vibrate at all (matches real iOS Safari/
-        // WKWebView, which the HA Companion App uses on iOS - see
-        // vibrate's own comment), so this stubs it in per-test rather
-        // than relying on it existing.
+        // crossed into "release now commits" territory. Dispatches HA's
+        // own "haptic" event on window (see triggerHaptic's own
+        // comment for why - the Companion Apps' bridge, not the raw
+        // Vibration API, is the only path that reaches iOS at all), so
+        // these listen for that event rather than stubbing
+        // navigator.vibrate.
         describe("haptic feedback on crossing the swipe-action threshold", () => {
+            let hapticListener: ((e: Event) => void) | undefined;
+
             afterEach(() => {
-                delete (navigator as unknown as {vibrate?: unknown}).vibrate;
+                if (hapticListener) {
+                    window.removeEventListener("haptic", hapticListener);
+                    hapticListener = undefined;
+                }
             });
 
-            it("vibrates once as soon as a leftward (delete) swipe crosses the threshold", async () => {
-                const vibrateSpy = vi.fn();
-                (navigator as unknown as {vibrate: (ms: number) => boolean}).vibrate = vibrateSpy;
+            function listenForHaptic(): {calls: string[]} {
+                const state = {calls: [] as string[]};
+
+                hapticListener = (e) => {
+                    state.calls.push((e as CustomEvent<string>).detail);
+                };
+                window.addEventListener("haptic", hapticListener);
+
+                return state;
+            }
+
+            it("fires a 'selection' haptic once as soon as a leftward (delete) swipe crosses the threshold", async () => {
+                const haptic = listenForHaptic();
 
                 const el = await renderItem(makeItem({id: "1"}));
                 touchPress(el);
                 move(el, -(SWIPE_ACTION_THRESHOLD_PX + 10), 0);
 
-                expect(vibrateSpy).toHaveBeenCalledTimes(1);
+                expect(haptic.calls).toEqual(["selection"]);
 
                 touchRelease();
             });
 
-            it("vibrates once as soon as a rightward (add-child) swipe crosses the threshold", async () => {
-                const vibrateSpy = vi.fn();
-                (navigator as unknown as {vibrate: (ms: number) => boolean}).vibrate = vibrateSpy;
+            it("fires once as soon as a rightward (add-child) swipe crosses the threshold", async () => {
+                const haptic = listenForHaptic();
 
                 const el = await renderItem(makeItem({id: "1"}));
                 touchPress(el);
                 move(el, SWIPE_ACTION_THRESHOLD_PX + 10, 0);
 
-                expect(vibrateSpy).toHaveBeenCalledTimes(1);
+                expect(haptic.calls).toEqual(["selection"]);
 
                 touchRelease();
             });
 
-            it("does not vibrate for a swipe that stays short of the threshold", async () => {
-                const vibrateSpy = vi.fn();
-                (navigator as unknown as {vibrate: (ms: number) => boolean}).vibrate = vibrateSpy;
+            it("does not fire for a swipe that stays short of the threshold", async () => {
+                const haptic = listenForHaptic();
 
                 const el = await renderItem(makeItem({id: "1"}));
                 touchPress(el);
                 move(el, -(SWIPE_ACTION_THRESHOLD_PX - 20), 0);
 
-                expect(vibrateSpy).not.toHaveBeenCalled();
+                expect(haptic.calls).toEqual([]);
 
                 touchRelease();
             });
 
-            it("does not vibrate again on every further frame while held past the threshold", async () => {
-                const vibrateSpy = vi.fn();
-                (navigator as unknown as {vibrate: (ms: number) => boolean}).vibrate = vibrateSpy;
+            it("does not fire again on every further frame while held past the threshold", async () => {
+                const haptic = listenForHaptic();
 
                 const el = await renderItem(makeItem({id: "1"}));
                 touchPress(el);
@@ -641,14 +654,13 @@ describe("todo-overlay-tree-item", () => {
                 move(el, -(SWIPE_ACTION_THRESHOLD_PX + 30), 0);
                 move(el, -(SWIPE_ACTION_THRESHOLD_PX + 50), 0);
 
-                expect(vibrateSpy).toHaveBeenCalledTimes(1);
+                expect(haptic.calls).toEqual(["selection"]);
 
                 touchRelease();
             });
 
             it("re-arms if the swipe backs out under the threshold and crosses it again", async () => {
-                const vibrateSpy = vi.fn();
-                (navigator as unknown as {vibrate: (ms: number) => boolean}).vibrate = vibrateSpy;
+                const haptic = listenForHaptic();
 
                 const el = await renderItem(makeItem({id: "1"}));
                 touchPress(el);
@@ -656,14 +668,13 @@ describe("todo-overlay-tree-item", () => {
                 move(el, -(SWIPE_ACTION_THRESHOLD_PX - 20), 0);
                 move(el, -(SWIPE_ACTION_THRESHOLD_PX + 10), 0);
 
-                expect(vibrateSpy).toHaveBeenCalledTimes(2);
+                expect(haptic.calls).toEqual(["selection", "selection"]);
 
                 touchRelease();
             });
 
             it("starts a fresh gesture unarmed, even right after a swipe that ended armed", async () => {
-                const vibrateSpy = vi.fn();
-                (navigator as unknown as {vibrate: (ms: number) => boolean}).vibrate = vibrateSpy;
+                const haptic = listenForHaptic();
 
                 const el = await renderItem(makeItem({id: "1"}));
                 touchPress(el);
@@ -673,7 +684,7 @@ describe("todo-overlay-tree-item", () => {
                 touchPress(el);
                 move(el, -(SWIPE_ACTION_THRESHOLD_PX + 10), 0);
 
-                expect(vibrateSpy).toHaveBeenCalledTimes(2);
+                expect(haptic.calls).toEqual(["selection", "selection"]);
 
                 touchRelease();
             });

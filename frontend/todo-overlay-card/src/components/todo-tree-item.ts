@@ -42,21 +42,32 @@ const MOVE_CANCEL_THRESHOLD_PX = 6;
 const HOLD_RIPPLE_SIZE = 72;
 const holdRippleSizePx = unsafeCSS(`${HOLD_RIPPLE_SIZE}px`);
 
-// Best-effort haptic pulse (see trackSwipe's own use) - the Vibration
-// API has real gaps in support (notably: no iOS Safari/WKWebView at
-// all, which is what the HA Companion App uses on iOS, so this is
-// silently a no-op there - there's no web-exposed alternative to reach
-// for instead) and can throw in some embedded/permission-restricted
-// contexts even where the property exists, so this is deliberately
-// wrapped rather than called inline at each site that wants one.
-// Exported purely so tests can spy on a single, stable entry point
-// instead of reaching into navigator directly.
-export function vibrate(ms: number): void {
-    try {
-        navigator.vibrate?.(ms);
-    } catch {
-        // Best-effort - see the comment above.
-    }
+// Same 7 types home-assistant/frontend's own haptics.ts defines
+// (data/haptics.ts's HapticType), modeled on Apple's iOS Human
+// Interface Guidelines - not this project's own vocabulary, so it
+// stays whatever the Companion Apps themselves expect.
+export type HapticType = "success" | "warning" | "failure" | "light" | "medium" | "heavy" | "selection";
+
+// Best-effort haptic pulse (see trackSwipe's own use) - dispatches HA's
+// own "haptic" event on window, the same mechanism
+// home-assistant/frontend's own forwardHaptic() uses, rather than the
+// raw Vibration API this replaced. Both Companion Apps (iOS and
+// Android) listen for this and translate it into a real native
+// haptic/vibration call through their own bridge - the documented,
+// sanctioned way for a card to ask for haptic feedback (see
+// companion.home-assistant.io's own haptics docs), and the only one
+// that can reach iOS at all: WKWebView has no Vibration API
+// whatsoever, so raw navigator.vibrate() was never going to work there
+// no matter how it was called - not something this project needed to
+// verify live, it's a platform-level gap with no web-exposed
+// workaround. Outside a Companion App - a plain browser tab, a desktop
+// PWA - this is a harmless no-op, same as it is for HA's own frontend:
+// nothing is listening, and nothing throws either way. Wrapped as its
+// own function purely so
+// tests can spy on a single, stable entry point instead of reaching
+// into window.dispatchEvent directly.
+export function triggerHaptic(type: HapticType): void {
+    window.dispatchEvent(new CustomEvent("haptic", {detail: type}));
 }
 
 // A plain tap is delayed this long before it commits to toggling
@@ -1555,7 +1566,13 @@ export class TodoTreeItem extends LitElement {
         const nowArmed = Math.abs(this.swipeOffsetX) >= SWIPE_ACTION_THRESHOLD_PX;
 
         if (nowArmed && !this.swipeArmed) {
-            vibrate(10);
+            // "selection", not "success"/"light" - this is a value
+            // snapping into an armed state as the finger moves, the
+            // same kind of moment iOS's own UISelectionFeedbackGenerator
+            // is for (a picker/segmented-control landing on a new
+            // value), not a completed action (that's resolveSwipe's own
+            // job once release actually commits it).
+            triggerHaptic("selection");
         }
 
         this.swipeArmed = nowArmed;
