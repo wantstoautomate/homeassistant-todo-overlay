@@ -453,6 +453,26 @@ async def test_websocket_delete_item_removes_it():
 
 
 @pytest.mark.asyncio
+async def test_websocket_delete_item_on_a_delete_protected_item_sends_item_delete_protected_error():
+    manager = make_manager(items=[TodoItem(id="1", title="Brodie", completed=False)])
+    manager._metadata_store._delete_protected.add("1")
+
+    connection = await call_handler(
+        websocket.websocket_delete_item, manager,
+        {"entity_id": ENTITY_ID, "item_id": "1"},
+    )
+
+    assert connection.results == []
+    msg_id, code, message = connection.errors[0]
+    assert code == "item_delete_protected"
+
+    list_connection = await call_handler(
+        websocket.websocket_get_list, manager, {"entity_id": ENTITY_ID, "group_completed": False},
+    )
+    assert [item["id"] for item in list_connection.results[0][1]["items"]] == ["1"]
+
+
+@pytest.mark.asyncio
 async def test_websocket_set_quantity_success():
     manager = make_manager()
 
@@ -552,6 +572,39 @@ async def test_websocket_set_trigger_on_due_without_due_time_sends_due_time_requ
     assert len(connection.errors) == 1
     _, code, _ = connection.errors[0]
     assert code == "due_time_required"
+
+
+# --- set_delete_protected ---------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_websocket_set_delete_protected_success():
+    manager = make_manager()
+
+    connection = await call_handler(
+        websocket.websocket_set_delete_protected, manager,
+        {"entity_id": ENTITY_ID, "item_id": "1", "enabled": True},
+    )
+
+    assert connection.results == [(1, None)]
+
+    metadata_store: FakeMetadataStore = manager._metadata_store
+    assert metadata_store._delete_protected == {"1"}
+
+
+@pytest.mark.asyncio
+async def test_websocket_set_delete_protected_can_clear_it():
+    manager = make_manager()
+    manager._metadata_store._delete_protected.add("1")
+
+    connection = await call_handler(
+        websocket.websocket_set_delete_protected, manager,
+        {"entity_id": ENTITY_ID, "item_id": "1", "enabled": False},
+    )
+
+    assert connection.results == [(1, None)]
+
+    metadata_store: FakeMetadataStore = manager._metadata_store
+    assert metadata_store._delete_protected == set()
 
 
 # --- add_tag / remove_tag -------------------------------------------------
@@ -655,5 +708,6 @@ def test_async_register_websocket_registers_every_handler():
         "todo_overlay/add_tag",
         "todo_overlay/remove_tag",
         "todo_overlay/set_trigger_on_due",
+        "todo_overlay/set_delete_protected",
     }
     assert set(registered_commands) == expected

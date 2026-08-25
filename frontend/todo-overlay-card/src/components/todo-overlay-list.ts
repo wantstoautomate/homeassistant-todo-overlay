@@ -18,6 +18,7 @@ import {
     restoreCompleted,
     saveList,
     setCompleted,
+    setDeleteProtected,
     setPinType,
     setQuantity,
     setTags,
@@ -582,6 +583,19 @@ function collectDescendantIds(item: TodoItem, into: Set<string> = new Set()): Se
     }
 
     return into;
+}
+
+// Recurses into every level, not just top-level items - matters
+// because a parent's own .completed is DERIVED (all its children
+// complete, see build_tree's finalize()), so checking only root items
+// (as this used to) misses a completed item nested under an otherwise-
+// incomplete parent, exactly the gap clear_completed's own backend fix
+// closed (see manager_completion.py). Without this, the clear-
+// completed button could wrongly decide there was nothing to clear and
+// enter delete-mode instead, even though the backend would now
+// actually find something.
+function hasAnyCompletedItem(items: TodoItem[]): boolean {
+    return items.some(item => item.completed || hasAnyCompletedItem(item.children));
 }
 
 function splitDueDateTime(iso: string | null): {date: string; time: string} {
@@ -1862,7 +1876,7 @@ export class TodoOverlayList extends LitElement {
             return;
         }
 
-        if (this.list?.items.some(item => item.completed)) {
+        if (this.list && hasAnyCompletedItem(this.list.items)) {
             this.onClearCompleted();
         } else {
             this.enterDeleteMode();
@@ -2062,6 +2076,7 @@ export class TodoOverlayList extends LitElement {
             pinType: item.pin_type ?? "",
             linked: item.linked,
             linkTarget: "",
+            deleteProtected: item.delete_protected,
         };
     }
 
@@ -2119,6 +2134,7 @@ export class TodoOverlayList extends LitElement {
                     setTags(this.hass, this.entity, this.dialogItem.id, tags),
                     setTriggerOnDue(this.hass, this.entity, this.dialogItem.id, value.triggerOnDue),
                     setPinType(this.hass, this.entity, this.dialogItem.id, pinType),
+                    setDeleteProtected(this.hass, this.entity, this.dialogItem.id, value.deleteProtected),
                 ]);
 
                 // Deliberately AFTER the batch above, not inside it -

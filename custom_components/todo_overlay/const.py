@@ -22,6 +22,7 @@ WS_TYPE_REMOVE_TAG = "todo_overlay/remove_tag"
 WS_TYPE_SET_TRIGGER_ON_DUE = "todo_overlay/set_trigger_on_due"
 WS_TYPE_LINK_ITEM = "todo_overlay/link_item"
 WS_TYPE_UNLINK_ITEM = "todo_overlay/unlink_item"
+WS_TYPE_SET_DELETE_PROTECTED = "todo_overlay/set_delete_protected"
 
 SERVICE_SAVE_LIST = "save_list"
 SERVICE_LOAD_LIST = "load_list"

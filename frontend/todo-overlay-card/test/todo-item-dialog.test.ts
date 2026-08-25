@@ -286,6 +286,83 @@ describe("todo-overlay-item-dialog", () => {
         expect(el.shadowRoot?.querySelector(".confirm-delete")).toBeNull();
     });
 
+    // Live use case: avoid inadvertently deleting an anchor item (e.g.
+    // a "person" pin like "Brodie"/"Anna" a shared list's own
+    // organization relies on).
+    describe("delete protection", () => {
+        function deleteProtectedCheckbox(el: TodoItemDialog): HTMLElement & {checked?: boolean} {
+            return el.shadowRoot?.querySelector("#todo-item-delete-protected") as HTMLElement & {checked?: boolean};
+        }
+
+        function deleteButton(el: TodoItemDialog): HTMLButtonElement {
+            return [...(el.shadowRoot?.querySelectorAll("button") ?? [])]
+                .find(b => b.textContent?.trim() === "Delete") as HTMLButtonElement;
+        }
+
+        it("defaults to unchecked and shows no hint", async () => {
+            const el = await renderDialog({value: {...EMPTY_FORM_VALUE, title: "Milk"}});
+
+            expect(deleteProtectedCheckbox(el).checked).toBe(false);
+            const hints = [...(el.shadowRoot?.querySelectorAll(".field-hint") ?? [])];
+            expect(hints.some(h => h.textContent?.includes("Blocks the delete button"))).toBe(false);
+        });
+
+        it("seeds the checkbox from an already-protected item's value and shows the hint", async () => {
+            const el = await renderDialog({value: {...EMPTY_FORM_VALUE, title: "Brodie", deleteProtected: true}});
+
+            expect(deleteProtectedCheckbox(el).checked).toBe(true);
+            const hints = [...(el.shadowRoot?.querySelectorAll(".field-hint") ?? [])];
+            expect(hints.some(h => h.textContent?.includes("Blocks the delete button"))).toBe(true);
+        });
+
+        it("updates the draft value and emits it on save when toggled", async () => {
+            const el = await renderDialog({value: {...EMPTY_FORM_VALUE, title: "Brodie"}});
+
+            deleteProtectedCheckbox(el).checked = true;
+            deleteProtectedCheckbox(el).dispatchEvent(new Event("change"));
+            await el.updateComplete;
+
+            expect(el.value.deleteProtected).toBe(true);
+
+            let detail: TodoItemFormValue | undefined;
+            el.addEventListener("dialog-save", (e) => {
+                detail = (e as CustomEvent<TodoItemFormValue>).detail;
+            });
+            saveButton(el).click();
+
+            expect(detail?.deleteProtected).toBe(true);
+        });
+
+        it("disables the Delete button, with an explanatory title, while the item is protected", async () => {
+            const el = await renderDialog({
+                showDelete: true,
+                value: {...EMPTY_FORM_VALUE, title: "Brodie", deleteProtected: true},
+            });
+
+            expect(deleteButton(el).disabled).toBe(true);
+            expect(deleteButton(el).title).toContain("Prevent deletion");
+        });
+
+        it("re-enables the Delete button as soon as the checkbox is unticked, without saving first", async () => {
+            const el = await renderDialog({
+                showDelete: true,
+                value: {...EMPTY_FORM_VALUE, title: "Brodie", deleteProtected: true},
+            });
+
+            deleteProtectedCheckbox(el).checked = false;
+            deleteProtectedCheckbox(el).dispatchEvent(new Event("change"));
+            await el.updateComplete;
+
+            expect(deleteButton(el).disabled).toBe(false);
+        });
+
+        it("leaves the Delete button enabled for a normal (unprotected) item", async () => {
+            const el = await renderDialog({showDelete: true, value: {...EMPTY_FORM_VALUE, title: "Milk"}});
+
+            expect(deleteButton(el).disabled).toBe(false);
+        });
+    });
+
     it("emits dialog-toggle-complete when the complete-toggle checkbox changes", async () => {
         const el = await renderDialog({showCompleteToggle: true, completed: false});
 

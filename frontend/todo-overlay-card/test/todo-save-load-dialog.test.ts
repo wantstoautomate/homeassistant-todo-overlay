@@ -9,7 +9,7 @@ function makeItem(overrides: Partial<TodoItem> = {}): TodoItem {
     return {
         id: "1", title: "Item", completed: false, description: null,
         due_date: null, due_datetime: null, quantity: null, tags: [],
-        trigger_on_due: false, pin_type: null, linked: false, children: [], ...overrides,
+        trigger_on_due: false, pin_type: null, linked: false, delete_protected: false, children: [], ...overrides,
     };
 }
 

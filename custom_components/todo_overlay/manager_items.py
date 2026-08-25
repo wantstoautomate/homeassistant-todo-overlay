@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from .errors import InvalidPinTypeError, ItemNotFoundError
+from .errors import InvalidPinTypeError, ItemDeleteProtectedError, ItemNotFoundError
 from .manager_types import PIN_TYPES, Placement
 from .models import TodoItem
 
@@ -138,9 +138,25 @@ class ItemMixin:
         never fired any event at all - live-diagnosed: a deletion never
         propagated to a linked peer, leaving a ghost item there forever.
 
+        Raises ItemDeleteProtectedError, without touching the native
+        list at all, if the item has its delete_protected flag set -
+        this is the single choke point every deletion path goes
+        through (the websocket handler, a service call, AND
+        item_links.py's own cascade when a linked partner is deleted -
+        see its _propagate_delete), so protection holds regardless of
+        which of those triggered it. clear_completed/clear_all
+        deliberately don't call this - see their own docstrings for why
+        a bulk sweep skips a protected item/subtree instead of failing
+        outright.
+
         Any now-orphaned metadata for this item (quantity/tags/
         trigger_on_due) is cleaned up reactively by get_list()'s own
         reconciliation pass, same as before this existed."""
+
+        if item_id in await self._metadata_store.get_delete_protected(entity_id):
+            raise ItemDeleteProtectedError(
+                f"Cannot delete {item_id!r} on {entity_id}: protected from deletion"
+            )
 
         items = await self._adapter.get_items(entity_id)
         item = next((candidate for candidate in items if candidate.id == item_id), None)
@@ -256,6 +272,22 @@ class ItemMixin:
         async with self._lock_for(entity_id):
             resolved = await self._resolve_item(entity_id, item)
             await self._set_pin_type_impl(entity_id, resolved.id, pin_type)
+
+    async def set_delete_protected(
+        self,
+        entity_id: str,
+        item_id: str,
+        enabled: bool,
+    ) -> None:
+        """Set (or clear) an item's delete-protected flag - see
+        delete_item's own docstring for exactly what this blocks.
+        Overlay-only metadata, same shape as trigger_on_due; no service/
+        trigger-event counterpart yet (matches how item_links.py's own
+        link_item started - UI-driven first, service parity later if it
+        turns out to be needed)."""
+
+        async with self._lock_for(entity_id):
+            await self._metadata_store.set_delete_protected(entity_id, item_id, enabled)
 
     async def set_tags(
         self,

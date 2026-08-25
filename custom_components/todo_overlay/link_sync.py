@@ -60,6 +60,7 @@ _LOGGER = logging.getLogger(__name__)
 
 _SYNCED_FIELDS = (
     "title", "completed", "description", "due_date", "due_datetime", "quantity", "tags", "pin_type",
+    "delete_protected",
 )
 
 # Fired directly on this instance's own event bus after successfully
@@ -115,6 +116,7 @@ def _sanitize_incoming_fields(fields: dict[str, Any] | None) -> dict[str, Any] |
         "quantity": _text(fields.get("quantity"), 64),
         "tags": tags,
         "pin_type": pin_type,
+        "delete_protected": bool(fields.get("delete_protected")),
     }
 
 
@@ -295,6 +297,7 @@ class LinkSyncManager:
         quantities = await self._metadata_store.get_quantities(entity_id)
         tags = await self._metadata_store.get_tags(entity_id)
         pin_types = await self._metadata_store.get_pin_types(entity_id)
+        delete_protected = await self._metadata_store.get_delete_protected(entity_id)
 
         fields = {
             "title": item.title,
@@ -305,6 +308,7 @@ class LinkSyncManager:
             "quantity": quantities.get(item_id),
             "tags": tags.get(item_id, []),
             "pin_type": pin_types.get(item_id),
+            "delete_protected": item_id in delete_protected,
         }
 
         # Wherever the item currently sits, described as sync-id
@@ -580,6 +584,20 @@ class LinkSyncManager:
         native_uid = link["sync_to_native"].get(sync_id)
 
         if deleted:
+            # Deliberately not checked against delete_protected here -
+            # unlike TodoManager.delete_item's own guard (see its
+            # docstring), an incoming delete from the peer is applied
+            # unconditionally. delete_protected is itself a synced field
+            # (see _SYNCED_FIELDS), so both sides normally agree on it,
+            # and both sides already refuse a LOCALLY-initiated delete
+            # for a protected item at its own point of origin - a delete
+            # message reaching here at all means the peer's own guard
+            # was bypassed by something outside this integration's reach
+            # in the first place (a raw todo.remove_item service call,
+            # not this integration's own delete_item), which vetoing the
+            # APPLY side wouldn't undo - it would only leave the two
+            # sides permanently disagreeing about whether the item
+            # exists, a worse outcome than staying in sync.
             if native_uid is not None:
                 await self._adapter.remove_item(entity_id, native_uid)
                 await self._metadata_store.remove_native_sync_mapping(entity_id, sync_id=sync_id)
@@ -635,6 +653,9 @@ class LinkSyncManager:
             if pin_type:
                 await self._metadata_store.set_pin_type(entity_id, native_uid, pin_type)
 
+            if fields.get("delete_protected"):
+                await self._metadata_store.set_delete_protected(entity_id, native_uid, True)
+
             if fields.get("completed"):
                 await self._adapter.set_completed(entity_id, native_uid, True)
 
@@ -651,6 +672,9 @@ class LinkSyncManager:
             await self._metadata_store.set_quantity(entity_id, native_uid, fields.get("quantity"))
             await self._metadata_store.set_tags(entity_id, native_uid, fields.get("tags") or [])
             await self._metadata_store.set_pin_type(entity_id, native_uid, fields.get("pin_type"))
+            await self._metadata_store.set_delete_protected(
+                entity_id, native_uid, bool(fields.get("delete_protected"))
+            )
 
         await self._metadata_store.set_link_item_state(
             entity_id, sync_id, updated_at=updated_at, deleted_at=None, fields=fields, position=position,

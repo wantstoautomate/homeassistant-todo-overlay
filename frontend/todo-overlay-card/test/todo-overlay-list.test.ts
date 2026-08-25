@@ -1958,7 +1958,7 @@ describe("todo-overlay-list edit-dialog delete (diagnostic)", () => {
                 detail: {
                     title: "Tent", quantity: "", tags: "", description: "",
                     dueDate: "", dueTime: "", triggerOnDue: false, pinType: "",
-                    linked: true, linkTarget: "Brodie",
+                    linked: true, linkTarget: "Brodie", deleteProtected: false,
                 },
                 bubbles: true, composed: true,
             }));
@@ -1993,7 +1993,7 @@ describe("todo-overlay-list edit-dialog delete (diagnostic)", () => {
                 detail: {
                     title: "Tent", quantity: "", tags: "", description: "",
                     dueDate: "", dueTime: "", triggerOnDue: false, pinType: "",
-                    linked: false, linkTarget: "",
+                    linked: false, linkTarget: "", deleteProtected: false,
                 },
                 bubbles: true, composed: true,
             }));
@@ -2019,7 +2019,7 @@ describe("todo-overlay-list edit-dialog delete (diagnostic)", () => {
                 detail: {
                     title: "Tent", quantity: "", tags: "", description: "",
                     dueDate: "", dueTime: "", triggerOnDue: false, pinType: "",
-                    linked: true, linkTarget: "",
+                    linked: true, linkTarget: "", deleteProtected: false,
                 },
                 bubbles: true, composed: true,
             }));
@@ -2027,6 +2027,84 @@ describe("todo-overlay-list edit-dialog delete (diagnostic)", () => {
 
             expect(hass.connection.sent.some(m => m.type === "todo_overlay/link_item")).toBe(false);
             expect(hass.connection.sent.some(m => m.type === "todo_overlay/unlink_item")).toBe(false);
+        });
+    });
+
+    describe("delete protection", () => {
+        async function openEditDialog(el: TodoOverlayList): Promise<Element> {
+            const treeItem = deepQueryAll(el.shadowRoot!, "todo-overlay-tree-item")[0];
+            treeItem.dispatchEvent(new CustomEvent("tree-pointer-down", {
+                detail: {id: "1"}, bubbles: true, composed: true,
+            }));
+            treeItem.dispatchEvent(new CustomEvent("tree-pointer-up", {
+                detail: {id: "1", pressDurationMs: 600, moved: false}, bubbles: true, composed: true,
+            }));
+            await el.updateComplete;
+
+            return el.shadowRoot!.querySelector("todo-overlay-item-dialog")!;
+        }
+
+        it("seeds the dialog's deleteProtected from the item's own value", async () => {
+            const {el} = await renderList({
+                entity_id: ENTITY_ID,
+                items: [makeItem({id: "1", title: "Brodie", delete_protected: true})],
+            });
+
+            const dialog = await openEditDialog(el) as unknown as {value: {deleteProtected: boolean}};
+
+            expect(dialog.value.deleteProtected).toBe(true);
+        });
+
+        it("ticking the checkbox sends todo_overlay/set_delete_protected with enabled true", async () => {
+            const {el, hass} = await renderList({
+                entity_id: ENTITY_ID,
+                items: [makeItem({id: "1", title: "Brodie", delete_protected: false})],
+            });
+
+            const dialog = await openEditDialog(el);
+
+            dialog.dispatchEvent(new CustomEvent("dialog-save", {
+                detail: {
+                    title: "Brodie", quantity: "", tags: "", description: "",
+                    dueDate: "", dueTime: "", triggerOnDue: false, pinType: "",
+                    linked: false, linkTarget: "", deleteProtected: true,
+                },
+                bubbles: true, composed: true,
+            }));
+            await flushAsync();
+
+            expect(hass.connection.sent).toContainEqual(expect.objectContaining({
+                type: "todo_overlay/set_delete_protected",
+                entity_id: ENTITY_ID,
+                item_id: "1",
+                enabled: true,
+            }));
+        });
+
+        it("unticking the checkbox sends todo_overlay/set_delete_protected with enabled false", async () => {
+            const {el, hass} = await renderList({
+                entity_id: ENTITY_ID,
+                items: [makeItem({id: "1", title: "Brodie", delete_protected: true})],
+            });
+
+            const dialog = await openEditDialog(el);
+
+            dialog.dispatchEvent(new CustomEvent("dialog-save", {
+                detail: {
+                    title: "Brodie", quantity: "", tags: "", description: "",
+                    dueDate: "", dueTime: "", triggerOnDue: false, pinType: "",
+                    linked: false, linkTarget: "", deleteProtected: false,
+                },
+                bubbles: true, composed: true,
+            }));
+            await flushAsync();
+
+            expect(hass.connection.sent).toContainEqual(expect.objectContaining({
+                type: "todo_overlay/set_delete_protected",
+                entity_id: ENTITY_ID,
+                item_id: "1",
+                enabled: false,
+            }));
         });
     });
 
@@ -2320,6 +2398,39 @@ describe("todo-overlay-list clear-all (hold the clear-completed button)", () => 
         }));
         expect(hass.connection.sent).not.toContainEqual(expect.objectContaining({type: "todo_overlay/clear_all"}));
         expect(el.shadowRoot?.querySelector("todo-overlay-confirm-dialog")).toBeNull();
+    });
+
+    // Live-reported: tapping clear-completed did nothing when the only
+    // completed item was nested under a still-incomplete parent (e.g.
+    // "Brodie" with some but not all of his own items checked off) -
+    // "Brodie" itself reads as incomplete (its own .completed is
+    // derived from ALL its children, see build_tree's finalize()), so
+    // a root-only check saw nothing to clear and silently entered
+    // delete-mode instead of ever sending clear_completed at all.
+    it("a quick tap clears completed items even when only a NESTED item (under an incomplete parent) is complete", async () => {
+        const {el, hass} = await renderList({
+            entity_id: ENTITY_ID,
+            items: [
+                makeItem({
+                    id: "1", title: "Brodie", completed: false,
+                    children: [
+                        makeItem({id: "2", title: "Done thing", completed: true}),
+                        makeItem({id: "3", title: "Not done yet", completed: false}),
+                    ],
+                }),
+            ],
+        });
+
+        const button = clearButton(el);
+        button.dispatchEvent(new PointerEvent("pointerdown"));
+        button.dispatchEvent(new PointerEvent("pointerup"));
+        await flushAsync();
+
+        expect(hass.connection.sent).toContainEqual(expect.objectContaining({
+            type: "todo_overlay/clear_completed",
+            entity_id: ENTITY_ID,
+        }));
+        expect((el as unknown as {deleteModeActive: boolean}).deleteModeActive).toBe(false);
     });
 
     it("shows a ripple as soon as the button is pressed, only marked active once held long enough to trigger", async () => {

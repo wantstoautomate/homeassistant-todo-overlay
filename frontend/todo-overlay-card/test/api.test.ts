@@ -12,6 +12,7 @@ import {
     restoreCompleted,
     saveList,
     setCompleted,
+    setDeleteProtected,
     setPinType,
     setQuantity,
     setTags,
@@ -189,6 +190,16 @@ describe("api", () => {
 
         expect(hass.connection.sent).toEqual([{
             type: "todo_overlay/set_trigger_on_due", entity_id: "todo.a", item_id: "1", enabled: true,
+        }]);
+    });
+
+    it("setDeleteProtected sends item_id and enabled", async () => {
+        const hass = makeFakeHass();
+
+        await setDeleteProtected(hass, "todo.a", "1", true);
+
+        expect(hass.connection.sent).toEqual([{
+            type: "todo_overlay/set_delete_protected", entity_id: "todo.a", item_id: "1", enabled: true,
         }]);
     });
 

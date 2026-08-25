@@ -152,6 +152,7 @@ class FakeMetadataStore:
         self._links: dict[str, dict] = {}
         self._link_item_state: dict[str, dict] = {}
         self._item_links: dict[str, dict] = {}
+        self._delete_protected: set[str] = set()
 
     async def get_relationships(self, entity_id: str) -> dict[str, ItemPosition]:
         return dict(self._positions)
@@ -283,6 +284,28 @@ class FakeMetadataStore:
     ) -> None:
         for item_id in item_ids:
             self._trigger_on_due.discard(item_id)
+
+    async def get_delete_protected(self, entity_id: str) -> set[str]:
+        return set(self._delete_protected)
+
+    async def set_delete_protected(
+        self,
+        entity_id: str,
+        item_id: str,
+        enabled: bool,
+    ) -> None:
+        if enabled:
+            self._delete_protected.add(item_id)
+        else:
+            self._delete_protected.discard(item_id)
+
+    async def remove_delete_protected_for_items(
+        self,
+        entity_id: str,
+        item_ids: list[str],
+    ) -> None:
+        for item_id in item_ids:
+            self._delete_protected.discard(item_id)
 
     async def get_due_fired(self, entity_id: str) -> dict[str, str]:
         return dict(self._due_fired)
@@ -506,6 +529,7 @@ class FakeMultiEntityMetadataStore:
         self._due_fired: dict[str, dict[str, str]] = {}
         self._item_links: dict[str, dict[str, dict]] = {}
         self._links: dict[str, dict] = {}
+        self._delete_protected: dict[str, set[str]] = {}
         self.set_positions_calls: list[tuple[str, dict[str, ItemPosition]]] = []
 
     async def get_relationships(self, entity_id: str) -> dict[str, ItemPosition]:
@@ -601,6 +625,23 @@ class FakeMultiEntityMetadataStore:
 
     async def remove_trigger_on_due_for_items(self, entity_id: str, item_ids: list[str]) -> None:
         bucket = self._trigger_on_due.get(entity_id, set())
+
+        for item_id in item_ids:
+            bucket.discard(item_id)
+
+    async def get_delete_protected(self, entity_id: str) -> set[str]:
+        return set(self._delete_protected.get(entity_id, set()))
+
+    async def set_delete_protected(self, entity_id: str, item_id: str, enabled: bool) -> None:
+        bucket = self._delete_protected.setdefault(entity_id, set())
+
+        if enabled:
+            bucket.add(item_id)
+        else:
+            bucket.discard(item_id)
+
+    async def remove_delete_protected_for_items(self, entity_id: str, item_ids: list[str]) -> None:
+        bucket = self._delete_protected.get(entity_id, set())
 
         for item_id in item_ids:
             bucket.discard(item_id)

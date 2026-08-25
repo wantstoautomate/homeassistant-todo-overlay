@@ -53,6 +53,13 @@ export interface TodoItemFormValue {
     // the configured default" (or the target list's own root, if
     // there isn't one).
     linkTarget: string;
+    // Off by default - opts this item OUT of normal deletion everywhere
+    // (the Delete button below, the mobile row's own swipe-to-delete,
+    // clear completed, clear all - see the backend's own delete_item
+    // docstring). Meant for anchor items a whole structure depends on
+    // (e.g. a "person" pin like "Brodie"/"Anna" a shared list's own
+    // organization relies on).
+    deleteProtected: boolean;
 }
 
 export interface TodoItemDialogFieldSupport {
@@ -72,6 +79,7 @@ export const EMPTY_FORM_VALUE: TodoItemFormValue = {
     pinType: "",
     linked: false,
     linkTarget: "",
+    deleteProtected: false,
 };
 
 // Digits only, capped to maxLen - shared by every day/month/year/hour/
@@ -673,6 +681,11 @@ export class TodoItemDialog extends LitElement {
         this.draftValue = {...this.draftValue, linked: checked};
     }
 
+    private onDeleteProtectedChanged(e: Event) {
+        const checked = (e.target as unknown as {checked: boolean}).checked;
+        this.draftValue = {...this.draftValue, deleteProtected: checked};
+    }
+
     // True only while this dialog session is creating a brand new link -
     // the override control (see render()) only makes sense THEN, not
     // for an item that was already linked when the dialog opened (this
@@ -682,7 +695,7 @@ export class TodoItemDialog extends LitElement {
         return this.draftValue.linked && !this.originallyLinked;
     }
 
-    private updateField(field: keyof Omit<TodoItemFormValue, "triggerOnDue" | "linked">, fieldValue: string) {
+    private updateField(field: keyof Omit<TodoItemFormValue, "triggerOnDue" | "linked" | "deleteProtected">, fieldValue: string) {
         this.draftValue = {...this.draftValue, [field]: fieldValue};
     }
 
@@ -943,6 +956,27 @@ export class TodoItemDialog extends LitElement {
                     }
                 </div>
 
+                <div class="field">
+                    <div class="complete-toggle">
+                        <ha-checkbox
+                            id="todo-item-delete-protected"
+                            .checked=${this.draftValue.deleteProtected}
+                            @change=${this.onDeleteProtectedChanged}
+                        ></ha-checkbox>
+                        <span>Prevent deletion</span>
+                    </div>
+                    ${
+                        this.draftValue.deleteProtected
+                            ? html`
+                                <div class="field-hint">
+                                    Blocks the delete button, swipe-to-delete, and clear completed/all -
+                                    untick to allow deleting it again.
+                                </div>
+                            `
+                            : ""
+                    }
+                </div>
+
                 ${
                     showDue
                         ? html`
@@ -1088,7 +1122,16 @@ export class TodoItemDialog extends LitElement {
                                 ${
                                     this.showDelete
                                         ? html`
-                                            <button class="destructive" @click=${this.requestDelete}>
+                                            <button
+                                                class="destructive"
+                                                ?disabled=${this.draftValue.deleteProtected}
+                                                title=${
+                                                    this.draftValue.deleteProtected
+                                                        ? "Untick \"Prevent deletion\" above to delete this item"
+                                                        : ""
+                                                }
+                                                @click=${this.requestDelete}
+                                            >
                                                 Delete
                                             </button>
                                         `

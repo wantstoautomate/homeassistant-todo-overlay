@@ -55,16 +55,19 @@ class TreeMixin:
         trigger_on_due = await self._metadata_store.get_trigger_on_due(entity_id)
         pin_types = await self._metadata_store.get_pin_types(entity_id)
         item_links = await self._metadata_store.get_item_links(entity_id)
+        delete_protected = await self._metadata_store.get_delete_protected(entity_id)
 
-        items, positions, quantities, tags, trigger_on_due, pin_types, item_links = (
+        items, positions, quantities, tags, trigger_on_due, pin_types, item_links, delete_protected = (
             await self._reconcile_orphaned_metadata(
                 entity_id, items, positions, quantities, tags, trigger_on_due, pin_types, item_links,
+                delete_protected,
             )
         )
 
-        items, positions, quantities, tags, trigger_on_due, pin_types, item_links = (
+        items, positions, quantities, tags, trigger_on_due, pin_types, item_links, delete_protected = (
             await self._merge_duplicate_titles(
                 entity_id, items, positions, quantities, tags, trigger_on_due, pin_types, item_links,
+                delete_protected,
             )
         )
 
@@ -72,7 +75,7 @@ class TreeMixin:
             entity_id=entity_id,
             items=build_tree(
                 items, positions, quantities, tags, trigger_on_due, group_completed, pin_types,
-                set(item_links),
+                set(item_links), delete_protected,
             ),
         )
 
@@ -86,13 +89,14 @@ class TreeMixin:
         trigger_on_due: set[str],
         pin_types: dict[str, str],
         item_links: dict[str, dict[str, str]],
+        delete_protected: set[str],
     ) -> tuple[
         list[TodoItem], dict[str, ItemPosition], dict[str, str], dict[str, list[str]], set[str], dict[str, str],
-        dict[str, dict[str, str]],
+        dict[str, dict[str, str]], set[str],
     ]:
         """Drop stored positions/quantities/tags/trigger_on_due/pin_type/
-        item_link (and the scheduler's due_fired bookkeeping) for ids
-        that no longer exist on the native list.
+        item_link/delete_protected (and the scheduler's due_fired
+        bookkeeping) for ids that no longer exist on the native list.
 
         An item can disappear through paths this integration never sees -
         the native todo card, a voice assistant, an automation calling
@@ -114,11 +118,11 @@ class TreeMixin:
         live_ids = {item.id for item in items}
         orphaned_set = set()
 
-        for source in (positions, quantities, tags, trigger_on_due, pin_types, item_links):
+        for source in (positions, quantities, tags, trigger_on_due, pin_types, item_links, delete_protected):
             orphaned_set.update(item_id for item_id in source if item_id not in live_ids)
 
         if not orphaned_set:
-            return items, positions, quantities, tags, trigger_on_due, pin_types, item_links
+            return items, positions, quantities, tags, trigger_on_due, pin_types, item_links, delete_protected
 
         orphaned = list(orphaned_set)
 
@@ -128,6 +132,7 @@ class TreeMixin:
         await self._metadata_store.remove_trigger_on_due_for_items(entity_id, orphaned)
         await self._metadata_store.remove_due_fired_for_items(entity_id, orphaned)
         await self._metadata_store.remove_pin_types(entity_id, orphaned)
+        await self._metadata_store.remove_delete_protected_for_items(entity_id, orphaned)
 
         for item_id in orphaned:
             await self._metadata_store.remove_item_link(entity_id, item_id)
@@ -138,8 +143,9 @@ class TreeMixin:
         trigger_on_due = {item_id for item_id in trigger_on_due if item_id not in orphaned_set}
         pin_types = {k: v for k, v in pin_types.items() if k not in orphaned_set}
         item_links = {k: v for k, v in item_links.items() if k not in orphaned_set}
+        delete_protected = {item_id for item_id in delete_protected if item_id not in orphaned_set}
 
-        return items, positions, quantities, tags, trigger_on_due, pin_types, item_links
+        return items, positions, quantities, tags, trigger_on_due, pin_types, item_links, delete_protected
 
     async def _merge_duplicate_titles(
         self,
@@ -151,9 +157,10 @@ class TreeMixin:
         trigger_on_due: set[str],
         pin_types: dict[str, str],
         item_links: dict[str, dict[str, str]],
+        delete_protected: set[str],
     ) -> tuple[
         list[TodoItem], dict[str, ItemPosition], dict[str, str], dict[str, list[str]], set[str], dict[str, str],
-        dict[str, dict[str, str]],
+        dict[str, dict[str, str]], set[str],
     ]:
         """Collapse sibling items that share a title into one, combining
         their quantities where possible (see _combine_quantities) and
@@ -202,6 +209,12 @@ class TreeMixin:
             # also means repointing the partner's own record at the
             # survivor, not just writing the survivor's own side.
             combined_item_link = item_links.get(survivor.id)
+            # Unlike pin_type/item_link above (survivor wins, a
+            # duplicate only fills a genuine gap), this is a plain OR
+            # across the whole group - a safety flag should never be
+            # silently lost through a merge just because it happened to
+            # be set on the duplicate rather than the survivor.
+            combined_delete_protected = survivor.id in delete_protected
             # A duplicate's own due_datetime never transfers to the
             # survivor (only the survivor's own due_datetime matters), so
             # this only ever turns the flag on, and only when the
@@ -226,6 +239,9 @@ class TreeMixin:
 
                 if duplicate.id in trigger_on_due:
                     survivor_trigger_on_due = True
+
+                if duplicate.id in delete_protected:
+                    combined_delete_protected = True
 
                 child_ids = self._siblings(items, positions, duplicate.id)
 
@@ -284,11 +300,15 @@ class TreeMixin:
                 await self._metadata_store.set_trigger_on_due(entity_id, survivor.id, True)
                 trigger_on_due.add(survivor.id)
 
+            if combined_delete_protected and survivor.id not in delete_protected:
+                await self._metadata_store.set_delete_protected(entity_id, survivor.id, True)
+                delete_protected.add(survivor.id)
+
         if reparented:
             await self._metadata_store.set_positions(entity_id, reparented)
 
         if not removed_ids:
-            return items, positions, quantities, tags, trigger_on_due, pin_types, item_links
+            return items, positions, quantities, tags, trigger_on_due, pin_types, item_links, delete_protected
 
         await self._metadata_store.remove_positions(entity_id, removed_ids)
         await self._metadata_store.remove_quantities(entity_id, removed_ids)
@@ -296,6 +316,7 @@ class TreeMixin:
         await self._metadata_store.remove_trigger_on_due_for_items(entity_id, removed_ids)
         await self._metadata_store.remove_due_fired_for_items(entity_id, removed_ids)
         await self._metadata_store.remove_pin_types(entity_id, removed_ids)
+        await self._metadata_store.remove_delete_protected_for_items(entity_id, removed_ids)
 
         for removed_id in removed_ids:
             await self._metadata_store.remove_item_link(entity_id, removed_id)
@@ -308,5 +329,6 @@ class TreeMixin:
         trigger_on_due = {item_id for item_id in trigger_on_due if item_id not in removed_id_set}
         pin_types = {k: v for k, v in pin_types.items() if k not in removed_id_set}
         item_links = {k: v for k, v in item_links.items() if k not in removed_id_set}
+        delete_protected = {item_id for item_id in delete_protected if item_id not in removed_id_set}
 
-        return items, positions, quantities, tags, trigger_on_due, pin_types, item_links
+        return items, positions, quantities, tags, trigger_on_due, pin_types, item_links, delete_protected

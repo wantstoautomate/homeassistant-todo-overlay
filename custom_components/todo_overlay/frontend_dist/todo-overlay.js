@@ -770,6 +770,14 @@ async function setTriggerOnDue(hass, entityId, itemId, enabled) {
     enabled
   });
 }
+async function setDeleteProtected(hass, entityId, itemId, enabled) {
+  await hass.connection.sendMessagePromise({
+    type: "todo_overlay/set_delete_protected",
+    entity_id: entityId,
+    item_id: itemId,
+    enabled
+  });
+}
 async function setPinType(hass, entityId, itemId, pinType) {
   await hass.connection.sendMessagePromise({
     type: "todo_overlay/set_pin_type",
@@ -984,7 +992,8 @@ var EMPTY_FORM_VALUE = {
   triggerOnDue: false,
   pinType: "",
   linked: false,
-  linkTarget: ""
+  linkTarget: "",
+  deleteProtected: false
 };
 function digitsOnly(raw, maxLen) {
   return raw.replace(/\D/g, "").slice(0, maxLen);
@@ -1150,6 +1159,10 @@ var TodoItemDialog = class extends i4 {
   onLinkedChanged(e7) {
     const checked = e7.target.checked;
     this.draftValue = { ...this.draftValue, linked: checked };
+  }
+  onDeleteProtectedChanged(e7) {
+    const checked = e7.target.checked;
+    this.draftValue = { ...this.draftValue, deleteProtected: checked };
   }
   // True only while this dialog session is creating a brand new link -
   // the override control (see render()) only makes sense THEN, not
@@ -1380,6 +1393,23 @@ var TodoItemDialog = class extends i4 {
                                 ` : ""}
                 </div>
 
+                <div class="field">
+                    <div class="complete-toggle">
+                        <ha-checkbox
+                            id="todo-item-delete-protected"
+                            .checked=${this.draftValue.deleteProtected}
+                            @change=${this.onDeleteProtectedChanged}
+                        ></ha-checkbox>
+                        <span>Prevent deletion</span>
+                    </div>
+                    ${this.draftValue.deleteProtected ? b2`
+                                <div class="field-hint">
+                                    Blocks the delete button, swipe-to-delete, and clear completed/all -
+                                    untick to allow deleting it again.
+                                </div>
+                            ` : ""}
+                </div>
+
                 ${showDue ? b2`
                             <div class="due-row">
                                 <div class="field">
@@ -1498,7 +1528,12 @@ var TodoItemDialog = class extends i4 {
                                 </div>
                             ` : b2`
                                 ${this.showDelete ? b2`
-                                            <button class="destructive" @click=${this.requestDelete}>
+                                            <button
+                                                class="destructive"
+                                                ?disabled=${this.draftValue.deleteProtected}
+                                                title=${this.draftValue.deleteProtected ? 'Untick "Prevent deletion" above to delete this item' : ""}
+                                                @click=${this.requestDelete}
+                                            >
                                                 Delete
                                             </button>
                                         ` : ""}
@@ -2522,6 +2557,7 @@ function groupSiblingsForDisplay(items, parentId) {
     trigger_on_due: false,
     pin_type: null,
     linked: false,
+    delete_protected: false,
     children: plain,
     synthetic: true
   };
@@ -2852,6 +2888,9 @@ var TodoTreeItem = class extends i4 {
   }
   onDeleteClick(e7) {
     e7.stopPropagation();
+    if (this.item.delete_protected) {
+      return;
+    }
     window.clearTimeout(this.deleteConfirmTimer);
     if (this.confirmDelete && !this.confirmingDelete) {
       this.confirmingDelete = true;
@@ -3023,7 +3062,8 @@ var TodoTreeItem = class extends i4 {
       return;
     }
     e7.preventDefault();
-    this.swipeOffsetX = Math.max(-SWIPE_MAX_REVEAL_PX, Math.min(SWIPE_MAX_REVEAL_PX, dx));
+    const minOffset = this.item.delete_protected ? 0 : -SWIPE_MAX_REVEAL_PX;
+    this.swipeOffsetX = Math.max(minOffset, Math.min(SWIPE_MAX_REVEAL_PX, dx));
     const nowArmed = Math.abs(this.swipeOffsetX) >= SWIPE_ACTION_THRESHOLD_PX;
     if (nowArmed && !this.swipeArmed) {
       triggerHaptic("selection");
@@ -3098,7 +3138,7 @@ var TodoTreeItem = class extends i4 {
     this.swipeArmed = false;
     this.swipeDragging = false;
     this.swipeOffsetX = 0;
-    if (offset <= -SWIPE_ACTION_THRESHOLD_PX) {
+    if (offset <= -SWIPE_ACTION_THRESHOLD_PX && !this.item.delete_protected) {
       this.dispatchDeleteAfterCollapse();
     } else if (offset >= SWIPE_ACTION_THRESHOLD_PX) {
       this.dispatchEvent(
@@ -3280,6 +3320,8 @@ var TodoTreeItem = class extends i4 {
       confirming: this.confirmingDelete
     })}
                                                             aria-label=${this.confirmingDelete ? "Confirm delete" : "Delete"}
+                                                            ?disabled=${this.item.delete_protected}
+                                                            title=${this.item.delete_protected ? 'Protected from deletion - untick "Prevent deletion" in the edit dialog to delete' : ""}
                                                             @click=${this.onDeleteClick}
                                                             @pointerdown=${(e7) => e7.stopPropagation()}
                                                         >
@@ -4502,6 +4544,9 @@ function collectDescendantIds(item, into = /* @__PURE__ */ new Set()) {
   }
   return into;
 }
+function hasAnyCompletedItem(items) {
+  return items.some((item) => item.completed || hasAnyCompletedItem(item.children));
+}
 function splitDueDateTime(iso) {
   if (!iso) {
     return { date: "", time: "" };
@@ -4997,7 +5042,7 @@ var TodoOverlayList = class extends i4 {
       this.deleteModeActive = false;
       return;
     }
-    if (this.list?.items.some((item) => item.completed)) {
+    if (this.list && hasAnyCompletedItem(this.list.items)) {
       this.onClearCompleted();
     } else {
       this.enterDeleteMode();
@@ -5109,7 +5154,8 @@ var TodoOverlayList = class extends i4 {
       triggerOnDue: item.trigger_on_due,
       pinType: item.pin_type ?? "",
       linked: item.linked,
-      linkTarget: ""
+      linkTarget: "",
+      deleteProtected: item.delete_protected
     };
   }
   async onDialogSave(e7) {
@@ -5138,7 +5184,8 @@ var TodoOverlayList = class extends i4 {
           setQuantity(this.hass, this.entity, this.dialogItem.id, quantity),
           setTags(this.hass, this.entity, this.dialogItem.id, tags),
           setTriggerOnDue(this.hass, this.entity, this.dialogItem.id, value.triggerOnDue),
-          setPinType(this.hass, this.entity, this.dialogItem.id, pinType)
+          setPinType(this.hass, this.entity, this.dialogItem.id, pinType),
+          setDeleteProtected(this.hass, this.entity, this.dialogItem.id, value.deleteProtected)
         ]);
         if (value.linked && !this.dialogItem.linked) {
           await linkItem(this.hass, this.entity, this.dialogItem.id, value.linkTarget || void 0);

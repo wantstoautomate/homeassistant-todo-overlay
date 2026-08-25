@@ -1197,6 +1197,15 @@ export class TodoTreeItem extends LitElement {
     private onDeleteClick(e: Event) {
         e.stopPropagation();
 
+        // Belt-and-suspenders alongside the button's own ?disabled -
+        // the backend would reject this anyway (see delete_item's own
+        // ItemDeleteProtectedError), but failing here means never
+        // showing the collapse animation for a delete that was always
+        // going to be refused.
+        if (this.item.delete_protected) {
+            return;
+        }
+
         window.clearTimeout(this.deleteConfirmTimer);
 
         if (this.confirmDelete && !this.confirmingDelete) {
@@ -1551,7 +1560,15 @@ export class TodoTreeItem extends LitElement {
         // movement.
         e.preventDefault();
 
-        this.swipeOffsetX = Math.max(-SWIPE_MAX_REVEAL_PX, Math.min(SWIPE_MAX_REVEAL_PX, dx));
+        // A delete_protected row simply doesn't move leftward at all -
+        // no reveal to spring back from, rather than showing the red
+        // delete panel and then silently refusing it on release, which
+        // would read as broken rather than intentionally blocked.
+        // Rightward (add-child) is completely unaffected - there's no
+        // reason protecting an item from deletion should also stop
+        // children being added under it.
+        const minOffset = this.item.delete_protected ? 0 : -SWIPE_MAX_REVEAL_PX;
+        this.swipeOffsetX = Math.max(minOffset, Math.min(SWIPE_MAX_REVEAL_PX, dx));
 
         // Same "armed" condition the template's own .swipe-action.armed
         // class computes - checked here too, against the swipeArmed
@@ -1748,7 +1765,12 @@ export class TodoTreeItem extends LitElement {
         this.swipeDragging = false;
         this.swipeOffsetX = 0;
 
-        if (offset <= -SWIPE_ACTION_THRESHOLD_PX) {
+        // trackSwipe's own clamp already keeps offset from ever going
+        // negative for a delete_protected row, so this can't actually
+        // trigger today - checked again anyway as the single source of
+        // truth for "is this row's delete blocked", the same
+        // belt-and-suspenders onDeleteClick already applies.
+        if (offset <= -SWIPE_ACTION_THRESHOLD_PX && !this.item.delete_protected) {
             this.dispatchDeleteAfterCollapse();
         } else if (offset >= SWIPE_ACTION_THRESHOLD_PX) {
             this.dispatchEvent(
@@ -2001,6 +2023,12 @@ export class TodoTreeItem extends LitElement {
                                                                 confirming: this.confirmingDelete,
                                                             })}
                                                             aria-label=${this.confirmingDelete ? "Confirm delete" : "Delete"}
+                                                            ?disabled=${this.item.delete_protected}
+                                                            title=${
+                                                                this.item.delete_protected
+                                                                    ? "Protected from deletion - untick \"Prevent deletion\" in the edit dialog to delete"
+                                                                    : ""
+                                                            }
                                                             @click=${this.onDeleteClick}
                                                             @pointerdown=${(e: Event) => e.stopPropagation()}
                                                         >

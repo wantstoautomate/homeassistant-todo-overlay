@@ -23,6 +23,7 @@ from .const import (
     WS_TYPE_RESTORE_COMPLETED,
     WS_TYPE_SAVE_LIST,
     WS_TYPE_SET_COMPLETED,
+    WS_TYPE_SET_DELETE_PROTECTED,
     WS_TYPE_SET_PIN_TYPE,
     WS_TYPE_SET_QUANTITY,
     WS_TYPE_SET_TAGS,
@@ -36,6 +37,7 @@ from .errors import (
     DueTimeRequiredError,
     EntityNotFoundError,
     InvalidPinTypeError,
+    ItemDeleteProtectedError,
     ItemLinkTargetNotFoundError,
     ItemNotFoundError,
     SnapshotNotFoundError,
@@ -58,6 +60,7 @@ _ERROR_CODES: dict[type[Exception], str] = {
     DueTimeRequiredError: "due_time_required",
     InvalidPinTypeError: "invalid_pin_type",
     ItemLinkTargetNotFoundError: "item_link_target_not_found",
+    ItemDeleteProtectedError: "item_delete_protected",
 }
 
 WebSocketHandler = Callable[
@@ -740,6 +743,35 @@ async def websocket_set_trigger_on_due(
     connection.send_result(msg["id"])
 
 
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): WS_TYPE_SET_DELETE_PROTECTED,
+        vol.Required("entity_id"): cv.entity_id,
+        vol.Required("item_id"): str,
+        vol.Required("enabled"): bool,
+    }
+)
+@websocket_api.async_response
+@_handle_manager_errors
+async def websocket_set_delete_protected(
+    hass: HomeAssistant,
+    connection: websocket_api.ActiveConnection,
+    msg,
+) -> None:
+    """Set (or clear) an item's delete-protected flag - see
+    TodoManager.delete_item's own docstring for what this blocks."""
+
+    manager = get_manager(hass)
+
+    await manager.set_delete_protected(
+        entity_id=msg["entity_id"],
+        item_id=msg["item_id"],
+        enabled=msg["enabled"],
+    )
+
+    connection.send_result(msg["id"])
+
+
 def async_register_websocket(hass: HomeAssistant) -> None:
     for handler in (
         websocket_get_list,
@@ -764,5 +796,6 @@ def async_register_websocket(hass: HomeAssistant) -> None:
         websocket_add_tag,
         websocket_remove_tag,
         websocket_set_trigger_on_due,
+        websocket_set_delete_protected,
     ):
         websocket_api.async_register_command(hass, handler)

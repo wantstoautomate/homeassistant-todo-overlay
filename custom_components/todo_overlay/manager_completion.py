@@ -217,14 +217,26 @@ class CompletionMixin:
         self,
         entity_id: str,
     ) -> list[str]:
-        """Remove every top-level item that's complete, along with all of
-        its descendants (which must themselves all be complete too,
-        since that's exactly how a parent's completion is derived).
+        """Remove every completed item, at any depth, along with each
+        one's own (necessarily also-complete) descendants.
 
-        Only top-level items are considered for removal - a completed
-        subtree nested under an still-incomplete ancestor is left alone,
-        matching the native card's "clear completed" behaviour of
-        operating on the list as a whole rather than on nested groups.
+        This walks the WHOLE tree, not just top-level items - live-
+        reported: a completed item nested under a still-incomplete
+        parent (e.g. a "person" pin with some but not all of their own
+        items checked off) was never being cleared at all, since the
+        previous behaviour only ever considered a top-level item's own
+        derived-complete status. Now, at every level: a derived-complete
+        subtree is removed whole (its own descendants must all be
+        complete too, by definition - see _derived_completed), otherwise
+        each of its children is considered individually in turn - so a
+        completed item nested three levels deep under an otherwise-
+        incomplete ancestor still gets cleared.
+
+        Skips (and recurses INTO, rather than through) any item with its
+        delete_protected flag set - see delete_item's own docstring for
+        the general rule this follows. A protected parent's own
+        completed children are still cleared normally; only the
+        protected item itself survives.
 
         Returns the ids of everything removed.
         """
@@ -232,6 +244,7 @@ class CompletionMixin:
         async with self._lock_for(entity_id):
             items = await self._adapter.get_items(entity_id)
             positions = await self._metadata_store.get_relationships(entity_id)
+            delete_protected = await self._metadata_store.get_delete_protected(entity_id)
 
             derived = self._derived_completed(items, positions)
 
@@ -243,12 +256,17 @@ class CompletionMixin:
 
             removed_ids: list[str] = []
 
-            for root_id in root_ids:
-                if not derived[root_id]:
-                    continue
+            def sweep(item_id: str) -> None:
+                if item_id not in delete_protected and derived[item_id]:
+                    removed_ids.append(item_id)
+                    removed_ids.extend(self._descendants(item_id, positions, items))
+                    return
 
-                removed_ids.append(root_id)
-                removed_ids.extend(self._descendants(root_id, positions, items))
+                for child_id in self._siblings(items, positions, item_id):
+                    sweep(child_id)
+
+            for root_id in root_ids:
+                sweep(root_id)
 
             item_by_id = {item.id: item for item in items}
 
@@ -271,10 +289,11 @@ class CompletionMixin:
         entity_id: str,
     ) -> list[str]:
         """Remove every item in the list - active or completed, parents
-        and children alike. Same top-level-plus-descendants removal
-        shape as clear_completed, just without the "only if complete"
-        gate - a parent is only ever removed directly (never via a
-        separate call for each descendant), same reasoning as there.
+        and children alike - except any item with its delete_protected
+        flag set (and, in turn, its own subtree: recurses into a
+        protected item's children individually rather than removing
+        them wholesale with it, same rule as clear_completed's own
+        sweep, just without the "must be complete" condition).
 
         Returns the ids of everything removed.
         """
@@ -282,6 +301,7 @@ class CompletionMixin:
         async with self._lock_for(entity_id):
             items = await self._adapter.get_items(entity_id)
             positions = await self._metadata_store.get_relationships(entity_id)
+            delete_protected = await self._metadata_store.get_delete_protected(entity_id)
 
             root_ids = [
                 item.id
@@ -291,9 +311,17 @@ class CompletionMixin:
 
             removed_ids: list[str] = []
 
+            def sweep(item_id: str) -> None:
+                if item_id not in delete_protected:
+                    removed_ids.append(item_id)
+                    removed_ids.extend(self._descendants(item_id, positions, items))
+                    return
+
+                for child_id in self._siblings(items, positions, item_id):
+                    sweep(child_id)
+
             for root_id in root_ids:
-                removed_ids.append(root_id)
-                removed_ids.extend(self._descendants(root_id, positions, items))
+                sweep(root_id)
 
             item_by_id = {item.id: item for item in items}
 

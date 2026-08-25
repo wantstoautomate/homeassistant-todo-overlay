@@ -19,6 +19,7 @@ function makeItem(overrides: Partial<TodoItem> = {}): TodoItem {
         trigger_on_due: false,
         pin_type: null,
         linked: false,
+        delete_protected: false,
         children: [],
         ...overrides,
     };
@@ -533,6 +534,42 @@ describe("todo-overlay-tree-item", () => {
 
         it("dispatches tree-toggle-child-quick-add on release once a rightward swipe passed the action threshold", async () => {
             const el = await renderItem(makeItem({id: "1"}));
+
+            let detail: {id: string} | undefined;
+            el.addEventListener("tree-toggle-child-quick-add", (e) => {
+                detail = (e as CustomEvent<{id: string}>).detail;
+            });
+
+            touchPress(el);
+            move(el, SWIPE_ACTION_THRESHOLD_PX + 10, 0);
+            touchRelease();
+
+            expect(detail).toEqual({id: "1"});
+        });
+
+        it("a delete_protected item doesn't reveal or move at all on a leftward swipe", async () => {
+            const el = await renderItem(makeItem({id: "1", delete_protected: true}));
+
+            let deleted = false;
+            el.addEventListener("tree-delete-item", () => { deleted = true; });
+
+            touchPress(el);
+            move(el, -(SWIPE_ACTION_THRESHOLD_PX + 10), 0);
+            await el.updateComplete;
+
+            // No reveal at all, not even a short one that springs back -
+            // the row simply doesn't move leftward for a protected item
+            // (see trackSwipe's own minOffset).
+            expect(el.shadowRoot?.querySelector(".swipe-action-layer")).toBeNull();
+
+            touchRelease();
+            await flushRowCollapse();
+
+            expect(deleted).toBe(false);
+        });
+
+        it("a delete_protected item still reveals and completes a rightward (add-child) swipe normally", async () => {
+            const el = await renderItem(makeItem({id: "1", delete_protected: true}));
 
             let detail: {id: string} | undefined;
             el.addEventListener("tree-toggle-child-quick-add", (e) => {
@@ -1167,6 +1204,55 @@ describe("todo-overlay-tree-item", () => {
             } finally {
                 vi.useRealTimers();
             }
+        });
+    });
+
+    // Live use case: avoid inadvertently deleting an anchor item (e.g.
+    // a "person" pin like "Brodie"/"Anna" a shared list's own
+    // organization relies on) - both the desktop delete button and the
+    // mobile swipe-to-delete gesture (see "touch swipe on the plain
+    // row" below) must refuse it.
+    describe("delete protection", () => {
+        it("disables the delete button, with an explanatory title", async () => {
+            const el = await renderItem(
+                makeItem({delete_protected: true}),
+                {confirmDelete: false, deleteModeActive: true},
+            );
+
+            const button = el.shadowRoot?.querySelector(".delete-button") as HTMLButtonElement;
+            expect(button.disabled).toBe(true);
+            expect(button.title).toContain("Protected from deletion");
+        });
+
+        it("does not dispatch tree-delete-item even if clicked anyway", async () => {
+            const el = await renderItem(
+                makeItem({delete_protected: true}),
+                {confirmDelete: false, deleteModeActive: true},
+            );
+
+            let fired = false;
+            el.addEventListener("tree-delete-item", () => { fired = true; });
+
+            // A disabled button suppresses the browser's own click
+            // dispatch, but onDeleteClick's own belt-and-suspenders
+            // check is what this test is actually about - bypass the
+            // disabled attribute by calling the handler directly, the
+            // same way a stale/desynced disabled state could in
+            // principle still let a click through.
+            (el as unknown as {onDeleteClick: (e: Event) => void}).onDeleteClick(new Event("click"));
+            await flushRowCollapse();
+
+            expect(fired).toBe(false);
+        });
+
+        it("leaves the delete button enabled for a normal (unprotected) item", async () => {
+            const el = await renderItem(
+                makeItem({delete_protected: false}),
+                {confirmDelete: false, deleteModeActive: true},
+            );
+
+            const button = el.shadowRoot?.querySelector(".delete-button") as HTMLButtonElement;
+            expect(button.disabled).toBe(false);
         });
     });
 
