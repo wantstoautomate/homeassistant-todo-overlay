@@ -3,6 +3,33 @@
 All notable changes to this project are documented here. Versions follow the
 integration's `manifest.json`/card's `package.json` (kept in lockstep).
 
+## 1.5.0
+
+**New: delete protection - stop inadvertently deleting an anchor item.** A
+"Prevent deletion" checkbox in the item dialog (default unchecked) blocks
+an item from being deleted everywhere: the desktop delete button
+(disabled, with an explanatory tooltip), the mobile swipe-to-delete
+gesture (the row simply doesn't move leftward at all, rather than
+revealing and then silently refusing), "clear completed"/"clear all"
+(skipped, but the protected item's own children are still swept
+normally), and the backend itself (`delete_item` raises an error if
+bypassed some other way, e.g. a service call or automation). Synced
+across a linked pair over MQTT, unlike most overlay-only fields - "don't
+delete this" is a property of the item itself, so both sides of a shared
+list need to agree on it for the protection to actually hold. Live use
+case: a "person" pin like "Brodie" or "Anna" that a shared list's own
+organization depends on, one careless swipe or "clear completed" tap
+away from being gone.
+
+- **Fixed: the desktop "clear completed" (trash) button did nothing when
+  the only completed items were nested under a still-incomplete parent.**
+  It only ever checked whether a whole top-level item was itself
+  complete (every descendant too) - something checked off under
+  "Brodie" while other things under him were still open was never
+  swept. Now recurses into every level: a fully-complete subtree is
+  still removed whole, anything short of that recurses into its own
+  children individually instead of stopping there.
+
 ## 1.4.2
 
 **Changed: the swipe-armed haptic pulse (1.4.1) now uses HA's own sanctioned mechanism instead of the raw Web Vibration API.** 1.4.1 called `navigator.vibrate()` directly, which worked on Android but was never going to reach iOS at all - WKWebView (what the Companion App uses there) has no Vibration API whatsoever, no web-exposed workaround either. Switched to dispatching HA's own `"haptic"` event on `window` instead - the same mechanism `home-assistant/frontend`'s own `forwardHaptic()` uses, which both Companion Apps are actually built to listen for and translate into a real native haptic call through their own bridge. No other behavior changed - same threshold-crossing trigger as 1.4.1, just resolved through the sanctioned path this time, and now working on both platforms.
