@@ -22,6 +22,13 @@ export interface TodoItem {
     // boolean here (seeds the item dialog's own "Link to shared list"
     // checkbox) - the partner's own details live entirely server-side.
     linked: boolean;
+    // Off by default - opts this item OUT of normal deletion everywhere
+    // (desktop delete button, mobile swipe-to-delete, clear completed,
+    // clear all - see the backend's own delete_item docstring). Meant
+    // for anchor items a whole structure depends on (e.g. a "person"
+    // pin a shared list's own organization relies on) that would
+    // otherwise be one careless swipe away from being gone.
+    delete_protected: boolean;
     children: TodoItem[];
 }
 

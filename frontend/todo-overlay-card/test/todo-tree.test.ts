@@ -17,6 +17,7 @@ function makeItem(overrides: Partial<TodoItem> = {}): TodoItem {
         trigger_on_due: false,
         pin_type: null,
         linked: false,
+        delete_protected: false,
         children: [],
         ...overrides,
     };

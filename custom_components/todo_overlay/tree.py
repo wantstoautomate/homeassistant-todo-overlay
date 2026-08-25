@@ -10,6 +10,7 @@ def build_tree(
     group_completed: bool = False,
     pin_types: dict[str, str] | None = None,
     linked_item_ids: set[str] | None = None,
+    delete_protected_ids: set[str] | None = None,
 ) -> list[TodoItem]:
     """Build a hierarchy from a flat list of TodoItems.
 
@@ -41,6 +42,7 @@ def build_tree(
         item.trigger_on_due = item.id in (trigger_on_due or set())
         item.pin_type = (pin_types or {}).get(item.id)
         item.linked = item.id in (linked_item_ids or set())
+        item.delete_protected = item.id in (delete_protected_ids or set())
 
     for item in items:
         position = positions.get(item.id)

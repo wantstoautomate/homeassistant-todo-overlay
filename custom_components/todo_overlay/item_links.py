@@ -38,7 +38,7 @@ import logging
 from typing import TYPE_CHECKING, Any
 
 from .const import EVENT_ITEM_CHANGED
-from .errors import ItemLinkTargetNotFoundError, ItemNotFoundError
+from .errors import ItemDeleteProtectedError, ItemLinkTargetNotFoundError, ItemNotFoundError
 from .ha_adapter import HomeAssistantTodoProvider
 from .metadata_store import MetadataStore
 
@@ -233,16 +233,35 @@ class ItemLinkManager:
         target_entity_id: str,
         target_item_id: str,
     ) -> None:
-        # The pairing itself is dropped first, unconditionally - if the
-        # target's own delete below fails or is already gone, the pairing
-        # must not survive it and dangle either way.
-        await self._metadata_store.remove_item_link(entity_id, item_id)
-        await self._metadata_store.remove_item_link(target_entity_id, target_item_id)
+        """Delete the linked partner, then drop the pairing - in that
+        order specifically. The pairing must not survive an ordinary
+        delete (whether it succeeds, or the target's already gone) -
+        but if the target is delete_protected (see TodoManager.
+        delete_item), it's still there and the pairing is still
+        accurate, so THAT case bails out before ever touching either
+        side's link record, leaving them linked. The alternative -
+        dropping the pairing unconditionally up front, before knowing
+        whether the delete will actually happen - would leave a
+        protected item as a silently orphaned survivor: alive, but
+        no longer mirrored to anything, with no link left to even
+        signal that."""
 
         target_items = await self._adapter.get_items(target_entity_id)
 
         if any(candidate.id == target_item_id for candidate in target_items):
-            await self._manager.delete_item(target_entity_id, target_item_id)
+            try:
+                await self._manager.delete_item(target_entity_id, target_item_id)
+            except ItemDeleteProtectedError:
+                _LOGGER.warning(
+                    "Not deleting linked partner %s (%s) - it's protected from "
+                    "deletion. %s (%s) was still deleted; this pair is now out of "
+                    "sync until the partner is unlinked or its protection is cleared.",
+                    target_item_id, target_entity_id, item_id, entity_id,
+                )
+                return
+
+        await self._metadata_store.remove_item_link(entity_id, item_id)
+        await self._metadata_store.remove_item_link(target_entity_id, target_item_id)
 
     async def _propagate_content(
         self,

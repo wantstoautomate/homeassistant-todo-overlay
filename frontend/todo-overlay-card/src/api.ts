@@ -213,6 +213,22 @@ export async function setTriggerOnDue(
 
 }
 
+export async function setDeleteProtected(
+    hass: HassLike,
+    entityId: string,
+    itemId: string,
+    enabled: boolean,
+): Promise<void> {
+
+    await hass.connection.sendMessagePromise<void>({
+        type: "todo_overlay/set_delete_protected",
+        entity_id: entityId,
+        item_id: itemId,
+        enabled,
+    });
+
+}
+
 export async function setPinType(
     hass: HassLike,
     entityId: string,

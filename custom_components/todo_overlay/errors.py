@@ -51,3 +51,13 @@ class ItemLinkTargetNotFoundError(TodoOverlayError):
     (see get_all_linked_entity_ids). A missing/stale configured default
     PARENT item is not this - that degrades to filing at the target
     list's own root instead, logged but not raised."""
+
+
+class ItemDeleteProtectedError(TodoOverlayError):
+    """Raised by TodoManager.delete_item when the item has its
+    delete_protected flag set - deliberately a hard stop (never a
+    silent no-op), so a caller (the websocket handler, a service call,
+    an automation) gets an explicit, actionable error rather than
+    quietly nothing happening. clear_completed/clear_all don't raise
+    this - a bulk sweep skips a protected item/subtree instead of
+    failing outright (see their own docstrings)."""

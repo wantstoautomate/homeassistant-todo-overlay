@@ -1027,3 +1027,84 @@ async def test_incoming_message_with_an_invalid_pin_type_falls_back_to_none_with
 
     pin_types = await store.get_pin_types(ENTITY_ID)
     assert pin_types.get(new_item.id) is None
+
+
+# --- delete_protected sync -------------------------------------------------
+#
+# Synced (unlike trigger_on_due, deliberately NOT in _SYNCED_FIELDS -
+# see its own comment there) because "don't delete this item" is a
+# property of the item itself, not of one particular HA instance's own
+# config - a "person" pin like "Brodie"/"Anna" only stays meaningfully
+# protected if BOTH sides of a shared list agree on it. Otherwise the
+# whole point (avoid inadvertently deleting one side's own person pin)
+# would be trivially bypassed by deleting it from the OTHER instance.
+
+
+@pytest.mark.asyncio
+async def test_local_delete_protected_change_publishes_it_even_though_other_content_is_unchanged():
+    hass, adapter, store, manager, transport, sync = make_sync_manager(
+        items=[TodoItem(id="1", title="Anna", completed=False)],
+    )
+    await sync.async_setup()
+    await store.set_link(ENTITY_ID, LINK_ID)
+    await sync.async_start_link(ENTITY_ID)
+
+    await sync.async_handle_local_change(ENTITY_ID, "1", "created")
+    transport.published.clear()
+
+    await store.set_delete_protected(ENTITY_ID, "1", True)
+    await sync.async_handle_local_change(ENTITY_ID, "1", "updated")
+
+    assert len(transport.published) == 1
+    _, payload = transport.published[0]
+    assert payload["fields"]["delete_protected"] is True
+
+
+@pytest.mark.asyncio
+async def test_incoming_delete_protected_is_applied_locally_on_create():
+    hass, adapter, store, manager, transport, sync = make_sync_manager(items=[])
+    await sync.async_setup()
+    await store.set_link(ENTITY_ID, LINK_ID)
+    await sync.async_start_link(ENTITY_ID)
+
+    transport.deliver(f"todo_overlay/link/{LINK_ID}/item/sync-1", {
+        "origin": "some-other-instance",
+        "sync_id": "sync-1",
+        "updated_at": "2026-01-01T00:00:00+00:00",
+        "deleted": False,
+        "fields": {"title": "Brodie", "completed": False, "description": None,
+                    "due_date": None, "due_datetime": None, "quantity": None, "tags": [],
+                    "pin_type": "person", "delete_protected": True},
+    })
+    await _flush(hass)
+
+    items = await adapter.get_items(ENTITY_ID)
+    new_item = next(item for item in items if item.title == "Brodie")
+
+    delete_protected = await store.get_delete_protected(ENTITY_ID)
+    assert new_item.id in delete_protected
+
+
+@pytest.mark.asyncio
+async def test_incoming_delete_protected_is_applied_locally_on_update():
+    hass, adapter, store, manager, transport, sync = make_sync_manager(
+        items=[TodoItem(id="1", title="Brodie", completed=False)],
+    )
+    await sync.async_setup()
+    await store.set_link(ENTITY_ID, LINK_ID)
+    await sync.async_start_link(ENTITY_ID)
+    await store.set_native_sync_mapping(ENTITY_ID, "1", "sync-1")
+
+    transport.deliver(f"todo_overlay/link/{LINK_ID}/item/sync-1", {
+        "origin": "some-other-instance",
+        "sync_id": "sync-1",
+        "updated_at": "2026-01-01T00:00:00+00:00",
+        "deleted": False,
+        "fields": {"title": "Brodie", "completed": False, "description": None,
+                    "due_date": None, "due_datetime": None, "quantity": None, "tags": [],
+                    "pin_type": None, "delete_protected": True},
+    })
+    await _flush(hass)
+
+    delete_protected = await store.get_delete_protected(ENTITY_ID)
+    assert "1" in delete_protected

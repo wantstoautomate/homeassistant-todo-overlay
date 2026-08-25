@@ -44,6 +44,16 @@ class TodoItem:
     # lives in metadata_store, keyed by (entity_id, item_id), and is
     # looked up directly wherever the full detail is actually needed.
     linked: bool = False
+    # Off by default for every item - opting an item OUT of normal
+    # deletion, everywhere: the desktop delete button, the mobile swipe-
+    # to-delete gesture, clear_completed, clear_all, and delete_item
+    # itself (including a delete cascading in from a linked item's own
+    # partner - see item_links.py). Meant for anchor items a whole
+    # structure depends on (e.g. a "person" pin like "Brodie"/"Anna" a
+    # shared list's own organization relies on) that would otherwise be
+    # one careless swipe or a "clear completed" tap away from being
+    # gone. See manager_items.py's set_delete_protected.
+    delete_protected: bool = False
     children: list["TodoItem"] = field(default_factory=list)
 
     def to_dict(self) -> dict:
@@ -59,6 +69,7 @@ class TodoItem:
             "trigger_on_due": self.trigger_on_due,
             "pin_type": self.pin_type,
             "linked": self.linked,
+            "delete_protected": self.delete_protected,
             "children": [child.to_dict() for child in self.children],
         }
 

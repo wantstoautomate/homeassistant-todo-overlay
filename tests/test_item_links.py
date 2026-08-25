@@ -353,3 +353,23 @@ async def test_delete_cascade_does_not_error_if_the_partner_is_somehow_already_g
     await item_links.async_handle_item_changed(SOURCE, "tent", "removed")
 
     assert await metadata_store.get_item_link(SOURCE, "tent") is None
+
+
+@pytest.mark.asyncio
+async def test_delete_cascade_leaves_a_delete_protected_partner_alive_and_still_linked():
+    # If the pairing were dropped unconditionally up front (the old
+    # order), a protected partner would survive as a silently orphaned
+    # item - alive, but with no link left to signal it was ever
+    # mirrored to anything. Both sides of the pairing must survive
+    # together here, not just the target item itself.
+    manager, item_links, adapter, metadata_store = make_cross_entity(
+        [TodoItem(id="tent", title="Tent", completed=False)],
+    )
+    new_id = await item_links.link_item(SOURCE, "tent", target_entity_id=TARGET)
+    await metadata_store.set_delete_protected(TARGET, new_id, True)
+
+    await manager.delete_item(SOURCE, "tent")
+    await item_links.async_handle_item_changed(SOURCE, "tent", "removed")
+
+    assert any(item.id == new_id for item in await adapter.get_items(TARGET))
+    assert await metadata_store.get_item_link(TARGET, new_id) == {"entity_id": SOURCE, "item_id": "tent"}

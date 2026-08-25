@@ -6,6 +6,7 @@ from custom_components.todo_overlay.const import EVENT_ITEM_CHANGED
 from custom_components.todo_overlay.errors import (
     CycleError,
     InvalidPinTypeError,
+    ItemDeleteProtectedError,
     ItemNotFoundError,
     SnapshotNotFoundError,
 )
@@ -67,6 +68,7 @@ async def test_manager_returns_serialisable_list():
                 "trigger_on_due": False,
                 "pin_type": None,
                 "linked": False,
+                "delete_protected": False,
                 "children": [
                     {
                         "id": "2",
@@ -80,6 +82,7 @@ async def test_manager_returns_serialisable_list():
                         "trigger_on_due": False,
                         "pin_type": None,
                         "linked": False,
+                        "delete_protected": False,
                         "children": [],
                     }
                 ],
@@ -261,6 +264,37 @@ async def test_manager_delete_item_fires_removed_event_and_removes_item():
     assert data == {
         "entity_id": "todo.shopping", "item_id": "1", "title": "Milk", "action": "removed",
     }
+
+
+@pytest.mark.asyncio
+async def test_manager_delete_item_raises_for_a_delete_protected_item_and_never_touches_it():
+
+    adapter = FakeAdapter(items=[TodoItem(id="1", title="Brodie", completed=False)])
+    metadata_store = FakeMetadataStore()
+    metadata_store._delete_protected.add("1")
+    manager = TodoManager(adapter=adapter, metadata_store=metadata_store)
+
+    with pytest.raises(ItemDeleteProtectedError):
+        await manager.delete_item(entity_id="todo.shopping", item_id="1")
+
+    assert {item.id for item in adapter._items} == {"1"}
+
+
+@pytest.mark.asyncio
+async def test_manager_set_delete_protected_sets_and_clears():
+
+    adapter = FakeAdapter(items=[TodoItem(id="1", title="Brodie", completed=False)])
+    manager = TodoManager(adapter=adapter, metadata_store=FakeMetadataStore())
+
+    await manager.set_delete_protected(entity_id="todo.shopping", item_id="1", enabled=True)
+
+    todo_list = await manager.get_list("todo.shopping")
+    assert todo_list.items[0].delete_protected is True
+
+    await manager.set_delete_protected(entity_id="todo.shopping", item_id="1", enabled=False)
+
+    todo_list = await manager.get_list("todo.shopping")
+    assert todo_list.items[0].delete_protected is False
 
 
 @pytest.mark.asyncio
@@ -645,12 +679,15 @@ async def test_manager_clear_completed_removes_completed_top_level_items_and_chi
 
 
 @pytest.mark.asyncio
-async def test_manager_clear_completed_leaves_incomplete_nested_completed_subtree_alone():
+async def test_manager_clear_completed_removes_a_nested_completed_item_even_under_an_incomplete_parent():
 
-    # "2" is a fully-complete subtree, but it's nested under an
-    # incomplete root ("1") - clear_completed only considers top-level
-    # items, so this nested group is left untouched even though it
-    # would qualify if it were a root itself.
+    # "2" is complete but its parent "1" isn't (since sibling "3" isn't) -
+    # live-reported: the OLD behaviour only ever considered top-level
+    # items, so a completed item nested under a still-incomplete parent
+    # was never cleared at all. clear_completed now walks every level:
+    # "2" is removed on its own, "1" and "3" both survive ("1" because
+    # it's not derived-complete once "2" is gone from consideration;
+    # "3" because it's individually incomplete).
     adapter = FakeAdapter(items=[
         TodoItem(id="1", title="Root", completed=False),
         TodoItem(id="2", title="Nested done", completed=True),
@@ -667,8 +704,70 @@ async def test_manager_clear_completed_leaves_incomplete_nested_completed_subtre
 
     removed = await manager.clear_completed(entity_id="todo.shopping")
 
-    assert removed == []
-    assert {item.id for item in adapter._items} == {"1", "2", "3"}
+    assert removed == ["2"]
+    assert {item.id for item in adapter._items} == {"1", "3"}
+
+
+@pytest.mark.asyncio
+async def test_manager_clear_completed_removes_a_completed_subtree_nested_several_levels_deep():
+
+    # "3" (and its own child "4") form a fully-complete subtree nested
+    # two levels under root "1", which itself is nowhere near complete
+    # (sibling "2" is untouched) - the whole "3"+"4" group is removed
+    # together, exactly like a complete ROOT subtree already was before
+    # this change, just found by recursing rather than stopping at the
+    # top level.
+    adapter = FakeAdapter(items=[
+        TodoItem(id="1", title="Root", completed=False),
+        TodoItem(id="2", title="Incomplete branch", completed=False),
+        TodoItem(id="3", title="Complete branch", completed=True),
+        TodoItem(id="4", title="Complete leaf", completed=True),
+    ])
+
+    metadata_store = FakeMetadataStore({
+        "1": ItemPosition(parent_id=None, order=0),
+        "2": ItemPosition(parent_id="1", order=0),
+        "3": ItemPosition(parent_id="1", order=1),
+        "4": ItemPosition(parent_id="3", order=0),
+    })
+
+    manager = TodoManager(adapter=adapter, metadata_store=metadata_store)
+
+    removed = await manager.clear_completed(entity_id="todo.shopping")
+
+    assert set(removed) == {"3", "4"}
+    assert {item.id for item in adapter._items} == {"1", "2"}
+
+
+@pytest.mark.asyncio
+async def test_manager_clear_completed_skips_a_delete_protected_item_but_still_clears_its_completed_children():
+
+    # "1" is protected AND derived-complete (both its children are
+    # complete) - it survives regardless, but its own completed child
+    # "2" is still cleared, exactly as if "1" weren't a parent at all.
+    # "3" isn't protected and IS derived-complete (its own child "4" is
+    # complete too) - normal whole-subtree removal.
+    adapter = FakeAdapter(items=[
+        TodoItem(id="1", title="Protected parent", completed=True),
+        TodoItem(id="2", title="Completed child", completed=True),
+        TodoItem(id="3", title="Unprotected parent", completed=True),
+        TodoItem(id="4", title="Completed grandchild", completed=True),
+    ])
+
+    metadata_store = FakeMetadataStore({
+        "1": ItemPosition(parent_id=None, order=0),
+        "2": ItemPosition(parent_id="1", order=0),
+        "3": ItemPosition(parent_id=None, order=1),
+        "4": ItemPosition(parent_id="3", order=0),
+    })
+    metadata_store._delete_protected.add("1")
+
+    manager = TodoManager(adapter=adapter, metadata_store=metadata_store)
+
+    removed = await manager.clear_completed(entity_id="todo.shopping")
+
+    assert set(removed) == {"2", "3", "4"}
+    assert {item.id for item in adapter._items} == {"1"}
 
 
 @pytest.mark.asyncio
@@ -698,6 +797,30 @@ async def test_manager_clear_all_removes_every_item_regardless_of_completion():
     assert set(removed) == {"1", "2", "3", "4"}
     assert adapter._items == []
     assert metadata_store._positions == {}
+
+
+@pytest.mark.asyncio
+async def test_manager_clear_all_skips_a_delete_protected_item_but_still_clears_its_children():
+
+    adapter = FakeAdapter(items=[
+        TodoItem(id="1", title="Protected parent", completed=False),
+        TodoItem(id="2", title="Child", completed=False),
+        TodoItem(id="3", title="Unprotected", completed=True),
+    ])
+
+    metadata_store = FakeMetadataStore({
+        "1": ItemPosition(parent_id=None, order=0),
+        "2": ItemPosition(parent_id="1", order=0),
+        "3": ItemPosition(parent_id=None, order=1),
+    })
+    metadata_store._delete_protected.add("1")
+
+    manager = TodoManager(adapter=adapter, metadata_store=metadata_store)
+
+    removed = await manager.clear_all(entity_id="todo.shopping")
+
+    assert set(removed) == {"2", "3"}
+    assert {item.id for item in adapter._items} == {"1"}
 
 
 @pytest.mark.asyncio
@@ -1936,6 +2059,34 @@ async def test_manager_get_list_merge_ors_trigger_on_due_of_duplicates():
 
 
 @pytest.mark.asyncio
+async def test_manager_get_list_merge_ors_delete_protected_of_duplicates():
+    # Unlike pin_type (survivor wins, duplicate only fills a gap), a
+    # safety flag is a plain OR across the group - even though the
+    # SURVIVOR is the one with no delete_protected of its own here, the
+    # merged result should still end up protected because the duplicate
+    # being removed had it.
+    adapter = FakeAdapter(items=[
+        TodoItem(id="1", title="Brodie", completed=False),
+        TodoItem(id="2", title="Brodie", completed=False),
+    ])
+    metadata_store = FakeMetadataStore({
+        "1": ItemPosition(parent_id=None, order=0),
+        "2": ItemPosition(parent_id=None, order=1),
+    })
+    metadata_store._quantities = {"1": "1", "2": "1"}
+    metadata_store._delete_protected = {"2"}
+
+    manager = TodoManager(adapter=adapter, metadata_store=metadata_store)
+
+    todo_list = await manager.get_list("todo.shared")
+
+    assert len(todo_list.items) == 1
+    assert todo_list.items[0].id == "1"
+    assert todo_list.items[0].delete_protected is True
+    assert metadata_store._delete_protected == {"1"}
+
+
+@pytest.mark.asyncio
 async def test_manager_get_list_merge_inherits_pin_type_from_a_duplicate():
     # Not combinable like quantity/tags - a single value. The survivor
     # has no pin_type of its own, but the duplicate does, so it should
@@ -2091,6 +2242,22 @@ async def test_manager_get_list_reconciles_orphaned_trigger_on_due_and_due_fired
 
     assert metadata_store._trigger_on_due == {"1"}
     assert metadata_store._due_fired == {"1": "2026-01-01T00:00:00+00:00"}
+
+
+@pytest.mark.asyncio
+async def test_manager_get_list_reconciles_orphaned_delete_protected():
+    adapter = FakeAdapter(items=[TodoItem(id="1", title="Brodie", completed=False)])
+    metadata_store = FakeMetadataStore({
+        "1": ItemPosition(parent_id=None, order=0),
+        "ghost": ItemPosition(parent_id=None, order=1),
+    })
+    metadata_store._delete_protected = {"1", "ghost"}
+
+    manager = TodoManager(adapter=adapter, metadata_store=metadata_store)
+
+    await manager.get_list("todo.shopping")
+
+    assert metadata_store._delete_protected == {"1"}
 
 
 # --- typed exceptions -----------------------------------------------------

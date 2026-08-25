@@ -103,6 +103,7 @@ export function groupSiblingsForDisplay(
         trigger_on_due: false,
         pin_type: null,
         linked: false,
+        delete_protected: false,
         children: plain,
         synthetic: true,
     };
