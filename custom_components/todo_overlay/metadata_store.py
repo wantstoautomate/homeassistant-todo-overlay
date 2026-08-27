@@ -70,6 +70,13 @@ INSTANCE_ID_KEY = "_instance_id"
 # an MQTT message needs a transport-stable id independent of either
 # side's native uid; nothing here ever crosses an instance boundary).
 ITEM_LINKS_KEY = "_item_links"
+# Which weekday (0=Monday..6=Sunday - see manager_types.WEEKDAY_NAMES) a
+# "day" pin (see PIN_TYPES) represents - only ever meaningful alongside
+# pin_type == "day", but kept as its own key rather than folded into
+# PIN_TYPE_KEY's own dict, which is a plain string everywhere else (see
+# manager_items.py's set_pin_type for the validation tying the two
+# together).
+WEEKDAY_KEY = "_weekday"
 # Ids of items that must not be deleted by accident - stored as a set,
 # same shape as TRIGGER_ON_DUE_KEY (only True entries are ever written).
 # Enforced by TodoManager.delete_item/clear_completed/clear_all (see
@@ -226,6 +233,7 @@ class MetadataStore:
         self._cache.get(LINK_ITEM_STATE_KEY, {}).pop(entity_id, None)
         self._cache.get(ITEM_LINKS_KEY, {}).pop(entity_id, None)
         self._cache.get(DELETE_PROTECTED_KEY, {}).pop(entity_id, None)
+        self._cache.get(WEEKDAY_KEY, {}).pop(entity_id, None)
 
         self._save()
 
@@ -249,7 +257,7 @@ class MetadataStore:
 
         for key in (
             QUANTITIES_KEY, TAGS_KEY, PIN_TYPE_KEY, TRIGGER_ON_DUE_KEY, DUE_FIRED_KEY,
-            LINKS_KEY, LINK_ITEM_STATE_KEY, ITEM_LINKS_KEY, DELETE_PROTECTED_KEY,
+            LINKS_KEY, LINK_ITEM_STATE_KEY, ITEM_LINKS_KEY, DELETE_PROTECTED_KEY, WEEKDAY_KEY,
         ):
             bucket = self._cache.get(key, {})
 
@@ -391,6 +399,60 @@ class MetadataStore:
 
         for item_id in item_ids:
             entity_pin_types.pop(item_id, None)
+
+        self._save()
+
+    async def get_weekdays(
+        self,
+        entity_id: str,
+    ) -> dict[str, int]:
+        await self._load()
+
+        assert self._cache is not None
+
+        return dict(self._cache.get(WEEKDAY_KEY, {}).get(entity_id, {}))
+
+    async def set_weekday(
+        self,
+        entity_id: str,
+        item_id: str,
+        weekday: int | None,
+    ) -> None:
+        """Set (or clear, if weekday is None) which weekday a "day" pin
+        represents."""
+
+        await self._load()
+
+        assert self._cache is not None
+
+        entity_weekdays = self._cache.setdefault(WEEKDAY_KEY, {}).setdefault(entity_id, {})
+
+        if weekday is not None:
+            entity_weekdays[item_id] = weekday
+        else:
+            entity_weekdays.pop(item_id, None)
+
+        self._save()
+
+    async def remove_weekdays(
+        self,
+        entity_id: str,
+        item_ids: list[str],
+    ) -> None:
+        """Drop stored weekdays for items that no longer exist, e.g.
+        after a clear-completed removal."""
+
+        await self._load()
+
+        assert self._cache is not None
+
+        entity_weekdays = self._cache.get(WEEKDAY_KEY, {}).get(entity_id)
+
+        if not entity_weekdays:
+            return
+
+        for item_id in item_ids:
+            entity_weekdays.pop(item_id, None)
 
         self._save()
 

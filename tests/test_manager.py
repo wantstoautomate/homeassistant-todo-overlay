@@ -9,6 +9,7 @@ from custom_components.todo_overlay.errors import (
     ItemDeleteProtectedError,
     ItemNotFoundError,
     SnapshotNotFoundError,
+    WeekdayRequiredError,
 )
 from custom_components.todo_overlay.manager import TodoManager
 from custom_components.todo_overlay.models import ItemPosition, TodoItem
@@ -69,6 +70,8 @@ async def test_manager_returns_serialisable_list():
                 "pin_type": None,
                 "linked": False,
                 "delete_protected": False,
+                "weekday": None,
+                "day_label": None,
                 "children": [
                     {
                         "id": "2",
@@ -83,6 +86,8 @@ async def test_manager_returns_serialisable_list():
                         "pin_type": None,
                         "linked": False,
                         "delete_protected": False,
+                        "weekday": None,
+                        "day_label": None,
                         "children": [],
                     }
                 ],
@@ -1368,6 +1373,90 @@ async def test_manager_set_pin_type_rejects_an_invalid_value():
 
 
 @pytest.mark.asyncio
+async def test_manager_set_pin_type_day_requires_a_weekday():
+
+    adapter = FakeAdapter(items=[TodoItem(id="1", title="Some title", completed=False)])
+    manager = TodoManager(adapter=adapter, metadata_store=FakeMetadataStore())
+
+    with pytest.raises(WeekdayRequiredError):
+        await manager.set_pin_type("todo.household", "1", "day")
+
+
+@pytest.mark.asyncio
+async def test_manager_set_pin_type_day_rejects_an_out_of_range_weekday():
+
+    adapter = FakeAdapter(items=[TodoItem(id="1", title="Some title", completed=False)])
+    manager = TodoManager(adapter=adapter, metadata_store=FakeMetadataStore())
+
+    with pytest.raises(WeekdayRequiredError):
+        await manager.set_pin_type("todo.household", "1", "day", weekday=7)
+
+
+@pytest.mark.asyncio
+async def test_manager_set_pin_type_day_renames_the_item_to_the_weekdays_own_name():
+    # Whatever the item was called before is overwritten - a "day"
+    # pin's title is always its weekday's own plain name, never
+    # anything else (see set_pin_type's own docstring for why).
+    adapter = FakeAdapter(items=[TodoItem(id="1", title="Some placeholder title", completed=False)])
+    metadata_store = FakeMetadataStore({"1": ItemPosition(parent_id=None, order=0)})
+    manager = TodoManager(adapter=adapter, metadata_store=metadata_store)
+
+    await manager.set_pin_type("todo.household", "1", "day", weekday=2)
+
+    todo_list = await manager.get_list("todo.household")
+    assert todo_list.items[0].title == "Wednesday"
+    assert todo_list.items[0].pin_type == "day"
+    assert todo_list.items[0].weekday == 2
+
+
+@pytest.mark.asyncio
+async def test_manager_set_pin_type_clearing_away_from_day_also_clears_the_stored_weekday():
+
+    adapter = FakeAdapter(items=[TodoItem(id="1", title="Wednesday", completed=False)])
+    metadata_store = FakeMetadataStore({"1": ItemPosition(parent_id=None, order=0)})
+    manager = TodoManager(adapter=adapter, metadata_store=metadata_store)
+
+    await manager.set_pin_type("todo.household", "1", "day", weekday=2)
+    await manager.set_pin_type("todo.household", "1", "category")
+
+    todo_list = await manager.get_list("todo.household")
+    assert todo_list.items[0].pin_type == "category"
+    assert todo_list.items[0].weekday is None
+    assert metadata_store._weekdays == {}
+
+
+@pytest.mark.asyncio
+async def test_manager_get_list_uses_the_injected_today_weekday_fn_end_to_end():
+    # Exercises the real wiring (manager_tree.py's own
+    # self._today_weekday_fn() call, threaded all the way through to
+    # build_tree) rather than tree.py's pure function in isolation -
+    # today_weekday_fn is injectable specifically so this doesn't
+    # depend on whatever day it actually is when the suite runs.
+    adapter = FakeAdapter(items=[
+        TodoItem(id="thu", title="Thursday", completed=False),
+        TodoItem(id="wed", title="Wednesday", completed=False),
+    ])
+    metadata_store = FakeMetadataStore({
+        "thu": ItemPosition(parent_id=None, order=0),
+        "wed": ItemPosition(parent_id=None, order=1),
+    })
+    await metadata_store.set_pin_type("todo.household", "thu", "day")
+    await metadata_store.set_weekday("todo.household", "thu", 3)
+    await metadata_store.set_pin_type("todo.household", "wed", "day")
+    await metadata_store.set_weekday("todo.household", "wed", 2)
+
+    manager = TodoManager(
+        adapter=adapter, metadata_store=metadata_store, today_weekday_fn=lambda: 2,
+    )
+
+    todo_list = await manager.get_list("todo.household")
+
+    assert [item.id for item in todo_list.items] == ["wed", "thu"]
+    assert todo_list.items[0].day_label == "Today"
+    assert todo_list.items[1].day_label == "Tomorrow"
+
+
+@pytest.mark.asyncio
 async def test_manager_set_pin_type_fires_pin_type_changed_event():
 
     hass = _FakeEventHass()
@@ -1716,6 +1805,38 @@ async def test_manager_create_item_rejects_an_invalid_pin_type_without_creating_
         await manager.create_item(
             entity_id="todo.household", title="Anna", pin_type="not-a-real-type",
         )
+
+    todo_list = await manager.get_list("todo.household")
+    assert todo_list.items == []
+
+
+@pytest.mark.asyncio
+async def test_manager_create_item_with_pin_type_day_ignores_the_given_title():
+    # The given title ("whatever") is discarded entirely - a "day" pin
+    # is always titled its weekday's own plain name, decided by
+    # weekday, not by what was typed in.
+    adapter = FakeAdapter(items=[])
+    metadata_store = FakeMetadataStore()
+    manager = TodoManager(adapter=adapter, metadata_store=metadata_store)
+
+    item_id = await manager.create_item(
+        entity_id="todo.household", title="whatever", pin_type="day", weekday=2,
+    )
+
+    todo_list = await manager.get_list("todo.household")
+    assert todo_list.items[0].id == item_id
+    assert todo_list.items[0].title == "Wednesday"
+    assert todo_list.items[0].weekday == 2
+
+
+@pytest.mark.asyncio
+async def test_manager_create_item_with_pin_type_day_and_no_weekday_raises_without_creating_anything():
+
+    adapter = FakeAdapter(items=[])
+    manager = TodoManager(adapter=adapter, metadata_store=FakeMetadataStore())
+
+    with pytest.raises(WeekdayRequiredError):
+        await manager.create_item(entity_id="todo.household", title="whatever", pin_type="day")
 
     todo_list = await manager.get_list("todo.household")
     assert todo_list.items == []

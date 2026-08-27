@@ -1,8 +1,25 @@
 from __future__ import annotations
 
-from .errors import InvalidPinTypeError, ItemDeleteProtectedError, ItemNotFoundError
-from .manager_types import PIN_TYPES, Placement
+from .errors import (
+    InvalidPinTypeError,
+    ItemDeleteProtectedError,
+    ItemNotFoundError,
+    WeekdayRequiredError,
+)
+from .manager_types import PIN_TYPES, WEEKDAY_NAMES, Placement
 from .models import TodoItem
+
+
+def _validate_pin_type(pin_type: str | None, weekday: int | None) -> None:
+    if pin_type is not None and pin_type not in PIN_TYPES:
+        raise InvalidPinTypeError(
+            f"pin_type must be one of {sorted(PIN_TYPES)} or None, got {pin_type!r}"
+        )
+
+    if pin_type == "day" and (weekday is None or not 0 <= weekday <= 6):
+        raise WeekdayRequiredError(
+            f"pin_type='day' requires weekday to be an int 0-6 (Monday-Sunday), got {weekday!r}"
+        )
 
 
 class ItemMixin:
@@ -25,10 +42,17 @@ class ItemMixin:
         reference_id: str | None = None,
         placement: Placement | None = None,
         pin_type: str | None = None,
+        weekday: int | None = None,
     ) -> str:
         """Create an item, including overlay-only fields (quantity,
         tags, trigger_on_due, pin_type) that Home Assistant's native
         todo.add_item has no concept of.
+
+        pin_type="day" requires weekday (0=Monday..6=Sunday) - and the
+        given title is IGNORED in that case, replaced with the
+        weekday's own plain name (see manager_types.WEEKDAY_NAMES) -
+        see set_pin_type's own docstring for why a "day" pin's title is
+        never anything else.
 
         trigger_on_due=True is silently ignored if the target entity
         doesn't end up with a due_datetime (either none was given, or
@@ -55,10 +79,10 @@ class ItemMixin:
         # the native item already exists would leave an orphan item
         # behind with no pin_type set, a partial failure the caller
         # never asked for.
-        if pin_type is not None and pin_type not in PIN_TYPES:
-            raise InvalidPinTypeError(
-                f"pin_type must be one of {sorted(PIN_TYPES)} or None, got {pin_type!r}"
-            )
+        _validate_pin_type(pin_type, weekday)
+
+        if pin_type == "day":
+            title = WEEKDAY_NAMES[weekday]
 
         async with self._lock_for(entity_id):
             item_id = await self._adapter.add_item(
@@ -77,6 +101,9 @@ class ItemMixin:
 
             if pin_type is not None:
                 await self._metadata_store.set_pin_type(entity_id, item_id, pin_type)
+
+            if pin_type == "day":
+                await self._metadata_store.set_weekday(entity_id, item_id, weekday)
 
             if trigger_on_due:
                 created = await self._adapter.get_items(entity_id)
@@ -216,37 +243,51 @@ class ItemMixin:
         entity_id: str,
         item_id: str,
         pin_type: str | None,
+        weekday: int | None = None,
     ) -> None:
         """Set (or clear) an item's pin type - overlay-only metadata that
         marks it as always rendering/behaving like a parent (bold title,
         no checkbox, collapsible) regardless of whether it currently has
-        any children. "category" and "person" are the only valid non-None
-        values (see manager_types.PIN_TYPES) - a purely presentational
-        distinction the frontend uses to decide between a plain section
-        header and one with a person's initial avatar; nothing here
-        treats them differently."""
+        any children. "category" and "person" are purely presentational
+        (the frontend uses them to decide between a plain section header
+        and one with a person's initial avatar); "day" additionally
+        requires weekday (0=Monday..6=Sunday, see manager_types.
+        WEEKDAY_NAMES) and drives real backend behavior - see tree.py's
+        own build_tree for the day-of-week rotation/labeling this powers.
 
-        if pin_type is not None and pin_type not in PIN_TYPES:
-            raise InvalidPinTypeError(
-                f"pin_type must be one of {sorted(PIN_TYPES)} or None, got {pin_type!r}"
-            )
+        Setting pin_type="day" also renames the item to that weekday's
+        own plain name (e.g. weekday=2 -> "Wednesday"), overwriting
+        whatever title it had - a "day" pin's title is never anything
+        else, since build_tree's own "Today"/"Tomorrow" is a display
+        overlay computed fresh on every read (see TodoItem.day_label),
+        not something stored here; keeping the stored title itself
+        stable is what lets a service/automation reference "Wednesday"
+        and mean the same real day regardless of when it runs. weekday
+        is ignored (and cleared from storage) for any other pin_type."""
+
+        _validate_pin_type(pin_type, weekday)
 
         async with self._lock_for(entity_id):
-            await self._set_pin_type_impl(entity_id, item_id, pin_type)
+            await self._set_pin_type_impl(entity_id, item_id, pin_type, weekday)
 
     async def _set_pin_type_impl(
         self,
         entity_id: str,
         item_id: str,
         pin_type: str | None,
+        weekday: int | None = None,
     ) -> None:
         """The actual body of set_pin_type(), callable by
         set_pin_type_by_item() without re-entering self._lock_for() - see
         TreeMixin._get_list_impl()'s docstring for why that split exists.
         Validation already happened in set_pin_type() before the lock was
-        ever taken, so this trusts pin_type as-is."""
+        ever taken, so this trusts pin_type/weekday as-is."""
+
+        if pin_type == "day":
+            await self._adapter.update_item(entity_id, item_id, title=WEEKDAY_NAMES[weekday])
 
         await self._metadata_store.set_pin_type(entity_id, item_id, pin_type)
+        await self._metadata_store.set_weekday(entity_id, item_id, weekday if pin_type == "day" else None)
 
         items = await self._adapter.get_items(entity_id)
         item = next((candidate for candidate in items if candidate.id == item_id), None)
@@ -259,19 +300,17 @@ class ItemMixin:
         entity_id: str,
         item: str,
         pin_type: str | None,
+        weekday: int | None = None,
     ) -> None:
         """Set an item's pin type, identified by uid or title - the
         service-facing counterpart to set_pin_type(), which callers with
         a real item_id already in hand (the frontend) use directly."""
 
-        if pin_type is not None and pin_type not in PIN_TYPES:
-            raise InvalidPinTypeError(
-                f"pin_type must be one of {sorted(PIN_TYPES)} or None, got {pin_type!r}"
-            )
+        _validate_pin_type(pin_type, weekday)
 
         async with self._lock_for(entity_id):
             resolved = await self._resolve_item(entity_id, item)
-            await self._set_pin_type_impl(entity_id, resolved.id, pin_type)
+            await self._set_pin_type_impl(entity_id, resolved.id, pin_type, weekday)
 
     async def set_delete_protected(
         self,

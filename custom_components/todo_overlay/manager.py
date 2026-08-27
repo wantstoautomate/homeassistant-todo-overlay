@@ -5,6 +5,8 @@ import logging
 from collections.abc import Awaitable, Callable
 from typing import Any
 
+from homeassistant.util import dt as dt_util
+
 from .const import EVENT_ITEM_CHANGED
 from .ha_adapter import HomeAssistantTodoProvider
 from .manager_completion import CompletionMixin
@@ -16,6 +18,16 @@ from .manager_tree import TreeMixin
 from .metadata_store import MetadataStore
 
 _LOGGER = logging.getLogger(__name__)
+
+
+def _current_weekday() -> int:
+    """0=Monday..6=Sunday, in HA's own configured time zone - see
+    manager_tree.py's own use for why this exists as an injectable
+    function rather than a bare dt_util call inline (same "swap in a
+    fake clock for tests" reasoning as due_scheduler.py's own utcnow
+    parameter)."""
+
+    return dt_util.now().weekday()
 
 
 class TodoManager(
@@ -41,6 +53,7 @@ class TodoManager(
         adapter: HomeAssistantTodoProvider,
         metadata_store: MetadataStore,
         hass: Any | None = None,
+        today_weekday_fn: Callable[[], int] = _current_weekday,
     ) -> None:
         self._adapter = adapter
         self._metadata_store = metadata_store
@@ -48,6 +61,12 @@ class TodoManager(
         # trigger platform. None in tests, where there's nothing
         # listening for them anyway.
         self._hass = hass
+        # Injectable purely so tests can pin "today" to a specific
+        # weekday deterministically, rather than depending on whatever
+        # day it actually is when the suite runs - see tree.py's own
+        # build_tree for what this actually drives (the day-of-week
+        # pin rotation/labeling).
+        self._today_weekday_fn = today_weekday_fn
         # One lock per entity_id, created on first use and never removed -
         # a handful of Lock objects live for the life of the integration,
         # which is negligible even for an install with many todo lists.

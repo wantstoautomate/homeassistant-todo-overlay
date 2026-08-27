@@ -2,7 +2,7 @@ import {LitElement, html, css, nothing} from "lit";
 import {customElement, property} from "lit/decorators.js";
 
 import type {HassLike} from "./hass";
-import type {DragGhostStyle} from "./models";
+import type {DragGhostStyle, WeekdayAnchor} from "./models";
 import type {SortBy, SortOrder} from "./sort";
 
 import "./components/todo-overlay-list";
@@ -84,6 +84,13 @@ export interface TodoOverlayCardConfig {
     // remain available (card editor's Advanced section) for anyone who
     // prefers a different treatment.
     drag_ghost_style?: DragGhostStyle;
+    // Which side of its own siblings a level's "day of week" pins (see
+    // models.ts's own PinType) block together at, at every level
+    // independently - "top" (the default) reads as "this week's agenda
+    // first, everything else trails below"; "bottom" leads with
+    // general/uncategorized items instead. Irrelevant for a list with
+    // no "day" pins at all - see tree.py's own build_tree.
+    weekday_anchor?: WeekdayAnchor;
 }
 
 function friendlyName(hass: HassLike, entityId: string): string {
@@ -191,6 +198,7 @@ export class TodoOverlayCard extends LitElement {
                             .showReorderToggle=${this.config.show_reorder_toggle ?? true}
                             .moveCompletedItems=${this.config.move_completed_items ?? false}
                             .dragGhostStyle=${this.config.drag_ghost_style ?? "label"}
+                            .weekdayAnchor=${this.config.weekday_anchor ?? "top"}
                         ></todo-overlay-list>
                     </div>
                 `)}

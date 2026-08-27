@@ -23,6 +23,7 @@ from .const import (
     ATTR_TARGET_ITEM,
     ATTR_TITLE,
     ATTR_TRIGGER_ON_DUE,
+    ATTR_WEEKDAY,
     DOMAIN,
     LINK_ID_PATTERN,
     SERVICE_ADD_TAG,
@@ -85,6 +86,7 @@ CREATE_ITEM_SCHEMA = vol.Schema(
         vol.Optional(ATTR_TAGS): [str],
         vol.Optional(ATTR_TRIGGER_ON_DUE, default=False): bool,
         vol.Optional(ATTR_PIN_TYPE): vol.In(sorted(PIN_TYPES)),
+        vol.Optional(ATTR_WEEKDAY): vol.All(int, vol.Range(min=0, max=6)),
     }
 )
 
@@ -101,6 +103,7 @@ SET_PIN_TYPE_SCHEMA = vol.Schema(
         vol.Required("entity_id"): cv.entity_id,
         vol.Required(ATTR_ITEM): str,
         vol.Optional(ATTR_PIN_TYPE): vol.In(sorted(PIN_TYPES)),
+        vol.Optional(ATTR_WEEKDAY): vol.All(int, vol.Range(min=0, max=6)),
     }
 )
 
@@ -193,6 +196,7 @@ def async_register_services(hass: HomeAssistant) -> None:
             tags=call.data.get(ATTR_TAGS),
             trigger_on_due=call.data[ATTR_TRIGGER_ON_DUE],
             pin_type=call.data.get(ATTR_PIN_TYPE),
+            weekday=call.data.get(ATTR_WEEKDAY),
         )
 
     async def handle_set_quantity(call: ServiceCall) -> None:
@@ -211,6 +215,7 @@ def async_register_services(hass: HomeAssistant) -> None:
             entity_id=call.data["entity_id"],
             item=call.data[ATTR_ITEM],
             pin_type=call.data.get(ATTR_PIN_TYPE),
+            weekday=call.data.get(ATTR_WEEKDAY),
         )
 
     async def handle_set_trigger_on_due(call: ServiceCall) -> None:

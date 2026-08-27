@@ -5,7 +5,7 @@ import {styleMap} from "lit/directives/style-map.js";
 
 import type {DisplayItem} from "../grouping";
 import {groupSiblingsForDisplay} from "../grouping";
-import {LONG_PRESS_MS, type Placement, type TodoItem, isOverdue} from "../models";
+import {LONG_PRESS_MS, type Placement, type TodoItem, type WeekdayAnchor, isOverdue} from "../models";
 
 // How far into a row's top/bottom the pointer needs to be to count as
 // "before"/"after" rather than "inside" (reparent). Exported so the
@@ -929,6 +929,14 @@ export class TodoTreeItem extends LitElement {
     @property({attribute: false})
     showCheckboxes = false;
 
+    // See TodoOverlayCardConfig's own weekday_anchor comment - threaded
+    // down to every level (like every other display preference here),
+    // since "day" pins/groupSiblingsForDisplay's own Other-bucket
+    // interaction (see its own comment) can occur at any nesting depth,
+    // not just the root.
+    @property({attribute: false})
+    weekdayAnchor: WeekdayAnchor = "top";
+
     @property({attribute: false})
     confirmDelete = true;
 
@@ -1790,7 +1798,7 @@ export class TodoTreeItem extends LitElement {
         // this.item.children completely unchanged) below the
         // structural-sibling threshold, so this is cheap to always
         // compute rather than only when it might matter.
-        const displayChildren = groupSiblingsForDisplay(this.item.children, this.item.id);
+        const displayChildren = groupSiblingsForDisplay(this.item.children, this.item.id, this.weekdayAnchor);
 
         const rowClasses = {
             row: true,
@@ -1922,7 +1930,7 @@ export class TodoTreeItem extends LitElement {
 
                                 <div class="content">
                                     <div class="title-line">
-                                        <span class=${classMap({summary: true, structural: this.isStructural})}>${this.item.title}</span>
+                                        <span class=${classMap({summary: true, structural: this.isStructural})}>${this.item.day_label ?? this.item.title}</span>
                                         ${
                                             this.item.quantity
                                                 ? html`<span class="quantity-chip">${this.item.quantity}</span>`
@@ -2103,6 +2111,7 @@ export class TodoTreeItem extends LitElement {
                                             .hoverDepth=${this.hoverDepth}
                                             .hideCompleteForParents=${this.hideCompleteForParents}
                                             .showCheckboxes=${this.showCheckboxes}
+                                            .weekdayAnchor=${this.weekdayAnchor}
                                             .confirmDelete=${this.confirmDelete}
                                             .dragDisabled=${this.dragDisabled}
                                             .collapsedIds=${this.collapsedIds}

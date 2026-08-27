@@ -38,6 +38,7 @@ import {
     type TodoItem,
     type TodoList,
     TodoListEntityFeature,
+    type WeekdayAnchor,
     supportsFeature,
 } from "../models";
 import type {SortBy, SortOrder} from "../sort";
@@ -1096,6 +1097,10 @@ export class TodoOverlayList extends LitElement {
     @property()
     public dragGhostStyle: DragGhostStyle = "label";
 
+    // See TodoOverlayCardConfig's own weekday_anchor comment.
+    @property()
+    public weekdayAnchor: WeekdayAnchor = "top";
+
     @state()
     private list?: TodoList;
 
@@ -1396,6 +1401,7 @@ export class TodoOverlayList extends LitElement {
                 this.hass,
                 this.entity,
                 this.moveCompletedItems,
+                this.weekdayAnchor,
             );
 
             window.clearTimeout(this.errorTimer);
@@ -2074,6 +2080,7 @@ export class TodoOverlayList extends LitElement {
             dueTime: due.time,
             triggerOnDue: item.trigger_on_due,
             pinType: item.pin_type ?? "",
+            dayWeekday: item.weekday !== null ? String(item.weekday) : "",
             linked: item.linked,
             linkTarget: "",
             deleteProtected: item.delete_protected,
@@ -2101,6 +2108,7 @@ export class TodoOverlayList extends LitElement {
             .map(tag => tag.trim())
             .filter(tag => tag.length > 0);
         const pinType = value.pinType || undefined;
+        const weekday = pinType === "day" ? Number(value.dayWeekday) : undefined;
 
         try {
             if (this.dialogMode === "edit" && this.dialogItem) {
@@ -2133,7 +2141,7 @@ export class TodoOverlayList extends LitElement {
                     setQuantity(this.hass, this.entity, this.dialogItem.id, quantity),
                     setTags(this.hass, this.entity, this.dialogItem.id, tags),
                     setTriggerOnDue(this.hass, this.entity, this.dialogItem.id, value.triggerOnDue),
-                    setPinType(this.hass, this.entity, this.dialogItem.id, pinType),
+                    setPinType(this.hass, this.entity, this.dialogItem.id, pinType, weekday),
                     setDeleteProtected(this.hass, this.entity, this.dialogItem.id, value.deleteProtected),
                 ]);
 
@@ -2320,6 +2328,7 @@ export class TodoOverlayList extends LitElement {
                     .emptyDropHighlight=${this.isEmptyDropTarget}
                     .hideCompleteForParents=${this.hideCompleteForParents}
                     .showCheckboxes=${this.showCheckboxes}
+                    .weekdayAnchor=${this.weekdayAnchor}
                     .confirmDelete=${this.confirmDelete}
                     .dragDisabled=${this.dragDisabled}
                     .collapsedIds=${this.collapsedIds}
@@ -2353,6 +2362,7 @@ export class TodoOverlayList extends LitElement {
                     .emptyDropHighlight=${this.isEmptyDropTarget}
                     .hideCompleteForParents=${this.hideCompleteForParents}
                     .showCheckboxes=${this.showCheckboxes}
+                    .weekdayAnchor=${this.weekdayAnchor}
                     .confirmDelete=${this.confirmDelete}
                     .dragDisabled=${this.dragDisabled}
                     .collapsedIds=${this.collapsedIds}
@@ -2388,6 +2398,7 @@ export class TodoOverlayList extends LitElement {
                             .hoverDepth=${this.hoverDepth}
                             .hideCompleteForParents=${this.hideCompleteForParents}
                             .showCheckboxes=${this.showCheckboxes}
+                            .weekdayAnchor=${this.weekdayAnchor}
                             .confirmDelete=${this.confirmDelete}
                             .dragDisabled=${this.dragDisabled}
                             .collapsedIds=${this.collapsedIds}
@@ -2418,6 +2429,7 @@ export class TodoOverlayList extends LitElement {
                 .hoverDepth=${this.hoverDepth}
                 .hideCompleteForParents=${this.hideCompleteForParents}
                 .showCheckboxes=${this.showCheckboxes}
+                .weekdayAnchor=${this.weekdayAnchor}
                 .confirmDelete=${this.confirmDelete}
                 .dragDisabled=${this.dragDisabled}
                 .collapsedIds=${this.collapsedIds}

@@ -54,6 +54,18 @@ class TodoItem:
     # one careless swipe or a "clear completed" tap away from being
     # gone. See manager_items.py's set_delete_protected.
     delete_protected: bool = False
+    # Only meaningful alongside pin_type == "day" - which weekday this
+    # item represents (0=Monday..6=Sunday, see manager_types.
+    # WEEKDAY_NAMES), stored permanently and never itself changed by
+    # the passage of time. See day_label below for what DOES change day
+    # to day - tree.py's build_tree computes both from this plus
+    # today's actual weekday.
+    weekday: int | None = None
+    # "Today"/"Tomorrow" if this "day" pin's own weekday is 0/1 days
+    # from today, else None (render its plain title instead) - purely a
+    # computed display overlay, recomputed fresh on every read from
+    # weekday above and the current date; nothing here is ever stored.
+    day_label: str | None = None
     children: list["TodoItem"] = field(default_factory=list)
 
     def to_dict(self) -> dict:
@@ -70,6 +82,8 @@ class TodoItem:
             "pin_type": self.pin_type,
             "linked": self.linked,
             "delete_protected": self.delete_protected,
+            "weekday": self.weekday,
+            "day_label": self.day_label,
             "children": [child.to_dict() for child in self.children],
         }
 

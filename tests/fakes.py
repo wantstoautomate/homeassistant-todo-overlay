@@ -153,6 +153,7 @@ class FakeMetadataStore:
         self._link_item_state: dict[str, dict] = {}
         self._item_links: dict[str, dict] = {}
         self._delete_protected: set[str] = set()
+        self._weekdays: dict[str, int] = {}
 
     async def get_relationships(self, entity_id: str) -> dict[str, ItemPosition]:
         return dict(self._positions)
@@ -200,6 +201,28 @@ class FakeMetadataStore:
     ) -> None:
         for item_id in item_ids:
             self._pin_types.pop(item_id, None)
+
+    async def get_weekdays(self, entity_id: str) -> dict[str, int]:
+        return dict(self._weekdays)
+
+    async def set_weekday(
+        self,
+        entity_id: str,
+        item_id: str,
+        weekday: int | None,
+    ) -> None:
+        if weekday is not None:
+            self._weekdays[item_id] = weekday
+        else:
+            self._weekdays.pop(item_id, None)
+
+    async def remove_weekdays(
+        self,
+        entity_id: str,
+        item_ids: list[str],
+    ) -> None:
+        for item_id in item_ids:
+            self._weekdays.pop(item_id, None)
 
     async def get_item_link(self, entity_id: str, item_id: str) -> dict | None:
         return self._item_links.get(item_id)
@@ -530,6 +553,7 @@ class FakeMultiEntityMetadataStore:
         self._item_links: dict[str, dict[str, dict]] = {}
         self._links: dict[str, dict] = {}
         self._delete_protected: dict[str, set[str]] = {}
+        self._weekdays: dict[str, dict[str, int]] = {}
         self.set_positions_calls: list[tuple[str, dict[str, ItemPosition]]] = []
 
     async def get_relationships(self, entity_id: str) -> dict[str, ItemPosition]:
@@ -565,6 +589,23 @@ class FakeMultiEntityMetadataStore:
 
     async def remove_pin_types(self, entity_id: str, item_ids: list[str]) -> None:
         bucket = self._pin_types.get(entity_id, {})
+
+        for item_id in item_ids:
+            bucket.pop(item_id, None)
+
+    async def get_weekdays(self, entity_id: str) -> dict[str, int]:
+        return dict(self._weekdays.get(entity_id, {}))
+
+    async def set_weekday(self, entity_id: str, item_id: str, weekday: int | None) -> None:
+        bucket = self._weekdays.setdefault(entity_id, {})
+
+        if weekday is not None:
+            bucket[item_id] = weekday
+        else:
+            bucket.pop(item_id, None)
+
+    async def remove_weekdays(self, entity_id: str, item_ids: list[str]) -> None:
+        bucket = self._weekdays.get(entity_id, {})
 
         for item_id in item_ids:
             bucket.pop(item_id, None)

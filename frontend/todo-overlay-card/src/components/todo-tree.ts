@@ -3,7 +3,7 @@ import {customElement, property} from "lit/decorators.js";
 import {classMap} from "lit/directives/class-map.js";
 
 import {groupSiblingsForDisplay} from "../grouping";
-import type {Placement, TodoItem} from "../models";
+import type {Placement, TodoItem, WeekdayAnchor} from "../models";
 
 import "./todo-tree-item";
 
@@ -74,6 +74,10 @@ export class TodoTree extends LitElement {
     @property({attribute: false})
     showCheckboxes = false;
 
+    // See TodoOverlayCardConfig's own weekday_anchor comment.
+    @property({attribute: false})
+    weekdayAnchor: WeekdayAnchor = "top";
+
     @property({attribute: false})
     confirmDelete = true;
 
@@ -104,7 +108,7 @@ export class TodoTree extends LitElement {
         // Root level has no real parent id of its own - see grouping.ts's
         // own otherGroupId, which treats undefined as "root" for exactly
         // this call site.
-        const displayItems = groupSiblingsForDisplay(this.items, undefined);
+        const displayItems = groupSiblingsForDisplay(this.items, undefined, this.weekdayAnchor);
 
         return html`
             <ul>
@@ -130,6 +134,7 @@ export class TodoTree extends LitElement {
                                     .hoverDepth=${this.hoverDepth}
                                     .hideCompleteForParents=${this.hideCompleteForParents}
                                     .showCheckboxes=${this.showCheckboxes}
+                                    .weekdayAnchor=${this.weekdayAnchor}
                                     .confirmDelete=${this.confirmDelete}
                                     .dragDisabled=${this.dragDisabled}
                                     .collapsedIds=${this.collapsedIds}

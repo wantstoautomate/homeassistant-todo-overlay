@@ -87,6 +87,7 @@ async def test_refresh_reports_only_incomplete_items_with_full_detail():
         "item_id": "1", "title": "Milk", "description": "2%",
         "due_date": "2026-01-01", "due_datetime": None, "quantity": "2L",
         "tags": ["urgent"], "top_level": True,
+        "parent_id": None, "parent_title": None,
     }
 
 
@@ -110,6 +111,10 @@ async def test_refresh_marks_nested_children_as_not_top_level():
     items = {item["title"]: item for item in sensor._attr_extra_state_attributes["items"]}
     assert items["Parent"]["top_level"] is True
     assert items["Child"]["top_level"] is False
+    assert items["Parent"]["parent_id"] is None
+    assert items["Parent"]["parent_title"] is None
+    assert items["Child"]["parent_id"] == "1"
+    assert items["Child"]["parent_title"] == "Parent"
 
 
 @pytest.mark.asyncio

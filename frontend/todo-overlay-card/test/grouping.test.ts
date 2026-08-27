@@ -22,6 +22,8 @@ function makeItem(overrides: Partial<TodoItem> = {}): TodoItem {
         pin_type: null,
         linked: false,
         delete_protected: false,
+        weekday: null,
+        day_label: null,
         children: [],
         ...overrides,
     };
@@ -117,5 +119,43 @@ describe("groupSiblingsForDisplay", () => {
 
     it("OTHER_BUCKET_THRESHOLD is 2 - the exact number this whole test file is written against", () => {
         expect(OTHER_BUCKET_THRESHOLD).toBe(2);
+    });
+
+    describe("weekdayAnchor interaction with the Other bucket", () => {
+        it("defaults to Other trailing the day-pin block, same as the ordinary case", () => {
+            const wed = makeItem({id: "wed", pin_type: "day", weekday: 2});
+            const thu = makeItem({id: "thu", pin_type: "day", weekday: 3});
+            const milk = makeItem({id: "milk"});
+
+            const result = groupSiblingsForDisplay([wed, thu, milk], undefined);
+
+            expect(result.map(item => item.id)).toEqual(["wed", "thu", otherGroupId(undefined)]);
+        });
+
+        it("weekdayAnchor='bottom' puts Other BEFORE the day-pin block", () => {
+            const wed = makeItem({id: "wed", pin_type: "day", weekday: 2});
+            const thu = makeItem({id: "thu", pin_type: "day", weekday: 3});
+            const milk = makeItem({id: "milk"});
+
+            const result = groupSiblingsForDisplay([wed, thu, milk], undefined, "bottom");
+
+            expect(result.map(item => item.id)).toEqual([otherGroupId(undefined), "wed", "thu"]);
+            expect((result[0].children).map(item => item.id)).toEqual(["milk"]);
+        });
+
+        it("weekdayAnchor='bottom' does NOT affect an ordinary (non-day) structural level", () => {
+            // The override is scoped specifically to levels with "day"
+            // pins - an incidental category/person level keeps Other
+            // trailing regardless of this setting, so existing lists
+            // that have nothing to do with the weekday feature see no
+            // behavior change at all.
+            const recipes = makeItem({id: "recipes", children: [makeItem({id: "lasagna"})]});
+            const snacks = makeItem({id: "snacks", children: [makeItem({id: "chips"})]});
+            const milk = makeItem({id: "milk"});
+
+            const result = groupSiblingsForDisplay([recipes, milk, snacks], undefined, "bottom");
+
+            expect(result.map(item => item.id)).toEqual(["recipes", "snacks", otherGroupId(undefined)]);
+        });
     });
 });

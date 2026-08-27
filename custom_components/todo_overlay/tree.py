@@ -1,3 +1,4 @@
+from .manager_types import WeekdayAnchor
 from .models import ItemPosition, TodoItem
 
 
@@ -11,6 +12,9 @@ def build_tree(
     pin_types: dict[str, str] | None = None,
     linked_item_ids: set[str] | None = None,
     delete_protected_ids: set[str] | None = None,
+    weekdays: dict[str, int] | None = None,
+    today_weekday: int | None = None,
+    weekday_anchor: WeekdayAnchor = "top",
 ) -> list[TodoItem]:
     """Build a hierarchy from a flat list of TodoItems.
 
@@ -26,6 +30,19 @@ def build_tree(
     decided by completion status first. Off by default: siblings sort
     purely by stored order regardless of completion, so ticking an item
     never visually moves it.
+
+    A "day" pin (see manager_types.PIN_TYPES) with a weekday set is
+    NEVER sorted by its own stored order or group_completed - it always
+    sorts by how many days away its weekday is from today_weekday
+    (wrapping after 6), independently at every level, the same way
+    group_completed already does. today_weekday is a plain caller-
+    supplied int (0=Monday..6=Sunday), not computed in here, so this
+    stays a pure function of its arguments with no clock/timezone
+    dependency of its own - see manager_tree.py for where it actually
+    comes from. Every "day" pin present at a given level forms ONE
+    contiguous block among its siblings; weekday_anchor picks which end
+    of the sibling list that block sits at (irrelevant, and ignored, at
+    a level with no "day" pins at all).
     """
 
     item_lookup = {
@@ -43,6 +60,8 @@ def build_tree(
         item.pin_type = (pin_types or {}).get(item.id)
         item.linked = item.id in (linked_item_ids or set())
         item.delete_protected = item.id in (delete_protected_ids or set())
+        item.weekday = (weekdays or {}).get(item.id)
+        item.day_label = _day_label(item, today_weekday)
 
     for item in items:
         position = positions.get(item.id)
@@ -55,8 +74,16 @@ def build_tree(
         position = positions.get(item.id)
         return position.order if position else 0
 
-    def sort_key(item: TodoItem) -> tuple[bool, int]:
-        return (item.completed if group_completed else False, order_of(item))
+    def sort_key(item: TodoItem) -> tuple[int, int, bool, int]:
+        is_day = item.pin_type == "day" and item.weekday is not None and today_weekday is not None
+
+        if is_day:
+            days_until = (item.weekday - today_weekday) % 7
+            block = 0 if weekday_anchor == "top" else 1
+            return (block, days_until, False, 0)
+
+        block = 1 if weekday_anchor == "top" else 0
+        return (block, 0, item.completed if group_completed else False, order_of(item))
 
     def finalize(item: TodoItem) -> None:
         for child in item.children:
@@ -73,3 +100,18 @@ def build_tree(
     roots.sort(key=sort_key)
 
     return roots
+
+
+def _day_label(item: TodoItem, today_weekday: int | None) -> str | None:
+    if item.pin_type != "day" or item.weekday is None or today_weekday is None:
+        return None
+
+    days_until = (item.weekday - today_weekday) % 7
+
+    if days_until == 0:
+        return "Today"
+
+    if days_until == 1:
+        return "Tomorrow"
+
+    return None
