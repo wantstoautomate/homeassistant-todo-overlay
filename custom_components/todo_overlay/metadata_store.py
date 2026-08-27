@@ -83,6 +83,12 @@ WEEKDAY_KEY = "_weekday"
 # manager_items.py/manager_completion.py), not here - this store is
 # purely the flag's storage, same as every other overlay-only field.
 DELETE_PROTECTED_KEY = "_delete_protected"
+# The last calendar date (ISO "YYYY-MM-DD") day-rollover was checked
+# for this entity - see manager_rollover.py. Per-ENTITY, not per-item
+# like everything else in this file (there's exactly one clock per
+# list, not one per item), so it's read/written directly rather than
+# through the generic per-item helpers below.
+LAST_ROLLOVER_DATE_KEY = "_last_rollover_date"
 
 
 class _TodoOverlayStore(Store):
@@ -132,6 +138,65 @@ class MetadataStore:
         assert self._cache is not None
 
         self._store.async_delay_save(lambda: self._cache, SAVE_DELAY)
+
+    # --- generic per-item metadata helpers --------------------------------
+    #
+    # Every overlay-only field below this point (quantities, tags,
+    # pin_types, weekdays, trigger_on_due, delete_protected, due_fired)
+    # is stored the exact same way - {KEY: {entity_id: {item_id: value}}}
+    # - and each used to carry its own hand-written get/set/remove
+    # triad, identical apart from which KEY and which "is this actually
+    # empty" check applied. These three replace all of them; the public
+    # get_X/set_X/remove_X_for_items methods below are thin, purely so
+    # every existing caller (and its own docstring, where the field
+    # has one worth keeping) keeps its own name and type.
+
+    async def _get_item_map(self, key: str, entity_id: str) -> dict[str, Any]:
+        await self._load()
+
+        assert self._cache is not None
+
+        return dict(self._cache.get(key, {}).get(entity_id, {}))
+
+    async def _set_item_value(self, key: str, entity_id: str, item_id: str, value: Any) -> None:
+        """Set item_id's own value, or clear it if value is None - never
+        a falsy-but-real value like 0, which set_weekday's own Monday
+        needs to survive. Callers whose OWN "clear" sentinel is falsy
+        instead of None (an empty quantity string, an empty tag list) do
+        that normalization themselves before calling this."""
+
+        await self._load()
+
+        assert self._cache is not None
+
+        bucket = self._cache.setdefault(key, {}).setdefault(entity_id, {})
+
+        if value is not None:
+            bucket[item_id] = value
+        else:
+            bucket.pop(item_id, None)
+
+        self._save()
+
+    async def _remove_item_keys(self, key: str, entity_id: str, item_ids: list[str]) -> None:
+        """Drop item_ids from one field's bucket - used both for the
+        dict-shaped fields above and the set-shaped ones below (a set is
+        stored as a dict of {item_id: True}, so "pop these keys" is the
+        exact same operation either way)."""
+
+        await self._load()
+
+        assert self._cache is not None
+
+        bucket = self._cache.get(key, {}).get(entity_id)
+
+        if not bucket:
+            return
+
+        for item_id in item_ids:
+            bucket.pop(item_id, None)
+
+        self._save()
 
     async def get_relationships(
         self,
@@ -234,6 +299,7 @@ class MetadataStore:
         self._cache.get(ITEM_LINKS_KEY, {}).pop(entity_id, None)
         self._cache.get(DELETE_PROTECTED_KEY, {}).pop(entity_id, None)
         self._cache.get(WEEKDAY_KEY, {}).pop(entity_id, None)
+        self._cache.get(LAST_ROLLOVER_DATE_KEY, {}).pop(entity_id, None)
 
         self._save()
 
@@ -258,6 +324,7 @@ class MetadataStore:
         for key in (
             QUANTITIES_KEY, TAGS_KEY, PIN_TYPE_KEY, TRIGGER_ON_DUE_KEY, DUE_FIRED_KEY,
             LINKS_KEY, LINK_ITEM_STATE_KEY, ITEM_LINKS_KEY, DELETE_PROTECTED_KEY, WEEKDAY_KEY,
+            LAST_ROLLOVER_DATE_KEY,
         ):
             bucket = self._cache.get(key, {})
 
@@ -318,143 +385,42 @@ class MetadataStore:
 
         self._save()
 
-    async def get_quantities(
-        self,
-        entity_id: str,
-    ) -> dict[str, str]:
-        await self._load()
+    async def get_quantities(self, entity_id: str) -> dict[str, str]:
+        return await self._get_item_map(QUANTITIES_KEY, entity_id)
 
-        assert self._cache is not None
-
-        return dict(self._cache.get(QUANTITIES_KEY, {}).get(entity_id, {}))
-
-    async def set_quantity(
-        self,
-        entity_id: str,
-        item_id: str,
-        quantity: str | None,
-    ) -> None:
+    async def set_quantity(self, entity_id: str, item_id: str, quantity: str | None) -> None:
         """Set (or clear, if quantity is falsy) an item's quantity."""
 
-        await self._load()
+        await self._set_item_value(QUANTITIES_KEY, entity_id, item_id, quantity or None)
 
-        assert self._cache is not None
+    async def get_pin_types(self, entity_id: str) -> dict[str, str]:
+        return await self._get_item_map(PIN_TYPE_KEY, entity_id)
 
-        entity_quantities = self._cache.setdefault(QUANTITIES_KEY, {}).setdefault(entity_id, {})
-
-        if quantity:
-            entity_quantities[item_id] = quantity
-        else:
-            entity_quantities.pop(item_id, None)
-
-        self._save()
-
-    async def get_pin_types(
-        self,
-        entity_id: str,
-    ) -> dict[str, str]:
-        await self._load()
-
-        assert self._cache is not None
-
-        return dict(self._cache.get(PIN_TYPE_KEY, {}).get(entity_id, {}))
-
-    async def set_pin_type(
-        self,
-        entity_id: str,
-        item_id: str,
-        pin_type: str | None,
-    ) -> None:
+    async def set_pin_type(self, entity_id: str, item_id: str, pin_type: str | None) -> None:
         """Set (or clear, if pin_type is None) an item's pin type."""
 
-        await self._load()
+        await self._set_item_value(PIN_TYPE_KEY, entity_id, item_id, pin_type or None)
 
-        assert self._cache is not None
-
-        entity_pin_types = self._cache.setdefault(PIN_TYPE_KEY, {}).setdefault(entity_id, {})
-
-        if pin_type:
-            entity_pin_types[item_id] = pin_type
-        else:
-            entity_pin_types.pop(item_id, None)
-
-        self._save()
-
-    async def remove_pin_types(
-        self,
-        entity_id: str,
-        item_ids: list[str],
-    ) -> None:
+    async def remove_pin_types(self, entity_id: str, item_ids: list[str]) -> None:
         """Drop stored pin types for items that no longer exist, e.g.
         after a clear-completed removal."""
 
-        await self._load()
+        await self._remove_item_keys(PIN_TYPE_KEY, entity_id, item_ids)
 
-        assert self._cache is not None
+    async def get_weekdays(self, entity_id: str) -> dict[str, int]:
+        return await self._get_item_map(WEEKDAY_KEY, entity_id)
 
-        entity_pin_types = self._cache.get(PIN_TYPE_KEY, {}).get(entity_id)
-
-        if not entity_pin_types:
-            return
-
-        for item_id in item_ids:
-            entity_pin_types.pop(item_id, None)
-
-        self._save()
-
-    async def get_weekdays(
-        self,
-        entity_id: str,
-    ) -> dict[str, int]:
-        await self._load()
-
-        assert self._cache is not None
-
-        return dict(self._cache.get(WEEKDAY_KEY, {}).get(entity_id, {}))
-
-    async def set_weekday(
-        self,
-        entity_id: str,
-        item_id: str,
-        weekday: int | None,
-    ) -> None:
+    async def set_weekday(self, entity_id: str, item_id: str, weekday: int | None) -> None:
         """Set (or clear, if weekday is None) which weekday a "day" pin
         represents."""
 
-        await self._load()
+        await self._set_item_value(WEEKDAY_KEY, entity_id, item_id, weekday)
 
-        assert self._cache is not None
-
-        entity_weekdays = self._cache.setdefault(WEEKDAY_KEY, {}).setdefault(entity_id, {})
-
-        if weekday is not None:
-            entity_weekdays[item_id] = weekday
-        else:
-            entity_weekdays.pop(item_id, None)
-
-        self._save()
-
-    async def remove_weekdays(
-        self,
-        entity_id: str,
-        item_ids: list[str],
-    ) -> None:
+    async def remove_weekdays(self, entity_id: str, item_ids: list[str]) -> None:
         """Drop stored weekdays for items that no longer exist, e.g.
         after a clear-completed removal."""
 
-        await self._load()
-
-        assert self._cache is not None
-
-        entity_weekdays = self._cache.get(WEEKDAY_KEY, {}).get(entity_id)
-
-        if not entity_weekdays:
-            return
-
-        for item_id in item_ids:
-            entity_weekdays.pop(item_id, None)
-
-        self._save()
+        await self._remove_item_keys(WEEKDAY_KEY, entity_id, item_ids)
 
     async def get_item_link(
         self,
@@ -530,61 +496,19 @@ class MetadataStore:
 
         self._save()
 
-    async def remove_quantities(
-        self,
-        entity_id: str,
-        item_ids: list[str],
-    ) -> None:
+    async def remove_quantities(self, entity_id: str, item_ids: list[str]) -> None:
         """Drop stored quantities for items that no longer exist, e.g.
         after a clear-completed removal."""
 
-        await self._load()
+        await self._remove_item_keys(QUANTITIES_KEY, entity_id, item_ids)
 
-        assert self._cache is not None
+    async def get_tags(self, entity_id: str) -> dict[str, list[str]]:
+        return {item_id: list(tags) for item_id, tags in (await self._get_item_map(TAGS_KEY, entity_id)).items()}
 
-        entity_quantities = self._cache.get(QUANTITIES_KEY, {}).get(entity_id)
-
-        if not entity_quantities:
-            return
-
-        for item_id in item_ids:
-            entity_quantities.pop(item_id, None)
-
-        self._save()
-
-    async def get_tags(
-        self,
-        entity_id: str,
-    ) -> dict[str, list[str]]:
-        await self._load()
-
-        assert self._cache is not None
-
-        return {
-            item_id: list(tags)
-            for item_id, tags in self._cache.get(TAGS_KEY, {}).get(entity_id, {}).items()
-        }
-
-    async def set_tags(
-        self,
-        entity_id: str,
-        item_id: str,
-        tags: list[str],
-    ) -> None:
+    async def set_tags(self, entity_id: str, item_id: str, tags: list[str]) -> None:
         """Replace an item's full tag list."""
 
-        await self._load()
-
-        assert self._cache is not None
-
-        entity_tags = self._cache.setdefault(TAGS_KEY, {}).setdefault(entity_id, {})
-
-        if tags:
-            entity_tags[item_id] = list(tags)
-        else:
-            entity_tags.pop(item_id, None)
-
-        self._save()
+        await self._set_item_value(TAGS_KEY, entity_id, item_id, list(tags) if tags else None)
 
     async def add_tag(
         self,
@@ -627,186 +551,77 @@ class MetadataStore:
 
         self._save()
 
-    async def remove_tags_for_items(
-        self,
-        entity_id: str,
-        item_ids: list[str],
-    ) -> None:
+    async def remove_tags_for_items(self, entity_id: str, item_ids: list[str]) -> None:
         """Drop stored tags for items that no longer exist, e.g. after
         a clear-completed removal."""
 
-        await self._load()
+        await self._remove_item_keys(TAGS_KEY, entity_id, item_ids)
 
-        assert self._cache is not None
-
-        entity_tags = self._cache.get(TAGS_KEY, {}).get(entity_id)
-
-        if not entity_tags:
-            return
-
-        for item_id in item_ids:
-            entity_tags.pop(item_id, None)
-
-        self._save()
-
-    async def get_trigger_on_due(
-        self,
-        entity_id: str,
-    ) -> set[str]:
+    async def get_trigger_on_due(self, entity_id: str) -> set[str]:
         """Ids of items with the "trigger on due" toggle enabled - stored
         as a set (only True entries ever get written) rather than a
         dict-of-booleans, since a disabled item just isn't in it."""
 
-        await self._load()
+        return set(await self._get_item_map(TRIGGER_ON_DUE_KEY, entity_id))
 
-        assert self._cache is not None
+    async def set_trigger_on_due(self, entity_id: str, item_id: str, enabled: bool) -> None:
+        await self._set_item_value(TRIGGER_ON_DUE_KEY, entity_id, item_id, True if enabled else None)
 
-        return set(self._cache.get(TRIGGER_ON_DUE_KEY, {}).get(entity_id, {}))
-
-    async def set_trigger_on_due(
-        self,
-        entity_id: str,
-        item_id: str,
-        enabled: bool,
-    ) -> None:
-        await self._load()
-
-        assert self._cache is not None
-
-        entity_flags = self._cache.setdefault(TRIGGER_ON_DUE_KEY, {}).setdefault(entity_id, {})
-
-        if enabled:
-            entity_flags[item_id] = True
-        else:
-            entity_flags.pop(item_id, None)
-
-        self._save()
-
-    async def remove_trigger_on_due_for_items(
-        self,
-        entity_id: str,
-        item_ids: list[str],
-    ) -> None:
+    async def remove_trigger_on_due_for_items(self, entity_id: str, item_ids: list[str]) -> None:
         """Drop the "trigger on due" flag for items that no longer exist,
         e.g. after a clear-completed removal."""
 
-        await self._load()
+        await self._remove_item_keys(TRIGGER_ON_DUE_KEY, entity_id, item_ids)
 
-        assert self._cache is not None
-
-        entity_flags = self._cache.get(TRIGGER_ON_DUE_KEY, {}).get(entity_id)
-
-        if not entity_flags:
-            return
-
-        for item_id in item_ids:
-            entity_flags.pop(item_id, None)
-
-        self._save()
-
-    async def get_delete_protected(
-        self,
-        entity_id: str,
-    ) -> set[str]:
+    async def get_delete_protected(self, entity_id: str) -> set[str]:
         """Ids of items protected from deletion - stored as a set, same
         shape/reasoning as get_trigger_on_due (only True entries ever
         get written)."""
 
-        await self._load()
+        return set(await self._get_item_map(DELETE_PROTECTED_KEY, entity_id))
 
-        assert self._cache is not None
+    async def set_delete_protected(self, entity_id: str, item_id: str, enabled: bool) -> None:
+        await self._set_item_value(DELETE_PROTECTED_KEY, entity_id, item_id, True if enabled else None)
 
-        return set(self._cache.get(DELETE_PROTECTED_KEY, {}).get(entity_id, {}))
-
-    async def set_delete_protected(
-        self,
-        entity_id: str,
-        item_id: str,
-        enabled: bool,
-    ) -> None:
-        await self._load()
-
-        assert self._cache is not None
-
-        entity_flags = self._cache.setdefault(DELETE_PROTECTED_KEY, {}).setdefault(entity_id, {})
-
-        if enabled:
-            entity_flags[item_id] = True
-        else:
-            entity_flags.pop(item_id, None)
-
-        self._save()
-
-    async def remove_delete_protected_for_items(
-        self,
-        entity_id: str,
-        item_ids: list[str],
-    ) -> None:
+    async def remove_delete_protected_for_items(self, entity_id: str, item_ids: list[str]) -> None:
         """Drop the delete-protected flag for items that no longer
         exist, e.g. after a clear-completed removal."""
 
-        await self._load()
+        await self._remove_item_keys(DELETE_PROTECTED_KEY, entity_id, item_ids)
 
-        assert self._cache is not None
-
-        entity_flags = self._cache.get(DELETE_PROTECTED_KEY, {}).get(entity_id)
-
-        if not entity_flags:
-            return
-
-        for item_id in item_ids:
-            entity_flags.pop(item_id, None)
-
-        self._save()
-
-    async def get_due_fired(
-        self,
-        entity_id: str,
-    ) -> dict[str, str]:
+    async def get_due_fired(self, entity_id: str) -> dict[str, str]:
         """Map of item_id -> the due_datetime value a "due" trigger has
         already fired for - see due_scheduler.py for how this prevents a
         restart, or any reconciliation pass, from re-firing."""
 
-        await self._load()
+        return await self._get_item_map(DUE_FIRED_KEY, entity_id)
 
-        assert self._cache is not None
+    async def set_due_fired(self, entity_id: str, item_id: str, due_value: str) -> None:
+        await self._set_item_value(DUE_FIRED_KEY, entity_id, item_id, due_value)
 
-        return dict(self._cache.get(DUE_FIRED_KEY, {}).get(entity_id, {}))
-
-    async def set_due_fired(
-        self,
-        entity_id: str,
-        item_id: str,
-        due_value: str,
-    ) -> None:
-        await self._load()
-
-        assert self._cache is not None
-
-        entity_fired = self._cache.setdefault(DUE_FIRED_KEY, {}).setdefault(entity_id, {})
-        entity_fired[item_id] = due_value
-
-        self._save()
-
-    async def remove_due_fired_for_items(
-        self,
-        entity_id: str,
-        item_ids: list[str],
-    ) -> None:
+    async def remove_due_fired_for_items(self, entity_id: str, item_ids: list[str]) -> None:
         """Drop fired-tracking for items that no longer exist, e.g. after
         a clear-completed removal."""
 
+        await self._remove_item_keys(DUE_FIRED_KEY, entity_id, item_ids)
+
+    async def get_last_rollover_date(self, entity_id: str) -> str | None:
+        """The last calendar date (ISO "YYYY-MM-DD") day-rollover was
+        checked for this entity, or None if it never has been - see
+        manager_rollover.py."""
+
         await self._load()
 
         assert self._cache is not None
 
-        entity_fired = self._cache.get(DUE_FIRED_KEY, {}).get(entity_id)
+        return self._cache.get(LAST_ROLLOVER_DATE_KEY, {}).get(entity_id)
 
-        if not entity_fired:
-            return
+    async def set_last_rollover_date(self, entity_id: str, date_str: str) -> None:
+        await self._load()
 
-        for item_id in item_ids:
-            entity_fired.pop(item_id, None)
+        assert self._cache is not None
+
+        self._cache.setdefault(LAST_ROLLOVER_DATE_KEY, {})[entity_id] = date_str
 
         self._save()
 

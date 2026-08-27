@@ -1,4 +1,5 @@
 import asyncio
+from datetime import date
 
 import pytest
 
@@ -1446,7 +1447,7 @@ async def test_manager_get_list_uses_the_injected_today_weekday_fn_end_to_end():
     await metadata_store.set_weekday("todo.household", "wed", 2)
 
     manager = TodoManager(
-        adapter=adapter, metadata_store=metadata_store, today_weekday_fn=lambda: 2,
+        adapter=adapter, metadata_store=metadata_store, today_date_fn=lambda: date(2026, 1, 7),
     )
 
     todo_list = await manager.get_list("todo.household")
@@ -1454,6 +1455,198 @@ async def test_manager_get_list_uses_the_injected_today_weekday_fn_end_to_end():
     assert [item.id for item in todo_list.items] == ["wed", "thu"]
     assert todo_list.items[0].day_label == "Today"
     assert todo_list.items[1].day_label == "Tomorrow"
+
+
+@pytest.mark.asyncio
+async def test_manager_day_rollover_is_a_no_op_on_the_very_first_read():
+    # Baseline-setting behaviour: with no last_rollover_date recorded
+    # yet, the first get_list() just starts tracking from today rather
+    # than guessing at history from before this feature existed.
+    adapter = FakeAdapter(items=[
+        TodoItem(id="mon", title="Monday", completed=False),
+        TodoItem(id="child", title="Laundry", completed=True),
+    ])
+    metadata_store = FakeMetadataStore({
+        "mon": ItemPosition(parent_id=None, order=0),
+        "child": ItemPosition(parent_id="mon", order=0),
+    })
+    await metadata_store.set_pin_type("todo.household", "mon", "day")
+    await metadata_store.set_weekday("todo.household", "mon", 0)
+
+    manager = TodoManager(
+        adapter=adapter, metadata_store=metadata_store, today_date_fn=lambda: date(2026, 1, 5),
+    )
+
+    todo_list = await manager.get_list("todo.household")
+
+    assert [item.id for item in todo_list.items[0].children] == ["child"]
+    assert adapter.remove_item_calls == []
+    assert metadata_store._last_rollover_date == "2026-01-05"
+
+
+@pytest.mark.asyncio
+async def test_manager_day_rollover_deletes_a_completed_child_of_a_pin_that_rolled_over():
+    adapter = FakeAdapter(items=[
+        TodoItem(id="mon", title="Monday", completed=False),
+        TodoItem(id="child", title="Laundry", completed=True),
+    ])
+    metadata_store = FakeMetadataStore({
+        "mon": ItemPosition(parent_id=None, order=0),
+        "child": ItemPosition(parent_id="mon", order=0),
+    })
+    await metadata_store.set_pin_type("todo.household", "mon", "day")
+    await metadata_store.set_weekday("todo.household", "mon", 0)
+    metadata_store._last_rollover_date = "2026-01-05"
+
+    manager = TodoManager(
+        adapter=adapter, metadata_store=metadata_store, today_date_fn=lambda: date(2026, 1, 6),
+    )
+
+    todo_list = await manager.get_list("todo.household")
+
+    assert adapter.remove_item_calls == [("todo.household", "child")]
+    assert [item.id for item in todo_list.items[0].children] == []
+    assert metadata_store._last_rollover_date == "2026-01-06"
+
+
+@pytest.mark.asyncio
+async def test_manager_day_rollover_skips_deleting_a_delete_protected_completed_child():
+    adapter = FakeAdapter(items=[
+        TodoItem(id="mon", title="Monday", completed=False),
+        TodoItem(id="child", title="Laundry", completed=True),
+    ])
+    metadata_store = FakeMetadataStore({
+        "mon": ItemPosition(parent_id=None, order=0),
+        "child": ItemPosition(parent_id="mon", order=0),
+    })
+    await metadata_store.set_pin_type("todo.household", "mon", "day")
+    await metadata_store.set_weekday("todo.household", "mon", 0)
+    await metadata_store.set_delete_protected("todo.household", "child", True)
+    metadata_store._last_rollover_date = "2026-01-05"
+
+    manager = TodoManager(
+        adapter=adapter, metadata_store=metadata_store, today_date_fn=lambda: date(2026, 1, 6),
+    )
+
+    todo_list = await manager.get_list("todo.household")
+
+    assert adapter.remove_item_calls == []
+    assert [item.id for item in todo_list.items[0].children] == ["child"]
+
+
+@pytest.mark.asyncio
+async def test_manager_day_rollover_moves_an_incomplete_child_to_a_new_overdue_parent():
+    adapter = FakeAdapter(items=[
+        TodoItem(id="mon", title="Monday", completed=False),
+        TodoItem(id="child", title="Laundry", completed=False),
+    ])
+    metadata_store = FakeMetadataStore({
+        "mon": ItemPosition(parent_id=None, order=0),
+        "child": ItemPosition(parent_id="mon", order=0),
+    })
+    await metadata_store.set_pin_type("todo.household", "mon", "day")
+    await metadata_store.set_weekday("todo.household", "mon", 0)
+    metadata_store._last_rollover_date = "2026-01-05"
+
+    manager = TodoManager(
+        adapter=adapter, metadata_store=metadata_store, today_date_fn=lambda: date(2026, 1, 6),
+    )
+
+    todo_list = await manager.get_list("todo.household")
+
+    overdue = next(item for item in todo_list.items if item.title == "Overdue")
+    assert [child.id for child in overdue.children] == ["child"]
+    assert [child.due_date for child in overdue.children] == ["2026-01-05"]
+    assert adapter.remove_item_calls == []
+
+    # The day pin's own child list is now empty - the item moved, it
+    # wasn't duplicated.
+    mon = next(item for item in todo_list.items if item.id == "mon")
+    assert mon.children == []
+
+
+@pytest.mark.asyncio
+async def test_manager_day_rollover_reuses_the_same_overdue_parent_across_pins_and_passes():
+    adapter = FakeAdapter(items=[
+        TodoItem(id="mon", title="Monday", completed=False),
+        TodoItem(id="mon_child", title="Laundry", completed=False),
+        TodoItem(id="tue", title="Tuesday", completed=False),
+        TodoItem(id="tue_child", title="Bins", completed=False),
+    ])
+    metadata_store = FakeMetadataStore({
+        "mon": ItemPosition(parent_id=None, order=0),
+        "mon_child": ItemPosition(parent_id="mon", order=0),
+        "tue": ItemPosition(parent_id=None, order=1),
+        "tue_child": ItemPosition(parent_id="tue", order=0),
+    })
+    await metadata_store.set_pin_type("todo.household", "mon", "day")
+    await metadata_store.set_weekday("todo.household", "mon", 0)
+    await metadata_store.set_pin_type("todo.household", "tue", "day")
+    await metadata_store.set_weekday("todo.household", "tue", 1)
+    # Both weekdays 0 and 1 roll over in a single 2-day jump, so both
+    # pins' children land on the same pass's Overdue parent.
+    metadata_store._last_rollover_date = "2026-01-05"
+
+    manager = TodoManager(
+        adapter=adapter, metadata_store=metadata_store, today_date_fn=lambda: date(2026, 1, 7),
+    )
+
+    todo_list = await manager.get_list("todo.household")
+
+    overdue_items = [item for item in todo_list.items if item.title == "Overdue"]
+    assert len(overdue_items) == 1
+    assert {child.id for child in overdue_items[0].children} == {"mon_child", "tue_child"}
+
+
+@pytest.mark.asyncio
+async def test_manager_day_rollover_caps_at_seven_days_and_does_not_double_process():
+    # A weekday only ever needs rolling over once, no matter how many
+    # full weeks have actually elapsed since the list was last opened.
+    adapter = FakeAdapter(items=[
+        TodoItem(id="mon", title="Monday", completed=False),
+        TodoItem(id="child", title="Laundry", completed=False),
+    ])
+    metadata_store = FakeMetadataStore({
+        "mon": ItemPosition(parent_id=None, order=0),
+        "child": ItemPosition(parent_id="mon", order=0),
+    })
+    await metadata_store.set_pin_type("todo.household", "mon", "day")
+    await metadata_store.set_weekday("todo.household", "mon", 0)
+    metadata_store._last_rollover_date = "2026-01-05"
+
+    # 3 full weeks later, still a Monday.
+    manager = TodoManager(
+        adapter=adapter, metadata_store=metadata_store, today_date_fn=lambda: date(2026, 1, 26),
+    )
+
+    todo_list = await manager.get_list("todo.household")
+
+    overdue = next(item for item in todo_list.items if item.title == "Overdue")
+    assert [child.id for child in overdue.children] == ["child"]
+
+
+@pytest.mark.asyncio
+async def test_manager_day_rollover_is_a_no_op_the_same_day():
+    adapter = FakeAdapter(items=[
+        TodoItem(id="mon", title="Monday", completed=False),
+        TodoItem(id="child", title="Laundry", completed=True),
+    ])
+    metadata_store = FakeMetadataStore({
+        "mon": ItemPosition(parent_id=None, order=0),
+        "child": ItemPosition(parent_id="mon", order=0),
+    })
+    await metadata_store.set_pin_type("todo.household", "mon", "day")
+    await metadata_store.set_weekday("todo.household", "mon", 0)
+    metadata_store._last_rollover_date = "2026-01-06"
+
+    manager = TodoManager(
+        adapter=adapter, metadata_store=metadata_store, today_date_fn=lambda: date(2026, 1, 6),
+    )
+
+    todo_list = await manager.get_list("todo.household")
+
+    assert adapter.remove_item_calls == []
+    assert [item.id for item in todo_list.items[0].children] == ["child"]
 
 
 @pytest.mark.asyncio

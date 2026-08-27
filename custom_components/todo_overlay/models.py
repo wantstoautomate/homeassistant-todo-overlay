@@ -89,6 +89,29 @@ class TodoItem:
 
 
 @dataclass(slots=True)
+class ListMetadata:
+    """Every per-item overlay field MetadataStore tracks for one entity,
+    bundled together purely so manager_tree.py's own reconciliation/merge
+    passes (and now the day-rollover pass - see manager_rollover.py)
+    thread ONE value through instead of one positional parameter per
+    field. Grew out of exactly that problem: each new overlay field
+    (quantity, tags, trigger_on_due, pin_type, item_links,
+    delete_protected, weekday) had been adding another position to an
+    already-long parameter list and return tuple, in the same order,
+    every time - this replaces that with named, self-documenting
+    attributes instead. Purely a data bag: nothing here validates or
+    interprets these fields itself, same as before this existed."""
+
+    quantities: dict[str, str]
+    tags: dict[str, list[str]]
+    trigger_on_due: set[str]
+    pin_types: dict[str, str]
+    item_links: dict[str, dict[str, str]]
+    delete_protected: set[str]
+    weekdays: dict[str, int]
+
+
+@dataclass(slots=True)
 class TodoList:
     """A Todo list exposed by the Todo Overlay API."""
 

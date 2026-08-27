@@ -73,7 +73,14 @@ class FakeAdapter:
 
             self.get_items_call_order.append("end")
 
-        return self._items
+        # A fresh list every call, matching ha_adapter.py's own real
+        # get_items() (which builds brand new TodoItem objects from
+        # entity.todo_items on every call) - callers are entitled to
+        # treat what they got back as an owned working copy they can
+        # freely filter/extend (see manager_rollover.py's own
+        # _ensure_overdue_parent) without that silently aliasing this
+        # fake's own internal state via a later add_item()/remove_item().
+        return list(self._items)
 
     async def set_completed(
         self,
@@ -154,6 +161,13 @@ class FakeMetadataStore:
         self._item_links: dict[str, dict] = {}
         self._delete_protected: set[str] = set()
         self._weekdays: dict[str, int] = {}
+        self._last_rollover_date: str | None = None
+
+    async def get_last_rollover_date(self, entity_id: str) -> str | None:
+        return self._last_rollover_date
+
+    async def set_last_rollover_date(self, entity_id: str, date_str: str) -> None:
+        self._last_rollover_date = date_str
 
     async def get_relationships(self, entity_id: str) -> dict[str, ItemPosition]:
         return dict(self._positions)
@@ -482,7 +496,9 @@ class FakeMultiEntityAdapter:
         self.set_completed_calls: list[tuple[str, str, bool]] = []
 
     async def get_items(self, entity_id: str) -> list[TodoItem]:
-        return self._items.get(entity_id, [])
+        # See FakeAdapter's own get_items for why this must be a copy,
+        # not the internal list itself.
+        return list(self._items.get(entity_id, []))
 
     async def set_completed(self, entity_id: str, item_id: str, completed: bool) -> None:
         self.set_completed_calls.append((entity_id, item_id, completed))
@@ -554,7 +570,14 @@ class FakeMultiEntityMetadataStore:
         self._links: dict[str, dict] = {}
         self._delete_protected: dict[str, set[str]] = {}
         self._weekdays: dict[str, dict[str, int]] = {}
+        self._last_rollover_date: dict[str, str] = {}
         self.set_positions_calls: list[tuple[str, dict[str, ItemPosition]]] = []
+
+    async def get_last_rollover_date(self, entity_id: str) -> str | None:
+        return self._last_rollover_date.get(entity_id)
+
+    async def set_last_rollover_date(self, entity_id: str, date_str: str) -> None:
+        self._last_rollover_date[entity_id] = date_str
 
     async def get_relationships(self, entity_id: str) -> dict[str, ItemPosition]:
         return dict(self._positions.get(entity_id, {}))

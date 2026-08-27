@@ -241,48 +241,7 @@ class CompletionMixin:
         Returns the ids of everything removed.
         """
 
-        async with self._lock_for(entity_id):
-            items = await self._adapter.get_items(entity_id)
-            positions = await self._metadata_store.get_relationships(entity_id)
-            delete_protected = await self._metadata_store.get_delete_protected(entity_id)
-
-            derived = self._derived_completed(items, positions)
-
-            root_ids = [
-                item.id
-                for item in items
-                if self._parent_id_of(item.id, positions) is None
-            ]
-
-            removed_ids: list[str] = []
-
-            def sweep(item_id: str) -> None:
-                if item_id not in delete_protected and derived[item_id]:
-                    removed_ids.append(item_id)
-                    removed_ids.extend(self._descendants(item_id, positions, items))
-                    return
-
-                for child_id in self._siblings(items, positions, item_id):
-                    sweep(child_id)
-
-            for root_id in root_ids:
-                sweep(root_id)
-
-            item_by_id = {item.id: item for item in items}
-
-            for removed_id in removed_ids:
-                await self._adapter.remove_item(entity_id, removed_id)
-                removed_item = item_by_id.get(removed_id)
-                self._fire_event(
-                    entity_id, removed_id, removed_item.title if removed_item else "", "removed",
-                )
-
-            if removed_ids:
-                await self._metadata_store.remove_positions(entity_id, removed_ids)
-                await self._metadata_store.remove_quantities(entity_id, removed_ids)
-                await self._metadata_store.remove_tags_for_items(entity_id, removed_ids)
-
-        return removed_ids
+        return await self._sweep_and_remove(entity_id, require_completed=True)
 
     async def clear_all(
         self,
@@ -298,10 +257,33 @@ class CompletionMixin:
         Returns the ids of everything removed.
         """
 
+        return await self._sweep_and_remove(entity_id, require_completed=False)
+
+    async def _sweep_and_remove(
+        self,
+        entity_id: str,
+        require_completed: bool,
+    ) -> list[str]:
+        """Shared walk behind clear_completed (require_completed=True)
+        and clear_all (require_completed=False) - the two only ever
+        differed in whether a subtree also had to be derived-complete
+        to qualify, so that's the one condition parameterised here.
+
+        Walks every root downward: a qualifying, non-delete_protected
+        item is removed whole along with its descendants; anything else
+        (blocked by delete_protected, or - for clear_completed - not
+        actually complete) is recursed INTO rather than through, so a
+        protected or incomplete item's own qualifying descendants are
+        still considered individually. See delete_item's own docstring
+        for the general delete_protected rule this follows.
+        """
+
         async with self._lock_for(entity_id):
             items = await self._adapter.get_items(entity_id)
             positions = await self._metadata_store.get_relationships(entity_id)
             delete_protected = await self._metadata_store.get_delete_protected(entity_id)
+
+            derived = self._derived_completed(items, positions) if require_completed else None
 
             root_ids = [
                 item.id
@@ -312,7 +294,9 @@ class CompletionMixin:
             removed_ids: list[str] = []
 
             def sweep(item_id: str) -> None:
-                if item_id not in delete_protected:
+                qualifies = derived[item_id] if require_completed else True
+
+                if item_id not in delete_protected and qualifies:
                     removed_ids.append(item_id)
                     removed_ids.extend(self._descendants(item_id, positions, items))
                     return
