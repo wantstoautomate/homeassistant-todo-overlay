@@ -116,6 +116,9 @@ export interface CreateItemFields {
     referenceId?: string;
     placement?: Placement;
     pinType?: PinType;
+    // Only meaningful (and required by the backend) alongside pinType
+    // === "day" - see setPinType's own weekday parameter.
+    weekday?: number;
 }
 
 export async function createItem(
@@ -137,6 +140,7 @@ export async function createItem(
         reference_id: fields.referenceId,
         placement: fields.placement,
         pin_type: fields.pinType,
+        weekday: fields.weekday,
     });
 
     return result.id;

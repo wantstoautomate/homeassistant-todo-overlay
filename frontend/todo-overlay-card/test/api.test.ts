@@ -134,6 +134,33 @@ describe("api", () => {
         expect(result).toBe("new-1");
     });
 
+    it("createItem sends pin_type and weekday for a day pin", async () => {
+        const hass = makeFakeHass();
+        hass.connection.responses["todo_overlay/create_item"] = {id: "new-1"};
+
+        await createItem(hass, "todo.a", {
+            title: "Wednesday",
+            pinType: "day",
+            weekday: 2,
+        });
+
+        expect(hass.connection.sent).toEqual([{
+            type: "todo_overlay/create_item",
+            entity_id: "todo.a",
+            title: "Wednesday",
+            description: undefined,
+            due_date: undefined,
+            due_datetime: undefined,
+            quantity: undefined,
+            tags: undefined,
+            trigger_on_due: undefined,
+            reference_id: undefined,
+            placement: undefined,
+            pin_type: "day",
+            weekday: 2,
+        }]);
+    });
+
     it("setQuantity sends item_id and quantity", async () => {
         const hass = makeFakeHass();
 

@@ -3,6 +3,12 @@
 All notable changes to this project are documented here. Versions follow the
 integration's `manifest.json`/card's `package.json` (kept in lockstep).
 
+## 1.6.1
+
+**Fixed: creating a new day-of-week pin from the "+" dialog failed outright with a websocket error** ("value must be one of category, person"). 1.6.0's day-of-week pins only ever got wired through the item dialog's *edit* path (`set_pin_type`) - creating a brand new item as a day pin went through a completely separate `create_item` call whose own schema was never updated to allow `"day"` at all, and never sent the picked weekday even where it was allowed. Both are now fixed; editing an existing item into a day pin was never affected.
+
+- **Fixed: the visual card editor had no control for the new `weekday_anchor` option at all** - it was only reachable by hand-editing the card's YAML. Added alongside the other Advanced-section options.
+
 ## 1.6.0
 
 **New: day-of-week pins - a section header that always represents a specific

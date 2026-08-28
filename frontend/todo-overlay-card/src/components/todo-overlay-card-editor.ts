@@ -2,7 +2,7 @@ import {LitElement, html, css} from "lit";
 import {customElement, property, state} from "lit/decorators.js";
 
 import type {HassLike} from "../hass";
-import type {DragGhostStyle} from "../models";
+import type {DragGhostStyle, WeekdayAnchor} from "../models";
 import type {SortBy, SortOrder} from "../sort";
 import type {TodoOverlayCardConfig} from "../todo-overlay";
 
@@ -169,6 +169,12 @@ export class TodoOverlayCardEditor extends LitElement {
         this.emitConfigChanged({...this._config, drag_ghost_style: value === "label" ? undefined : value});
     }
 
+    private onWeekdayAnchorChanged(e: Event) {
+        const value = (e.target as HTMLSelectElement).value as WeekdayAnchor;
+
+        this.emitConfigChanged({...this._config, weekday_anchor: value === "top" ? undefined : value});
+    }
+
     private onSwitchChanged(field: keyof TodoOverlayCardConfig, defaultValue: boolean) {
         return (e: Event) => {
             const checked = (e.target as HTMLInputElement).checked;
@@ -319,6 +325,20 @@ export class TodoOverlayCardEditor extends LitElement {
                             <option value="shrink">Shrink the ghost</option>
                             <option value="translucent">Make the ghost translucent</option>
                             <option value="none">None</option>
+                        </select>
+                    </div>
+
+                    <div class="field select-field">
+                        <label for="todo-overlay-weekday-anchor">
+                            Day-of-week pins anchor to
+                        </label>
+                        <select
+                            id="todo-overlay-weekday-anchor"
+                            .value=${this._config.weekday_anchor ?? "top"}
+                            @change=${this.onWeekdayAnchorChanged}
+                        >
+                            <option value="top">Top of the list (default)</option>
+                            <option value="bottom">Bottom of the list</option>
                         </select>
                     </div>
                 </div>

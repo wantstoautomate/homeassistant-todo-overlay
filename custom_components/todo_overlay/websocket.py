@@ -425,7 +425,8 @@ async def websocket_delete_saved_list(
         vol.Optional("trigger_on_due"): bool,
         vol.Optional("reference_id"): str,
         vol.Optional("placement"): vol.In(["before", "after", "inside"]),
-        vol.Optional("pin_type"): vol.In(["category", "person"]),
+        vol.Optional("pin_type"): vol.In(["category", "person", "day"]),
+        vol.Optional("weekday"): vol.All(int, vol.Range(min=0, max=6)),
     }
 )
 @websocket_api.async_response
@@ -438,7 +439,9 @@ async def websocket_create_item(
     """Create an item, including overlay-only fields like quantity -
     optionally positioned relative to an existing item (reference_id +
     placement, same semantics as move_item) rather than wherever the
-    native adapter's own add_item happens to put it."""
+    native adapter's own add_item happens to put it. weekday
+    (0=Monday..6=Sunday) is required alongside pin_type="day" - see
+    TodoManager.create_item's own docstring."""
 
     manager = get_manager(hass)
 
@@ -454,6 +457,7 @@ async def websocket_create_item(
         reference_id=msg.get("reference_id"),
         placement=msg.get("placement"),
         pin_type=msg.get("pin_type"),
+        weekday=msg.get("weekday"),
     )
 
     connection.send_result(msg["id"], {"id": item_id})
