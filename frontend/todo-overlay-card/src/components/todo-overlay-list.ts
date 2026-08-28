@@ -2166,6 +2166,7 @@ export class TodoOverlayList extends LitElement {
                     tags,
                     triggerOnDue: value.triggerOnDue,
                     pinType,
+                    weekday,
                 });
             }
 

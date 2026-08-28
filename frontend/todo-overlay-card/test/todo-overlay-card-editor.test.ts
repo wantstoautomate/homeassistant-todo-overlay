@@ -85,6 +85,29 @@ describe("todo-overlay-card-editor", () => {
         expect(byTitle.shadowRoot?.querySelector("#todo-overlay-sort-order")).not.toBeNull();
     });
 
+    it("onWeekdayAnchorChanged updates weekday_anchor, and clears it to undefined back at 'top'", async () => {
+        // Live-reproduced gap: weekday_anchor was added to
+        // TodoOverlayCardConfig and threaded all the way through
+        // todo-overlay-list.ts/todo-tree.ts/todo-tree-item.ts, but never
+        // got a control here - a card set up via the visual editor (as
+        // opposed to raw YAML) had no way to reach it at all.
+        const el = await renderEditor({entity: "todo.shopping"});
+        let changed = lastConfigChange(el);
+
+        const select = el.shadowRoot?.querySelector("#todo-overlay-weekday-anchor") as HTMLSelectElement;
+        select.value = "bottom";
+        select.dispatchEvent(new Event("change"));
+
+        expect((await changed).weekday_anchor).toBe("bottom");
+
+        await el.updateComplete;
+        changed = lastConfigChange(el);
+        select.value = "top";
+        select.dispatchEvent(new Event("change"));
+
+        expect((await changed).weekday_anchor).toBeUndefined();
+    });
+
     it("onSwitchChanged clears the field to undefined when toggled back to its default", async () => {
         const el = await renderEditor({entity: "todo.shopping", show_quick_add: false});
         const changed = lastConfigChange(el);

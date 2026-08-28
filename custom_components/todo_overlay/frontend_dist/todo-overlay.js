@@ -733,7 +733,8 @@ async function createItem(hass, entityId, fields) {
     trigger_on_due: fields.triggerOnDue,
     reference_id: fields.referenceId,
     placement: fields.placement,
-    pin_type: fields.pinType
+    pin_type: fields.pinType,
+    weekday: fields.weekday
   });
   return result.id;
 }
@@ -5300,7 +5301,8 @@ var TodoOverlayList = class extends i4 {
           quantity,
           tags,
           triggerOnDue: value.triggerOnDue,
-          pinType
+          pinType,
+          weekday
         });
       }
       await this.load();
@@ -6376,6 +6378,10 @@ var TodoOverlayCardEditor = class extends i4 {
     const value = e7.target.value;
     this.emitConfigChanged({ ...this._config, drag_ghost_style: value === "label" ? void 0 : value });
   }
+  onWeekdayAnchorChanged(e7) {
+    const value = e7.target.value;
+    this.emitConfigChanged({ ...this._config, weekday_anchor: value === "top" ? void 0 : value });
+  }
   onSwitchChanged(field, defaultValue) {
     return (e7) => {
       const checked = e7.target.checked;
@@ -6519,6 +6525,20 @@ var TodoOverlayCardEditor = class extends i4 {
                             <option value="shrink">Shrink the ghost</option>
                             <option value="translucent">Make the ghost translucent</option>
                             <option value="none">None</option>
+                        </select>
+                    </div>
+
+                    <div class="field select-field">
+                        <label for="todo-overlay-weekday-anchor">
+                            Day-of-week pins anchor to
+                        </label>
+                        <select
+                            id="todo-overlay-weekday-anchor"
+                            .value=${this._config.weekday_anchor ?? "top"}
+                            @change=${this.onWeekdayAnchorChanged}
+                        >
+                            <option value="top">Top of the list (default)</option>
+                            <option value="bottom">Bottom of the list</option>
                         </select>
                     </div>
                 </div>

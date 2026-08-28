@@ -1,3 +1,5 @@
+name: ha_todo_dev
+
 services:
   homeassistant:
     container_name: ha_todo_dev

@@ -2235,6 +2235,44 @@ describe("todo-overlay-list edit-dialog delete (diagnostic)", () => {
         }));
     });
 
+    it("creating a day-of-week pin sends its weekday as part of todo_overlay/create_item", async () => {
+        // Live-reproduced bug: pin_type "day" only ever got wired through
+        // the edit dialog's own setPinType call (see the "day of week pin
+        // type" describe block above) - creating a brand new item as a
+        // day pin from the "+" dialog went through createItem() instead,
+        // which never sent weekday at all, and until the backend's own
+        // create_item schema was fixed to even allow pin_type "day" here,
+        // this failed outright with a websocket "invalid_format" error
+        // before ever reaching that gap.
+        const {el, hass} = await renderList(
+            {entity_id: ENTITY_ID, items: []},
+            {showQuickAdd: false},
+        );
+
+        (el.shadowRoot?.querySelector("button[aria-label='Add item']") as HTMLElement).click();
+        await settle(el);
+
+        const dialog = el.shadowRoot?.querySelector("todo-overlay-item-dialog");
+        expect(dialog, "create dialog should be open").not.toBeNull();
+
+        dialog!.dispatchEvent(new CustomEvent("dialog-save", {
+            detail: {
+                title: "Wednesday", quantity: "", tags: "", description: "",
+                dueDate: "", dueTime: "", triggerOnDue: false, pinType: "day", dayWeekday: "2",
+            },
+            bubbles: true, composed: true,
+        }));
+        await flushAsync();
+
+        expect(hass.connection.sent).toContainEqual(expect.objectContaining({
+            type: "todo_overlay/create_item",
+            entity_id: ENTITY_ID,
+            title: "Wednesday",
+            pin_type: "day",
+            weekday: 2,
+        }));
+    });
+
     it("does not clobber an in-progress unsaved edit when a live-sync reload fires while the dialog is open", async () => {
         // Live-reproduced bug: dialogValue() used to be recomputed fresh
         // from the frozen dialogItem snapshot on every parent re-render,

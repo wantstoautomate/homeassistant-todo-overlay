@@ -13,6 +13,7 @@ machinery (that's HA's own, not what these tests are for).
 """
 
 import pytest
+import voluptuous as vol
 
 from custom_components.todo_overlay import websocket
 from custom_components.todo_overlay.manager import TodoManager
@@ -415,6 +416,51 @@ async def test_websocket_create_item_with_pin_type():
 
     metadata_store: FakeMetadataStore = manager._metadata_store
     assert metadata_store._pin_types[new_id] == "person"
+
+
+def test_websocket_create_item_schema_accepts_pin_type_day_and_weekday():
+    """Live-reproduced bug: pin_type "day" was added to
+    websocket_set_pin_type's own schema, but websocket_create_item's
+    schema was never touched - creating a NEW item as a day pin (the
+    "+" dialog, as opposed to editing an existing one) failed outright
+    with a websocket "invalid_format" error ("value must be one of
+    category, person") before ever reaching TodoManager at all.
+
+    call_handler() elsewhere in this file deliberately calls
+    .__wrapped__ and so never exercises HA's own schema validation (see
+    the module docstring) - this is the one test in the file that
+    validates the schema object itself, specifically because that's
+    exactly the layer this bug lived in and no handler-body test could
+    have caught it."""
+
+    schema = vol.Schema(websocket.websocket_create_item._ws_schema)
+
+    validated = schema({
+        "id": 1, "type": "todo_overlay/create_item",
+        "entity_id": ENTITY_ID, "title": "Wednesday", "pin_type": "day", "weekday": 2,
+    })
+
+    assert validated["pin_type"] == "day"
+    assert validated["weekday"] == 2
+
+
+@pytest.mark.asyncio
+async def test_websocket_create_item_with_pin_type_day_sets_weekday_and_renames_the_item():
+    manager = make_manager()
+
+    connection = await call_handler(
+        websocket.websocket_create_item, manager,
+        {"entity_id": ENTITY_ID, "title": "whatever", "pin_type": "day", "weekday": 2},
+    )
+
+    new_id = connection.results[0][1]["id"]
+
+    metadata_store: FakeMetadataStore = manager._metadata_store
+    assert metadata_store._pin_types[new_id] == "day"
+    assert metadata_store._weekdays[new_id] == 2
+
+    items = await manager._adapter.get_items(ENTITY_ID)
+    assert next(item for item in items if item.id == new_id).title == "Wednesday"
 
 
 @pytest.mark.asyncio
