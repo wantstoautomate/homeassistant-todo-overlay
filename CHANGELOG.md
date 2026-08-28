@@ -3,6 +3,12 @@
 All notable changes to this project are documented here. Versions follow the
 integration's `manifest.json`/card's `package.json` (kept in lockstep).
 
+## 1.6.2
+
+**Fixed: swiping to delete an item on mobile could delete a completely different item instead** - live-reported: swiping a delete-protected "day" pin (which should refuse to delete at all) instead deleted a different day pin further down the list. Root cause was generic, not specific to day pins: the row list was rendered with a plain array `.map()`, so when sibling order changes between renders (day pins are the first thing in this app to reorder themselves, independent of any drag), the framework could reuse a row already mid-delete-animation for a *different* item before its deferred delete actually fired - deleting whatever ended up in that slot instead of what was actually swiped. Fixed at the root (rows are now tied to their own item's identity, not their screen position) plus defense in depth (a delete now always targets the item that was actually acted on, not whatever the row happens to be showing by the time its animation finishes).
+
+- **Fixed: the item dialog offered "Link to shared list" even on items that already live on the one configured shared list itself** - ticking it there could only ever mirror the item onto a copy of itself on the same list, never anything useful (the app has no way to pick a different destination). Removed for that case; an item that's already individually linked still shows the checkbox so it can be unlinked.
+
 ## 1.6.1
 
 **Fixed: creating a new day-of-week pin from the "+" dialog failed outright with a websocket error** ("value must be one of category, person"). 1.6.0's day-of-week pins only ever got wired through the item dialog's *edit* path (`set_pin_type`) - creating a brand new item as a day pin went through a completely separate `create_item` call whose own schema was never updated to allow `"day"` at all, and never sent the picked weekday even where it was allowed. Both are now fixed; editing an existing item into a day pin was never affected.

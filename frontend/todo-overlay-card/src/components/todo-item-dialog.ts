@@ -464,6 +464,22 @@ export class TodoItemDialog extends LitElement {
     @property({type: Boolean})
     showDelete = false;
 
+    // True when the item's OWN entity (not the item itself) already has
+    // a cross-instance MQTT link configured (see link_sync.py) - i.e.
+    // this whole list already IS "the shared list". Live-reported:
+    // "Link to shared list" (item_links.py's separate PER-ITEM mirroring
+    // feature - see its own module docstring) was showing unconditionally,
+    // including on items that already live on the one configured linked
+    // list. The frontend can only ever target the single auto-resolved
+    // default linked entity (linkItem() has no way to name a different
+    // one - see api.ts), so ticking it there could only ever mirror the
+    // item onto a copy of itself on the SAME list, never anything useful.
+    // Suppresses the checkbox in exactly that case - see its own render()
+    // condition for why an already-linked ITEM still shows it regardless
+    // (unticking is still how that pairing gets severed).
+    @property({type: Boolean})
+    entityIsLinked = false;
+
     // Only relevant for an item whose own row hides its completion
     // checkbox (see TodoOverlayCardConfig's hide_complete_for_parents) -
     // this dialog is that item's only way to complete it, so the toggle
@@ -1009,43 +1025,49 @@ export class TodoItemDialog extends LitElement {
                     }
                 </div>
 
-                <div class="field">
-                    <div class="complete-toggle">
-                        <ha-checkbox
-                            id="todo-item-linked"
-                            .checked=${this.draftValue.linked}
-                            @change=${this.onLinkedChanged}
-                        ></ha-checkbox>
-                        <span>Link to shared list</span>
-                    </div>
-                    ${
-                        this.isCreatingANewLink
-                            ? html`
-                                <input
-                                    id="todo-item-link-target"
-                                    type="text"
-                                    class="link-target-input"
-                                    placeholder="Destination (optional) - e.g. Brodie"
-                                    .value=${this.draftValue.linkTarget}
-                                    @input=${(e: InputEvent) =>
-                                        this.updateField("linkTarget", (e.target as HTMLInputElement).value)}
-                                />
-                                <div class="field-hint">
-                                    Creates a copy on your configured shared list, kept in sync both ways -
-                                    completing, editing, or deleting either one affects both. Leave blank
-                                    to use the default destination.
+                ${
+                    !this.entityIsLinked || this.draftValue.linked
+                        ? html`
+                            <div class="field">
+                                <div class="complete-toggle">
+                                    <ha-checkbox
+                                        id="todo-item-linked"
+                                        .checked=${this.draftValue.linked}
+                                        @change=${this.onLinkedChanged}
+                                    ></ha-checkbox>
+                                    <span>Link to shared list</span>
                                 </div>
-                            `
-                            : this.draftValue.linked
-                                ? html`
-                                    <div class="field-hint">
-                                        Linked - unticking this only unlinks it, the item itself is
-                                        untouched.
-                                    </div>
-                                `
-                                : ""
-                    }
-                </div>
+                                ${
+                                    this.isCreatingANewLink
+                                        ? html`
+                                            <input
+                                                id="todo-item-link-target"
+                                                type="text"
+                                                class="link-target-input"
+                                                placeholder="Destination (optional) - e.g. Brodie"
+                                                .value=${this.draftValue.linkTarget}
+                                                @input=${(e: InputEvent) =>
+                                                    this.updateField("linkTarget", (e.target as HTMLInputElement).value)}
+                                            />
+                                            <div class="field-hint">
+                                                Creates a copy on your configured shared list, kept in sync both ways -
+                                                completing, editing, or deleting either one affects both. Leave blank
+                                                to use the default destination.
+                                            </div>
+                                        `
+                                        : this.draftValue.linked
+                                            ? html`
+                                                <div class="field-hint">
+                                                    Linked - unticking this only unlinks it, the item itself is
+                                                    untouched.
+                                                </div>
+                                            `
+                                            : ""
+                                }
+                            </div>
+                        `
+                        : ""
+                }
 
                 <div class="field">
                     <div class="complete-toggle">

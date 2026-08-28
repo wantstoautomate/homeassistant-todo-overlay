@@ -183,10 +183,13 @@ describe("todo-overlay-item-dialog", () => {
     // "Tent" on "Travel") onto a cross-instance-linked "Shared" list, so
     // completing/editing/deleting either one keeps the other in sync.
     describe("item linking", () => {
-        function linkedCheckbox(el: TodoItemDialog): HTMLElement & {checked?: boolean} {
+        function linkedRow(el: TodoItemDialog): Element | undefined {
             const rows = [...(el.shadowRoot?.querySelectorAll(".complete-toggle") ?? [])];
-            const row = rows.find(r => r.textContent?.includes("Link to shared list"))!;
-            return row.querySelector("ha-checkbox") as HTMLElement & {checked?: boolean};
+            return rows.find(r => r.textContent?.includes("Link to shared list"));
+        }
+
+        function linkedCheckbox(el: TodoItemDialog): HTMLElement & {checked?: boolean} {
+            return linkedRow(el)!.querySelector("ha-checkbox") as HTMLElement & {checked?: boolean};
         }
 
         function linkTargetInput(el: TodoItemDialog): HTMLInputElement | null {
@@ -257,6 +260,30 @@ describe("todo-overlay-item-dialog", () => {
 
             expect(el.value.linked).toBe(false);
             expect(linkTargetInput(el)).toBeNull();
+        });
+
+        // Live-reported: this showed unconditionally, including on items
+        // that already live ON the one configured cross-instance-linked
+        // list itself - ticking it there could only ever mirror the item
+        // onto a copy of itself on the SAME list (the frontend has no way
+        // to target a different entity - see api.ts's own linkItem),
+        // never anything useful.
+        it("hides the checkbox entirely for an unlinked item on an already-linked entity", async () => {
+            const el = await renderDialog({
+                value: {...EMPTY_FORM_VALUE, title: "Tent", linked: false},
+                entityIsLinked: true,
+            });
+
+            expect(linkedRow(el)).toBeUndefined();
+        });
+
+        it("still shows the checkbox (to allow unlinking) for an item already linked on an already-linked entity", async () => {
+            const el = await renderDialog({
+                value: {...EMPTY_FORM_VALUE, title: "Tent", linked: true},
+                entityIsLinked: true,
+            });
+
+            expect(linkedCheckbox(el).checked).toBe(true);
         });
     });
 

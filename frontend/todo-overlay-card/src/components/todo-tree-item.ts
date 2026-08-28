@@ -1,6 +1,7 @@
 import {LitElement, html, css, nothing, unsafeCSS} from "lit";
 import {customElement, property, state} from "lit/decorators.js";
 import {classMap} from "lit/directives/class-map.js";
+import {repeat} from "lit/directives/repeat.js";
 import {styleMap} from "lit/directives/style-map.js";
 
 import type {DisplayItem} from "../grouping";
@@ -1240,11 +1241,27 @@ export class TodoTreeItem extends LitElement {
     // collapsing the transition to 0 duration, or the element being
     // torn down mid-transition for an unrelated reason) than depending
     // on the event actually firing.
+    //
+    // itemId is captured HERE, at the moment delete was actually
+    // decided, and threaded through rather than having the deferred
+    // callback read this.item.id fresh when the timeout fires -
+    // live-reproduced bug: this component instance is reused (by
+    // design, see todo-tree.ts's own repeat()) for whichever item
+    // currently occupies its slot, so if this row's own item is ever
+    // rendered via a plain positional list instead of a properly keyed
+    // one, this.item can end up silently reassigned to a DIFFERENT
+    // item during the ROW_COLLAPSE_MS animation window, and the
+    // eventual dispatch would delete THAT item instead of the one
+    // actually swiped/tapped. Capturing the id up front makes this
+    // dispatch correct regardless of whatever this.item happens to be
+    // by the time the timeout fires - defense in depth alongside the
+    // repeat()-based keying fix, not a substitute for it.
     private dispatchDeleteAfterCollapse() {
+        const itemId = this.item.id;
         const li = this.renderRoot.querySelector("li");
 
         if (!li) {
-            this.dispatchDeleteEvent();
+            this.dispatchDeleteEvent(itemId);
             return;
         }
 
@@ -1276,13 +1293,13 @@ export class TodoTreeItem extends LitElement {
             li.style.paddingBottom = "0px";
         });
 
-        window.setTimeout(() => this.dispatchDeleteEvent(), ROW_COLLAPSE_MS);
+        window.setTimeout(() => this.dispatchDeleteEvent(itemId), ROW_COLLAPSE_MS);
     }
 
-    private dispatchDeleteEvent() {
+    private dispatchDeleteEvent(itemId: string) {
         this.dispatchEvent(
             new CustomEvent("tree-delete-item", {
-                detail: {id: this.item.id},
+                detail: {id: itemId},
                 bubbles: true,
                 composed: true,
             }),
@@ -1797,7 +1814,12 @@ export class TodoTreeItem extends LitElement {
         // See grouping.ts's own doc comment - a no-op (returns
         // this.item.children completely unchanged) below the
         // structural-sibling threshold, so this is cheap to always
-        // compute rather than only when it might matter.
+        // compute rather than only when it might matter. Rendered below
+        // via repeat() keyed by child.id - see todo-tree.ts's own
+        // render() for why a plain .map() here is a live-reproduced
+        // delete-the-wrong-item bug waiting to happen the moment
+        // siblings can reorder between renders (which "day" pins do
+        // entirely on their own).
         const displayChildren = groupSiblingsForDisplay(this.item.children, this.item.id, this.weekdayAnchor);
 
         const rowClasses = {
@@ -2101,7 +2123,9 @@ export class TodoTreeItem extends LitElement {
                     this.hasChildren && !this.isCollapsed
                         ? html`
                             <ul>
-                                ${displayChildren.map(
+                                ${repeat(
+                                    displayChildren,
+                                    child => child.id,
                                     child => html`
                                         <todo-overlay-tree-item
                                             .item=${child}
