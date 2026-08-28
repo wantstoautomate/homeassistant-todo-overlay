@@ -53,6 +53,13 @@ class ItemLinkTargetNotFoundError(TodoOverlayError):
     list's own root instead, logged but not raised."""
 
 
+class WeekdayRequiredError(TodoOverlayError):
+    """Raised when set_pin_type is given pin_type="day" with no weekday
+    (or an out-of-range one) - a "day" pin only means something once
+    it's tied to a specific weekday, unlike "category"/"person" which
+    need nothing further."""
+
+
 class ItemDeleteProtectedError(TodoOverlayError):
     """Raised by TodoManager.delete_item when the item has its
     delete_protected flag set - deliberately a hard stop (never a

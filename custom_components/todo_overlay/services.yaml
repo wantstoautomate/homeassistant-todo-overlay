@@ -144,12 +144,20 @@ create_item:
         boolean:
     pin_type:
       required: false
-      description: Pin the item as always rendering like a section header ("category" or "person"), regardless of whether it has children yet.
+      description: Pin the item as always rendering like a section header ("category", "person", or "day"), regardless of whether it has children yet. "day" requires weekday too, and overwrites title with that weekday's own name.
       selector:
         select:
           options:
             - category
             - person
+            - day
+    weekday:
+      required: false
+      description: Required alongside pin_type "day" - which weekday (0=Monday..6=Sunday) this item represents.
+      selector:
+        number:
+          min: 0
+          max: 6
 
 set_quantity:
   name: Set quantity
@@ -174,7 +182,7 @@ set_quantity:
 
 set_pin_type:
   name: Set pin type
-  description: Set (or clear) a Todo Overlay item's pin type - always rendering it like a section header ("category" or "person"), regardless of whether it has children.
+  description: Set (or clear) a Todo Overlay item's pin type - always rendering it like a section header ("category", "person", or "day"), regardless of whether it has children.
   fields:
     entity_id:
       required: true
@@ -189,12 +197,20 @@ set_pin_type:
         text:
     pin_type:
       required: false
-      description: Omit to clear the pin.
+      description: Omit to clear the pin. "day" requires weekday too, and overwrites title with that weekday's own name.
       selector:
         select:
           options:
             - category
             - person
+            - day
+    weekday:
+      required: false
+      description: Required alongside pin_type "day" - which weekday (0=Monday..6=Sunday) this item represents.
+      selector:
+        number:
+          min: 0
+          max: 6
 
 set_trigger_on_due:
   name: Set trigger on due

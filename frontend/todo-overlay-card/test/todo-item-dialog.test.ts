@@ -83,6 +83,102 @@ describe("todo-overlay-item-dialog", () => {
         });
     });
 
+    // Live use case: 7 permanent day-of-week pins, each tagged ONCE with
+    // its own weekday - the label ("Today"/"Tomorrow"/plain name) and
+    // sort order are then fully computed server-side from there on,
+    // with nothing further to maintain (see tree.py's own build_tree).
+    describe("day of week pin type", () => {
+        function pinTypeSelect(el: TodoItemDialog): HTMLSelectElement {
+            return el.shadowRoot?.querySelector("#todo-item-pin-type") as HTMLSelectElement;
+        }
+
+        function weekdaySelect(el: TodoItemDialog): HTMLSelectElement | null {
+            return el.shadowRoot?.querySelector("#todo-item-day-weekday") as HTMLSelectElement | null;
+        }
+
+        function titleInput(el: TodoItemDialog): HTMLInputElement {
+            return el.shadowRoot?.querySelector("#todo-item-title") as HTMLInputElement;
+        }
+
+        it("shows no weekday picker until 'Day of week' is actually selected", async () => {
+            const el = await renderDialog({value: {...EMPTY_FORM_VALUE, title: "Milk"}});
+
+            expect(weekdaySelect(el)).toBeNull();
+        });
+
+        it("selecting 'Day of week' reveals the weekday picker and disables the title field", async () => {
+            const el = await renderDialog({value: {...EMPTY_FORM_VALUE, title: "whatever"}});
+
+            const select = pinTypeSelect(el);
+            select.value = "day";
+            select.dispatchEvent(new Event("change"));
+            await el.updateComplete;
+
+            expect(weekdaySelect(el)).not.toBeNull();
+            expect(titleInput(el).disabled).toBe(true);
+        });
+
+        it("the title field shows the computed weekday name, not the original stored title, once a weekday is picked", async () => {
+            const el = await renderDialog({value: {...EMPTY_FORM_VALUE, title: "whatever"}});
+
+            pinTypeSelect(el).value = "day";
+            pinTypeSelect(el).dispatchEvent(new Event("change"));
+            await el.updateComplete;
+
+            const weekday = weekdaySelect(el)!;
+            weekday.value = "2";
+            weekday.dispatchEvent(new Event("change"));
+            await el.updateComplete;
+
+            expect(titleInput(el).value).toBe("Wednesday");
+        });
+
+        it("Save is disabled while 'Day of week' is selected but no weekday has been picked yet", async () => {
+            const el = await renderDialog({value: {...EMPTY_FORM_VALUE, title: "whatever"}});
+
+            pinTypeSelect(el).value = "day";
+            pinTypeSelect(el).dispatchEvent(new Event("change"));
+            await el.updateComplete;
+
+            expect(saveButton(el).disabled).toBe(true);
+        });
+
+        it("Save re-enables once a weekday is picked, and emits the weekday's own name as the title", async () => {
+            const el = await renderDialog({value: {...EMPTY_FORM_VALUE, title: "whatever"}});
+
+            pinTypeSelect(el).value = "day";
+            pinTypeSelect(el).dispatchEvent(new Event("change"));
+            await el.updateComplete;
+
+            const weekday = weekdaySelect(el)!;
+            weekday.value = "2";
+            weekday.dispatchEvent(new Event("change"));
+            await el.updateComplete;
+
+            expect(saveButton(el).disabled).toBe(false);
+
+            let detail: TodoItemFormValue | undefined;
+            el.addEventListener("dialog-save", (e) => {
+                detail = (e as CustomEvent<TodoItemFormValue>).detail;
+            });
+            saveButton(el).click();
+
+            expect(detail?.pinType).toBe("day");
+            expect(detail?.dayWeekday).toBe("2");
+            expect(detail?.title).toBe("Wednesday");
+        });
+
+        it("seeds the weekday picker and disabled title from an already-tagged day pin", async () => {
+            const el = await renderDialog({
+                value: {...EMPTY_FORM_VALUE, title: "Wednesday", pinType: "day", dayWeekday: "2"},
+            });
+
+            expect(weekdaySelect(el)?.value).toBe("2");
+            expect(titleInput(el).disabled).toBe(true);
+            expect(titleInput(el).value).toBe("Wednesday");
+        });
+    });
+
     // Live use case: mirroring an item on a purely local list (e.g.
     // "Tent" on "Travel") onto a cross-instance-linked "Shared" list, so
     // completing/editing/deleting either one keeps the other in sync.

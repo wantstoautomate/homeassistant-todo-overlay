@@ -3,6 +3,39 @@
 All notable changes to this project are documented here. Versions follow the
 integration's `manifest.json`/card's `package.json` (kept in lockstep).
 
+## 1.6.0
+
+**New: day-of-week pins - a section header that always represents a specific
+day, sorts itself to the nearest upcoming occurrence, and labels itself
+"Today"/"Tomorrow" automatically.** Pick "Day of week" in the item dialog's
+"Show as" field, choose a weekday, and the item is renamed to that day's own
+name ("Wednesday") and kept there - no more manually dragging a recurring
+"Bins day" or "Gym" item back to the top of the list every week. Every "day"
+pin at a level forms one contiguous block among its siblings; a new
+`weekday_anchor` card option (default `top`) picks which end of the list that
+block sits at. Also available via `todo_overlay.create_item`/
+`todo_overlay.set_pin_type` (with a new `weekday` field), and synced across a
+linked pair over MQTT like every other pin type.
+
+**New: automatic day-rollover cleanup.** Once a "day" pin's own weekday stops
+being "today", its children are swept: anything already checked off is
+removed, and anything still open moves onto an auto-created "Overdue" header
+with its due date set to the day that just passed - so yesterday's leftovers
+surface instead of silently sitting under a pin that's already moved on to
+next week. Runs automatically on every read, catching up regardless of how
+long it's been since the list was last opened.
+
+**New: the open-items sensor now exposes each item's direct parent** (`parent_id`/
+`parent_title`, `null` for a top-level item) - lets a template condition ask
+"is there anything open under 'Work'" (`items | selectattr('parent_title',
+'eq', 'Work') | list`) with no extra service call.
+
+- **Fixed: linking an item onto another list ("Link to shared list") didn't
+  carry its delete-protected flag over, and never kept it in sync
+  afterwards.** Protecting an item on one side left its mirror on the other
+  side silently unprotected - now mirrored at link creation and kept in sync
+  both ways from then on, same as every other linked field.
+
 ## 1.5.0
 
 **New: delete protection - stop inadvertently deleting an anchor item.** A

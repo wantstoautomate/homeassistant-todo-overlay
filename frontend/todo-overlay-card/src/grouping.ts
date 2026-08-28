@@ -1,4 +1,4 @@
-import type {TodoItem} from "./models";
+import type {TodoItem, WeekdayAnchor} from "./models";
 
 // A DisplayItem is either a real TodoItem or the one synthetic "Other"
 // node groupSiblingsForDisplay generates - see its own doc comment.
@@ -68,6 +68,7 @@ export function otherGroupId(parentId: string | undefined): string {
 export function groupSiblingsForDisplay(
     items: TodoItem[],
     parentId: string | undefined,
+    weekdayAnchor: WeekdayAnchor = "top",
 ): DisplayItem[] {
     const structuralCount = items.reduce((count, item) => count + (isStructural(item) ? 1 : 0), 0);
 
@@ -104,9 +105,22 @@ export function groupSiblingsForDisplay(
         pin_type: null,
         linked: false,
         delete_protected: false,
+        weekday: null,
+        day_label: null,
         children: plain,
         synthetic: true,
     };
 
-    return [...structural, other];
+    // Other otherwise always trails the structural block, regardless of
+    // backend order - fine (arguably the whole point) for the ordinary
+    // "one incidental category emerged" case this was built for, but it
+    // would silently defeat weekday_anchor="bottom" for a day-of-week
+    // level: the backend already sorted plain items before the day-pin
+    // block in that case (see tree.py's own build_tree), and blindly
+    // re-trailing Other here would put them back after it. Only day-pin
+    // levels get this override - an ordinary category/person level's
+    // Other bucket keeps trailing exactly as it always has.
+    const hasDayPins = structural.some(item => item.pin_type === "day");
+
+    return hasDayPins && weekdayAnchor === "bottom" ? [other, ...structural] : [...structural, other];
 }

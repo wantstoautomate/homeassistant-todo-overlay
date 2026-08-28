@@ -71,7 +71,7 @@ async def test_websocket_get_list_returns_serialised_list():
     manager = make_manager()
 
     connection = await call_handler(
-        websocket.websocket_get_list, manager, {"entity_id": ENTITY_ID, "group_completed": False},
+        websocket.websocket_get_list, manager, {"entity_id": ENTITY_ID, "group_completed": False, "weekday_anchor": "top"},
     )
 
     assert len(connection.results) == 1
@@ -88,7 +88,7 @@ async def test_websocket_get_list_includes_link_id_when_linked():
     await manager._metadata_store.set_link(ENTITY_ID, "abc123")
 
     connection = await call_handler(
-        websocket.websocket_get_list, manager, {"entity_id": ENTITY_ID, "group_completed": False},
+        websocket.websocket_get_list, manager, {"entity_id": ENTITY_ID, "group_completed": False, "weekday_anchor": "top"},
     )
 
     assert connection.results[0][1]["link_id"] == "abc123"
@@ -327,7 +327,7 @@ async def test_websocket_load_list_with_target_item_loads_as_its_children():
     assert connection.errors == []
 
     list_connection = await call_handler(
-        websocket.websocket_get_list, manager, {"entity_id": ENTITY_ID, "group_completed": False},
+        websocket.websocket_get_list, manager, {"entity_id": ENTITY_ID, "group_completed": False, "weekday_anchor": "top"},
     )
     items = list_connection.results[0][1]["items"]
     assert len(items) == 1
@@ -368,7 +368,7 @@ async def test_websocket_create_item_returns_new_id():
     assert "id" in result
 
     list_connection = await call_handler(
-        websocket.websocket_get_list, manager, {"entity_id": ENTITY_ID, "group_completed": False},
+        websocket.websocket_get_list, manager, {"entity_id": ENTITY_ID, "group_completed": False, "weekday_anchor": "top"},
     )
     items = list_connection.results[0][1]["items"]
     bread = next(item for item in items if item["title"] == "Bread")
@@ -394,7 +394,7 @@ async def test_websocket_create_item_with_reference_id_and_placement_positions_i
     new_id = result["id"]
 
     list_connection = await call_handler(
-        websocket.websocket_get_list, manager, {"entity_id": ENTITY_ID, "group_completed": False},
+        websocket.websocket_get_list, manager, {"entity_id": ENTITY_ID, "group_completed": False, "weekday_anchor": "top"},
     )
     items = list_connection.results[0][1]["items"]
     parent = next(item for item in items if item["id"] == "parent")
@@ -429,7 +429,7 @@ async def test_websocket_update_item_updates_native_fields():
     assert connection.results == [(1, None)]
 
     list_connection = await call_handler(
-        websocket.websocket_get_list, manager, {"entity_id": ENTITY_ID, "group_completed": False},
+        websocket.websocket_get_list, manager, {"entity_id": ENTITY_ID, "group_completed": False, "weekday_anchor": "top"},
     )
     items = list_connection.results[0][1]["items"]
     assert items[0]["title"] == "Oat milk"
@@ -447,7 +447,7 @@ async def test_websocket_delete_item_removes_it():
     assert connection.results == [(1, None)]
 
     list_connection = await call_handler(
-        websocket.websocket_get_list, manager, {"entity_id": ENTITY_ID, "group_completed": False},
+        websocket.websocket_get_list, manager, {"entity_id": ENTITY_ID, "group_completed": False, "weekday_anchor": "top"},
     )
     assert list_connection.results[0][1]["items"] == []
 
@@ -467,7 +467,7 @@ async def test_websocket_delete_item_on_a_delete_protected_item_sends_item_delet
     assert code == "item_delete_protected"
 
     list_connection = await call_handler(
-        websocket.websocket_get_list, manager, {"entity_id": ENTITY_ID, "group_completed": False},
+        websocket.websocket_get_list, manager, {"entity_id": ENTITY_ID, "group_completed": False, "weekday_anchor": "top"},
     )
     assert [item["id"] for item in list_connection.results[0][1]["items"]] == ["1"]
 
@@ -520,6 +520,64 @@ async def test_websocket_set_pin_type_rejects_an_invalid_value():
     assert connection.results == []
     msg_id, code, message = connection.errors[0]
     assert code == "invalid_pin_type"
+
+
+@pytest.mark.asyncio
+async def test_websocket_set_pin_type_day_sets_weekday_and_renames_the_item():
+    manager = make_manager(items=[TodoItem(id="1", title="whatever", completed=False)])
+
+    connection = await call_handler(
+        websocket.websocket_set_pin_type, manager,
+        {"entity_id": ENTITY_ID, "item_id": "1", "pin_type": "day", "weekday": 2},
+    )
+
+    assert connection.results == [(1, None)]
+
+    metadata_store: FakeMetadataStore = manager._metadata_store
+    assert metadata_store._pin_types["1"] == "day"
+    assert metadata_store._weekdays["1"] == 2
+
+    list_connection = await call_handler(
+        websocket.websocket_get_list, manager,
+        {"entity_id": ENTITY_ID, "group_completed": False, "weekday_anchor": "top"},
+    )
+    assert list_connection.results[0][1]["items"][0]["title"] == "Wednesday"
+
+
+@pytest.mark.asyncio
+async def test_websocket_set_pin_type_day_without_weekday_sends_weekday_required_error():
+    manager = make_manager()
+
+    connection = await call_handler(
+        websocket.websocket_set_pin_type, manager,
+        {"entity_id": ENTITY_ID, "item_id": "1", "pin_type": "day"},
+    )
+
+    assert connection.results == []
+    msg_id, code, message = connection.errors[0]
+    assert code == "weekday_required"
+
+
+@pytest.mark.asyncio
+async def test_websocket_get_list_passes_weekday_anchor_through():
+    manager = make_manager(items=[
+        TodoItem(id="thu", title="Thursday", completed=False),
+        TodoItem(id="other", title="Buy milk", completed=False),
+    ])
+    metadata_store: FakeMetadataStore = manager._metadata_store
+    metadata_store._positions = {
+        "thu": ItemPosition(parent_id=None, order=0),
+        "other": ItemPosition(parent_id=None, order=1),
+    }
+    metadata_store._pin_types["thu"] = "day"
+    metadata_store._weekdays["thu"] = 3
+
+    connection = await call_handler(
+        websocket.websocket_get_list, manager,
+        {"entity_id": ENTITY_ID, "group_completed": False, "weekday_anchor": "bottom"},
+    )
+
+    assert [item["id"] for item in connection.results[0][1]["items"]] == ["other", "thu"]
 
 
 @pytest.mark.asyncio

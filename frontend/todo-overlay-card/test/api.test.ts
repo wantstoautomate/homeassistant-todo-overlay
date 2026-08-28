@@ -30,9 +30,20 @@ describe("api", () => {
         const result = await getList(hass, "todo.a", true);
 
         expect(hass.connection.sent).toEqual([
-            {type: "todo_overlay/get_list", entity_id: "todo.a", group_completed: true},
+            {type: "todo_overlay/get_list", entity_id: "todo.a", group_completed: true, weekday_anchor: "top"},
         ]);
         expect(result).toEqual({entity_id: "todo.a", items: []});
+    });
+
+    it("getList sends a non-default weekday_anchor", async () => {
+        const hass = makeFakeHass();
+        hass.connection.responses["todo_overlay/get_list"] = {entity_id: "todo.a", items: []};
+
+        await getList(hass, "todo.a", false, "bottom");
+
+        expect(hass.connection.sent).toEqual([
+            {type: "todo_overlay/get_list", entity_id: "todo.a", group_completed: false, weekday_anchor: "bottom"},
+        ]);
     });
 
     it("moveItem sends child/reference/placement", async () => {
@@ -150,6 +161,16 @@ describe("api", () => {
 
         expect(hass.connection.sent).toEqual([{
             type: "todo_overlay/set_pin_type", entity_id: "todo.a", item_id: "1", pin_type: undefined,
+        }]);
+    });
+
+    it("setPinType sends weekday alongside pin_type 'day'", async () => {
+        const hass = makeFakeHass();
+
+        await setPinType(hass, "todo.a", "1", "day", 2);
+
+        expect(hass.connection.sent).toEqual([{
+            type: "todo_overlay/set_pin_type", entity_id: "todo.a", item_id: "1", pin_type: "day", weekday: 2,
         }]);
     });
 

@@ -9,7 +9,9 @@ is per-item detail; getting it otherwise needs a todo.get_items service
 call in every automation. This sensor puts that detail directly on a
 state attribute instead, so it's referenceable in a template trigger/
 condition or a notification message (e.g. tag-filtering via
-`items | selectattr('tags', 'contains', 'urgent')`) with no extra
+`items | selectattr('tags', 'contains', 'urgent')`, or "is there
+anything open under this parent" via
+`items | selectattr('parent_title', 'eq', 'Work')`) with no extra
 service call.
 
 Reactive, not polled - subscribes to the same async_subscribe_updates()
@@ -167,7 +169,7 @@ class TodoOverlayOpenItemsSensor(SensorEntity):
         self._attr_available = True
         open_items: list[dict] = []
 
-        def walk(items: list[TodoItem], top_level: bool) -> None:
+        def walk(items: list[TodoItem], top_level: bool, parent: TodoItem | None) -> None:
             for item in items:
                 if not item.completed:
                     open_items.append({
@@ -179,11 +181,22 @@ class TodoOverlayOpenItemsSensor(SensorEntity):
                         "quantity": item.quantity,
                         "tags": item.tags,
                         "top_level": top_level,
+                        # Its DIRECT parent only, not the whole ancestor
+                        # chain - None for a top-level item. Lets a
+                        # template condition ask "is there an open item
+                        # under 'Work'" (e.g. `items | selectattr(
+                        # 'parent_title', 'eq', 'Work') | list`)
+                        # without a separate get_list call - the one
+                        # thing this sensor's own "no extra service
+                        # call" pitch (see the module docstring) didn't
+                        # cover yet.
+                        "parent_id": parent.id if parent is not None else None,
+                        "parent_title": parent.title if parent is not None else None,
                     })
 
-                walk(item.children, False)
+                walk(item.children, False, item)
 
-        walk(todo_list.items, True)
+        walk(todo_list.items, True, None)
 
         self._attr_native_value = len(open_items)
         self._attr_extra_state_attributes = {"items": open_items}

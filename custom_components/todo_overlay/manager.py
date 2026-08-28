@@ -3,7 +3,10 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import Awaitable, Callable
+from datetime import date
 from typing import Any
+
+from homeassistant.util import dt as dt_util
 
 from .const import EVENT_ITEM_CHANGED
 from .ha_adapter import HomeAssistantTodoProvider
@@ -11,11 +14,24 @@ from .manager_completion import CompletionMixin
 from .manager_due import DueTriggerMixin
 from .manager_items import ItemMixin
 from .manager_position import PositionMixin
+from .manager_rollover import DayRolloverMixin
 from .manager_snapshots import SnapshotMixin
 from .manager_tree import TreeMixin
 from .metadata_store import MetadataStore
 
 _LOGGER = logging.getLogger(__name__)
+
+
+def _current_date() -> date:
+    """Today's date in HA's own configured time zone - the single
+    clock both the day-of-week pin rotation (tree.py's own build_tree)
+    and day-rollover (manager_rollover.py) are built against, so the two
+    can never disagree about what day it is. Injectable purely so tests
+    can pin "today" deterministically, rather than depending on
+    whatever day it actually is when the suite runs (same "swap in a
+    fake clock" reasoning as due_scheduler.py's own utcnow parameter)."""
+
+    return dt_util.now().date()
 
 
 class TodoManager(
@@ -25,15 +41,16 @@ class TodoManager(
     PositionMixin,
     CompletionMixin,
     SnapshotMixin,
+    DayRolloverMixin,
 ):
     """Main entry point for the Todo Overlay business logic.
 
     The actual behaviour is split across one mixin per responsibility
     (manager_tree.py, manager_items.py, manager_due.py,
-    manager_position.py, manager_completion.py, manager_snapshots.py) -
-    this class just composes them and owns the small pieces of shared
-    state (locks, the optional hass event bus, the due-schedule hook)
-    every mixin's methods reach for via self.
+    manager_position.py, manager_completion.py, manager_snapshots.py,
+    manager_rollover.py) - this class just composes them and owns the
+    small pieces of shared state (locks, the optional hass event bus,
+    the due-schedule hook) every mixin's methods reach for via self.
     """
 
     def __init__(
@@ -41,6 +58,7 @@ class TodoManager(
         adapter: HomeAssistantTodoProvider,
         metadata_store: MetadataStore,
         hass: Any | None = None,
+        today_date_fn: Callable[[], date] = _current_date,
     ) -> None:
         self._adapter = adapter
         self._metadata_store = metadata_store
@@ -48,6 +66,12 @@ class TodoManager(
         # trigger platform. None in tests, where there's nothing
         # listening for them anyway.
         self._hass = hass
+        # Injectable purely so tests can pin "today" deterministically,
+        # rather than depending on whatever day it actually is when the
+        # suite runs - see tree.py's own build_tree (day-of-week pin
+        # rotation/labeling) and manager_rollover.py (day-rollover) for
+        # what this actually drives.
+        self._today_date_fn = today_date_fn
         # One lock per entity_id, created on first use and never removed -
         # a handful of Lock objects live for the life of the integration,
         # which is negligible even for an install with many todo lists.
@@ -91,6 +115,16 @@ class TodoManager(
         with linked=True (see manager_snapshots.py)."""
 
         self._item_link_hook = hook
+
+    def _today_weekday_fn(self) -> int:
+        """0=Monday..6=Sunday, derived from self._today_date_fn() - a
+        method rather than a second stored callable, so the day-of-week
+        rotation (tree.py) and day-rollover (manager_rollover.py) are
+        physically unable to disagree about what day it is, the way two
+        independently injected clocks could if a test (or a future
+        caller) only overrode one of them."""
+
+        return self._today_date_fn().weekday()
 
     def _lock_for(self, entity_id: str) -> asyncio.Lock:
         lock = self._locks.get(entity_id)

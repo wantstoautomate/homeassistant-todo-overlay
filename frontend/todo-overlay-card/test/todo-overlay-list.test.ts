@@ -2108,6 +2108,59 @@ describe("todo-overlay-list edit-dialog delete (diagnostic)", () => {
         });
     });
 
+    describe("day of week pin type", () => {
+        async function openEditDialog(el: TodoOverlayList): Promise<Element> {
+            const treeItem = deepQueryAll(el.shadowRoot!, "todo-overlay-tree-item")[0];
+            treeItem.dispatchEvent(new CustomEvent("tree-pointer-down", {
+                detail: {id: "1"}, bubbles: true, composed: true,
+            }));
+            treeItem.dispatchEvent(new CustomEvent("tree-pointer-up", {
+                detail: {id: "1", pressDurationMs: 600, moved: false}, bubbles: true, composed: true,
+            }));
+            await el.updateComplete;
+
+            return el.shadowRoot!.querySelector("todo-overlay-item-dialog")!;
+        }
+
+        it("sends the picked weekday alongside pin_type 'day'", async () => {
+            const {el, hass} = await renderList({
+                entity_id: ENTITY_ID,
+                items: [makeItem({id: "1", title: "whatever"})],
+            });
+
+            const dialog = await openEditDialog(el);
+
+            dialog.dispatchEvent(new CustomEvent("dialog-save", {
+                detail: {
+                    title: "Wednesday", quantity: "", tags: "", description: "",
+                    dueDate: "", dueTime: "", triggerOnDue: false, pinType: "day", dayWeekday: "2",
+                    linked: false, linkTarget: "", deleteProtected: false,
+                },
+                bubbles: true, composed: true,
+            }));
+            await flushAsync();
+
+            expect(hass.connection.sent).toContainEqual(expect.objectContaining({
+                type: "todo_overlay/set_pin_type",
+                entity_id: ENTITY_ID,
+                item_id: "1",
+                pin_type: "day",
+                weekday: 2,
+            }));
+        });
+
+        it("seeds the dialog's dayWeekday from the item's own weekday", async () => {
+            const {el} = await renderList({
+                entity_id: ENTITY_ID,
+                items: [makeItem({id: "1", title: "Wednesday", pin_type: "day", weekday: 2})],
+            });
+
+            const dialog = await openEditDialog(el) as unknown as {value: {dayWeekday: string}};
+
+            expect(dialog.value.dayWeekday).toBe("2");
+        });
+    });
+
     // quantity/tags/triggerOnDue/pinType all batch into one Promise.all
     // now (see onDialogSave's own comment) - but update_item has to
     // fully precede that batch, not join it: setTriggerOnDue's backend

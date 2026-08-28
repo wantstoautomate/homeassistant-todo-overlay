@@ -5,7 +5,8 @@ A Home Assistant custom integration and Lovelace card that overlays a parent/chi
 ## Features
 
 - **Hierarchy** - nest items under a parent, drag-and-drop to reorder or reparent, with collapsible rows and a completion counter on any row with children.
-- **Category/person pins** - mark an item as always rendering like a section header ("Groceries", "Brodie"), even before it has any children, via the item dialog's "Show as" field. Once a level has two or more of these, its other plain items automatically collect into a trailing "Other" group rather than getting lost between them.
+- **Category/person/day-of-week pins** - mark an item as always rendering like a section header ("Groceries", "Brodie"), even before it has any children, via the item dialog's "Show as" field. Once a level has two or more of these, its other plain items automatically collect into a trailing "Other" group rather than getting lost between them. A "day" pin additionally picks a weekday - it's automatically titled with that day's own name, sorts to the front of its siblings as the nearest upcoming occurrence, and shows "Today"/"Tomorrow" right up until it rotates past, so a recurring "Bins day" or "Gym" item stays where it belongs with nothing to maintain by hand.
+- **Automatic day-rollover cleanup** - once a "day" pin's own weekday stops being "today", anything still checked off under it is removed, and anything still open moves onto an auto-created "Overdue" header with its due date set to the day that just passed - so yesterday's leftovers surface instead of silently sitting under a pin that's already moved on to next week.
 - **Quantities and tags** - overlay-only fields the native `todo.*` entity has no concept of, editable from the card or via services.
 - **Due-date automation triggers** - opt in per item, and an automation fires the moment the due date/time arrives - no polling, no bespoke per-list automation needed.
 - **Saved lists** - save a list's current structure as a reusable template, then load it back onto any `todo.*` entity (e.g. a recurring "Weekly shop" or "Pack for a trip" list).
@@ -58,6 +59,7 @@ or use the visual card editor from the dashboard's "Add Card" dialog, which also
 | `show_quick_add` | boolean | `true` | Show the quick-add ("+") toolbar icon. |
 | `show_filter_menu` | boolean | `false` | Show the filter toolbar icon (All/Active/Completed/Overdue). |
 | `show_reorder_toggle` | boolean | `true` | Show a toolbar icon that toggles reorder mode, revealing a dedicated drag handle on every row. Only visible on touch/coarse-pointer devices (CSS `@media (pointer: coarse)`) - mouse users never see it, since holding anywhere on a row already drags reliably for them. Touch has no reliable way to hold-and-drag from anywhere on a row (the browser's native scroll gesture wins that race almost every time), so this is how touch reorders instead. |
+| `weekday_anchor` | `top` \| `bottom` | `top` | Which side of its siblings a level's "day" pins (see Features above) block together at. Irrelevant for a list with no day-of-week pins. |
 
 ## Services
 
@@ -65,7 +67,7 @@ or use the visual card editor from the dashboard's "Add Card" dialog, which also
 | --- | --- |
 | `todo_overlay.create_item` | Create an item, including quantity/tags/pin/due-trigger fields the native `todo.add_item` has no concept of. |
 | `todo_overlay.set_quantity` | Set or clear an item's quantity. |
-| `todo_overlay.set_pin_type` | Set or clear an item's pin ("category" or "person") - see Features above. |
+| `todo_overlay.set_pin_type` | Set or clear an item's pin ("category", "person", or "day") - see Features above. "day" requires a `weekday` field too. |
 | `todo_overlay.add_tag` / `todo_overlay.remove_tag` | Add or remove a tag from an item. |
 | `todo_overlay.set_trigger_on_due` | Enable or disable the due-date automation trigger for an item (requires a due date and time already set). |
 | `todo_overlay.save_list` | Save a list's current items/hierarchy as a named, reusable template. |

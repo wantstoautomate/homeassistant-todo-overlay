@@ -29,10 +29,32 @@ export interface TodoItem {
     // pin a shared list's own organization relies on) that would
     // otherwise be one careless swipe away from being gone.
     delete_protected: boolean;
+    // Only meaningful alongside pin_type === "day" - which weekday
+    // (0=Monday..6=Sunday) this item represents, set once via the item
+    // dialog's own weekday picker and never itself touched by the
+    // passage of time. See day_label below for what actually changes
+    // day to day.
+    weekday: number | null;
+    // "Today"/"Tomorrow" if this "day" pin's own weekday is 0/1 days
+    // from today, else null (render its plain title instead) - a
+    // computed display overlay from the backend, recomputed fresh on
+    // every load; never sent back on save.
+    day_label: string | null;
     children: TodoItem[];
 }
 
-export type PinType = "category" | "person";
+export type PinType = "category" | "person" | "day";
+
+// Which side of its siblings a level's "day" pins (see PinType) block
+// together at - a per-card display preference, like group_completed,
+// never stored server-side. Irrelevant for a list with no "day" pins.
+export type WeekdayAnchor = "top" | "bottom";
+
+// Monday=0..Sunday=6, matching the backend's own convention (Python's
+// date.weekday()) - see TodoItem.weekday's own comment.
+export const WEEKDAY_NAMES: readonly string[] = [
+    "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday",
+];
 
 export interface TodoList {
     entity_id: string;

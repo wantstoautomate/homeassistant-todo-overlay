@@ -675,11 +675,12 @@ var o6 = e5(class extends i5 {
 });
 
 // src/api.ts
-async function getList(hass, entityId, groupCompleted) {
+async function getList(hass, entityId, groupCompleted, weekdayAnchor = "top") {
   return await hass.connection.sendMessagePromise({
     type: "todo_overlay/get_list",
     entity_id: entityId,
-    group_completed: groupCompleted
+    group_completed: groupCompleted,
+    weekday_anchor: weekdayAnchor
   });
 }
 async function moveItem(hass, entityId, childId, referenceId, placement) {
@@ -778,12 +779,13 @@ async function setDeleteProtected(hass, entityId, itemId, enabled) {
     enabled
   });
 }
-async function setPinType(hass, entityId, itemId, pinType) {
+async function setPinType(hass, entityId, itemId, pinType, weekday = void 0) {
   await hass.connection.sendMessagePromise({
     type: "todo_overlay/set_pin_type",
     entity_id: entityId,
     item_id: itemId,
-    pin_type: pinType
+    pin_type: pinType,
+    weekday
   });
 }
 async function linkItem(hass, entityId, itemId, targetParentId) {
@@ -875,6 +877,15 @@ function saveCollapsedIds(entityId, collapsedIds) {
 }
 
 // src/models.ts
+var WEEKDAY_NAMES = [
+  "Monday",
+  "Tuesday",
+  "Wednesday",
+  "Thursday",
+  "Friday",
+  "Saturday",
+  "Sunday"
+];
 var LONG_PRESS_MS = 500;
 var TodoListEntityFeature = {
   CREATE_TODO_ITEM: 1,
@@ -991,6 +1002,7 @@ var EMPTY_FORM_VALUE = {
   dueTime: "",
   triggerOnDue: false,
   pinType: "",
+  dayWeekday: "",
   linked: false,
   linkTarget: "",
   deleteProtected: false
@@ -1097,18 +1109,39 @@ var TodoItemDialog = class extends i4 {
       this.dueAmPm = "AM";
     }
   }
+  // Belt-and-suspenders alongside each <option>'s own ?selected
+  // binding in render() - a <select>'s selection state has real
+  // engine-specific quirks around exactly when a dynamically-mapped
+  // list of <option> children ends up reflected in the parent
+  // <select>'s own .value once rendering settles (confirmed live,
+  // not assumed: happy-dom's own handling of this specific pattern
+  // left the wrong option selected in this project's own test suite,
+  // despite each <option>'s ?selected binding being individually
+  // correct). Forcing it here, after every update, costs nothing when
+  // it's already right and guarantees it never drifts either way.
+  updated() {
+    const select = this.renderRoot.querySelector("#todo-item-day-weekday");
+    if (select && select.value !== this.draftValue.dayWeekday) {
+      select.value = this.draftValue.dayWeekday;
+    }
+  }
   close() {
     this.dispatchEvent(
       new CustomEvent("dialog-close", { bubbles: true, composed: true })
     );
   }
   save() {
-    if (this.triggerOnDueBlocked) {
+    if (this.triggerOnDueBlocked || this.dayPinMissingWeekday) {
       return;
     }
     this.dispatchEvent(
       new CustomEvent("dialog-save", {
-        detail: this.draftValue,
+        // effectiveTitle, not the possibly-stale raw title - a
+        // "day" pin's title is always its weekday's own name
+        // (see effectiveTitle's own comment); this keeps that
+        // true even before its own setPinType call runs, not
+        // just after.
+        detail: { ...this.draftValue, title: this.effectiveTitle },
         bubbles: true,
         composed: true
       })
@@ -1172,6 +1205,20 @@ var TodoItemDialog = class extends i4 {
   get isCreatingANewLink() {
     return this.draftValue.linked && !this.originallyLinked;
   }
+  // A "day" pin's title is always its weekday's own plain name (see
+  // the backend's own set_pin_type docstring) - the title input
+  // itself is disabled in that case (see render()), showing this
+  // computed preview instead of whatever raw title happens to be
+  // stored, so what's on screen always matches what saving will
+  // actually produce. "" (no weekday picked yet) shows a blank
+  // field rather than a stale leftover title.
+  get effectiveTitle() {
+    if (this.draftValue.pinType !== "day") {
+      return this.draftValue.title;
+    }
+    const index = Number(this.draftValue.dayWeekday);
+    return this.draftValue.dayWeekday !== "" && index >= 0 && index < WEEKDAY_NAMES.length ? WEEKDAY_NAMES[index] : "";
+  }
   updateField(field, fieldValue) {
     this.draftValue = { ...this.draftValue, [field]: fieldValue };
   }
@@ -1228,6 +1275,12 @@ var TodoItemDialog = class extends i4 {
   // round-trip error.
   get triggerOnDueBlocked() {
     return this.draftValue.triggerOnDue && !(this.draftValue.dueDate && this.draftValue.dueTime);
+  }
+  // Same "block Save rather than round-trip an error" reasoning as
+  // triggerOnDueBlocked above - the backend enforces this too (see
+  // WeekdayRequiredError).
+  get dayPinMissingWeekday() {
+    return this.draftValue.pinType === "day" && this.draftValue.dayWeekday === "";
   }
   // Rendered inline, full-width, right below .due-row - not as an
   // absolutely-positioned floating popup. ha-dialog's own content area
@@ -1291,7 +1344,9 @@ var TodoItemDialog = class extends i4 {
                         <input
                             id="todo-item-title"
                             type="text"
-                            .value=${this.draftValue.title}
+                            .value=${this.effectiveTitle}
+                            ?disabled=${this.draftValue.pinType === "day"}
+                            title=${this.draftValue.pinType === "day" ? "Set by the weekday picked below" : ""}
                             @input=${(e7) => this.updateField("title", e7.target.value)}
                         />
                     </div>
@@ -1354,12 +1409,36 @@ var TodoItemDialog = class extends i4 {
                         <option value="">Normal item</option>
                         <option value="category">Category (e.g. "Groceries")</option>
                         <option value="person">Person (e.g. "Brodie")</option>
+                        <option value="day">Day of week</option>
                     </select>
-                    ${this.draftValue.pinType ? b2`
+                    ${this.draftValue.pinType === "day" ? b2`
+                                <select
+                                    id="todo-item-day-weekday"
+                                    class="day-weekday-select"
+                                    @change=${(e7) => this.updateField("dayWeekday", e7.target.value)}
+                                >
+                                    <option value="" disabled ?selected=${this.draftValue.dayWeekday === ""}>
+                                        Which day?
+                                    </option>
+                                    ${WEEKDAY_NAMES.map(
+      (name, index) => b2`
+                                            <option
+                                                value=${index}
+                                                ?selected=${this.draftValue.dayWeekday === String(index)}
+                                            >${name}</option>
+                                        `
+    )}
+                                </select>
                                 <div class="field-hint pin-type-hint">
-                                    Always shown as a section header, even with nothing under it yet.
+                                    Always shown as a section header. Titled with the day's own name, and
+                                    reads "Today"/"Tomorrow" when it's due - both update automatically, so
+                                    there's nothing to maintain once it's set.
                                 </div>
-                            ` : ""}
+                            ` : this.draftValue.pinType ? b2`
+                                    <div class="field-hint pin-type-hint">
+                                        Always shown as a section header, even with nothing under it yet.
+                                    </div>
+                                ` : ""}
                 </div>
 
                 <div class="field">
@@ -1537,7 +1616,10 @@ var TodoItemDialog = class extends i4 {
                                                 Delete
                                             </button>
                                         ` : ""}
-                                <button @click=${this.save} ?disabled=${this.triggerOnDueBlocked}>
+                                <button
+                                    @click=${this.save}
+                                    ?disabled=${this.triggerOnDueBlocked || this.dayPinMissingWeekday}
+                                >
                                     Save
                                 </button>
                             `}
@@ -2532,7 +2614,7 @@ function isStructural(item) {
 function otherGroupId(parentId) {
   return `__other__:${parentId ?? "root"}`;
 }
-function groupSiblingsForDisplay(items, parentId) {
+function groupSiblingsForDisplay(items, parentId, weekdayAnchor = "top") {
   const structuralCount = items.reduce((count, item) => count + (isStructural(item) ? 1 : 0), 0);
   if (structuralCount < OTHER_BUCKET_THRESHOLD) {
     return items;
@@ -2558,10 +2640,13 @@ function groupSiblingsForDisplay(items, parentId) {
     pin_type: null,
     linked: false,
     delete_protected: false,
+    weekday: null,
+    day_label: null,
     children: plain,
     synthetic: true
   };
-  return [...structural, other];
+  const hasDayPins = structural.some((item) => item.pin_type === "day");
+  return hasDayPins && weekdayAnchor === "bottom" ? [other, ...structural] : [...structural, other];
 }
 
 // src/components/todo-tree-item.ts
@@ -2649,6 +2734,7 @@ var TodoTreeItem = class extends i4 {
     this.hoverDepth = 0;
     this.hideCompleteForParents = false;
     this.showCheckboxes = false;
+    this.weekdayAnchor = "top";
     this.confirmDelete = true;
     this.dragDisabled = false;
     this.collapsedIds = /* @__PURE__ */ new Set();
@@ -3153,7 +3239,7 @@ var TodoTreeItem = class extends i4 {
   render() {
     const isDropTarget = this.isDropTarget;
     const isBeingDragged = this.isBeingDragged;
-    const displayChildren = groupSiblingsForDisplay(this.item.children, this.item.id);
+    const displayChildren = groupSiblingsForDisplay(this.item.children, this.item.id, this.weekdayAnchor);
     const rowClasses = {
       row: true,
       pressed: this.isPressed && !isBeingDragged,
@@ -3255,7 +3341,7 @@ var TodoTreeItem = class extends i4 {
 
                                 <div class="content">
                                     <div class="title-line">
-                                        <span class=${e6({ summary: true, structural: this.isStructural })}>${this.item.title}</span>
+                                        <span class=${e6({ summary: true, structural: this.isStructural })}>${this.item.day_label ?? this.item.title}</span>
                                         ${this.item.quantity ? b2`<span class="quantity-chip">${this.item.quantity}</span>` : ""}
                                         ${status ? b2`
                                                     <span class=${e6({
@@ -3379,6 +3465,7 @@ var TodoTreeItem = class extends i4 {
                                             .hoverDepth=${this.hoverDepth}
                                             .hideCompleteForParents=${this.hideCompleteForParents}
                                             .showCheckboxes=${this.showCheckboxes}
+                                            .weekdayAnchor=${this.weekdayAnchor}
                                             .confirmDelete=${this.confirmDelete}
                                             .dragDisabled=${this.dragDisabled}
                                             .collapsedIds=${this.collapsedIds}
@@ -4087,6 +4174,9 @@ __decorateClass([
 ], TodoTreeItem.prototype, "showCheckboxes", 2);
 __decorateClass([
   n4({ attribute: false })
+], TodoTreeItem.prototype, "weekdayAnchor", 2);
+__decorateClass([
+  n4({ attribute: false })
 ], TodoTreeItem.prototype, "confirmDelete", 2);
 __decorateClass([
   n4({ attribute: false })
@@ -4140,6 +4230,7 @@ var TodoTree = class extends i4 {
     this.emptyDropHighlight = false;
     this.hideCompleteForParents = false;
     this.showCheckboxes = false;
+    this.weekdayAnchor = "top";
     this.confirmDelete = true;
     this.dragDisabled = false;
     this.collapsedIds = /* @__PURE__ */ new Set();
@@ -4149,7 +4240,7 @@ var TodoTree = class extends i4 {
     this.deleteModeActive = false;
   }
   render() {
-    const displayItems = groupSiblingsForDisplay(this.items, void 0);
+    const displayItems = groupSiblingsForDisplay(this.items, void 0, this.weekdayAnchor);
     return b2`
             <ul>
                 ${this.items.length === 0 ? b2`
@@ -4171,6 +4262,7 @@ var TodoTree = class extends i4 {
                                     .hoverDepth=${this.hoverDepth}
                                     .hideCompleteForParents=${this.hideCompleteForParents}
                                     .showCheckboxes=${this.showCheckboxes}
+                                    .weekdayAnchor=${this.weekdayAnchor}
                                     .confirmDelete=${this.confirmDelete}
                                     .dragDisabled=${this.dragDisabled}
                                     .collapsedIds=${this.collapsedIds}
@@ -4243,6 +4335,9 @@ __decorateClass([
 __decorateClass([
   n4({ attribute: false })
 ], TodoTree.prototype, "showCheckboxes", 2);
+__decorateClass([
+  n4({ attribute: false })
+], TodoTree.prototype, "weekdayAnchor", 2);
 __decorateClass([
   n4({ attribute: false })
 ], TodoTree.prototype, "confirmDelete", 2);
@@ -4578,6 +4673,7 @@ var TodoOverlayList = class extends i4 {
     this.showReorderToggle = true;
     this.moveCompletedItems = false;
     this.dragGhostStyle = "label";
+    this.weekdayAnchor = "top";
     this.collapsedIds = /* @__PURE__ */ new Set();
     this.filterMode = "all";
     this.addModeActive = false;
@@ -4837,7 +4933,8 @@ var TodoOverlayList = class extends i4 {
       this.list = await getList(
         this.hass,
         this.entity,
-        this.moveCompletedItems
+        this.moveCompletedItems,
+        this.weekdayAnchor
       );
       window.clearTimeout(this.errorTimer);
       this.error = void 0;
@@ -5153,6 +5250,7 @@ var TodoOverlayList = class extends i4 {
       dueTime: due.time,
       triggerOnDue: item.trigger_on_due,
       pinType: item.pin_type ?? "",
+      dayWeekday: item.weekday !== null ? String(item.weekday) : "",
       linked: item.linked,
       linkTarget: "",
       deleteProtected: item.delete_protected
@@ -5172,6 +5270,7 @@ var TodoOverlayList = class extends i4 {
     const quantity = value.quantity.trim() || void 0;
     const tags = value.tags.split(",").map((tag) => tag.trim()).filter((tag) => tag.length > 0);
     const pinType = value.pinType || void 0;
+    const weekday = pinType === "day" ? Number(value.dayWeekday) : void 0;
     try {
       if (this.dialogMode === "edit" && this.dialogItem) {
         await updateItem(this.hass, this.entity, this.dialogItem.id, {
@@ -5184,7 +5283,7 @@ var TodoOverlayList = class extends i4 {
           setQuantity(this.hass, this.entity, this.dialogItem.id, quantity),
           setTags(this.hass, this.entity, this.dialogItem.id, tags),
           setTriggerOnDue(this.hass, this.entity, this.dialogItem.id, value.triggerOnDue),
-          setPinType(this.hass, this.entity, this.dialogItem.id, pinType),
+          setPinType(this.hass, this.entity, this.dialogItem.id, pinType, weekday),
           setDeleteProtected(this.hass, this.entity, this.dialogItem.id, value.deleteProtected)
         ]);
         if (value.linked && !this.dialogItem.linked) {
@@ -5308,6 +5407,7 @@ var TodoOverlayList = class extends i4 {
                     .emptyDropHighlight=${this.isEmptyDropTarget}
                     .hideCompleteForParents=${this.hideCompleteForParents}
                     .showCheckboxes=${this.showCheckboxes}
+                    .weekdayAnchor=${this.weekdayAnchor}
                     .confirmDelete=${this.confirmDelete}
                     .dragDisabled=${this.dragDisabled}
                     .collapsedIds=${this.collapsedIds}
@@ -5339,6 +5439,7 @@ var TodoOverlayList = class extends i4 {
                     .emptyDropHighlight=${this.isEmptyDropTarget}
                     .hideCompleteForParents=${this.hideCompleteForParents}
                     .showCheckboxes=${this.showCheckboxes}
+                    .weekdayAnchor=${this.weekdayAnchor}
                     .confirmDelete=${this.confirmDelete}
                     .dragDisabled=${this.dragDisabled}
                     .collapsedIds=${this.collapsedIds}
@@ -5370,6 +5471,7 @@ var TodoOverlayList = class extends i4 {
                             .hoverDepth=${this.hoverDepth}
                             .hideCompleteForParents=${this.hideCompleteForParents}
                             .showCheckboxes=${this.showCheckboxes}
+                            .weekdayAnchor=${this.weekdayAnchor}
                             .confirmDelete=${this.confirmDelete}
                             .dragDisabled=${this.dragDisabled}
                             .collapsedIds=${this.collapsedIds}
@@ -5398,6 +5500,7 @@ var TodoOverlayList = class extends i4 {
                 .hoverDepth=${this.hoverDepth}
                 .hideCompleteForParents=${this.hideCompleteForParents}
                 .showCheckboxes=${this.showCheckboxes}
+                .weekdayAnchor=${this.weekdayAnchor}
                 .confirmDelete=${this.confirmDelete}
                 .dragDisabled=${this.dragDisabled}
                 .collapsedIds=${this.collapsedIds}
@@ -6145,6 +6248,9 @@ __decorateClass([
   n4()
 ], TodoOverlayList.prototype, "dragGhostStyle", 2);
 __decorateClass([
+  n4()
+], TodoOverlayList.prototype, "weekdayAnchor", 2);
+__decorateClass([
   r5()
 ], TodoOverlayList.prototype, "list", 2);
 __decorateClass([
@@ -6558,6 +6664,7 @@ var TodoOverlayCard = class extends i4 {
                             .showReorderToggle=${this.config.show_reorder_toggle ?? true}
                             .moveCompletedItems=${this.config.move_completed_items ?? false}
                             .dragGhostStyle=${this.config.drag_ghost_style ?? "label"}
+                            .weekdayAnchor=${this.config.weekday_anchor ?? "top"}
                         ></todo-overlay-list>
                     </div>
                 `)}

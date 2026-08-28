@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from .models import ItemPosition, TodoItem, TodoList
+from .manager_types import WeekdayAnchor
+from .models import ItemPosition, ListMetadata, TodoItem, TodoList
 from .tree import build_tree
 
 
@@ -15,6 +16,7 @@ class TreeMixin:
         self,
         entity_id: str,
         group_completed: bool = False,
+        weekday_anchor: WeekdayAnchor = "top",
     ) -> TodoList:
         """Return a Todo list.
 
@@ -23,60 +25,67 @@ class TreeMixin:
         default, so a plain read reflects stored order regardless of
         completion.
 
-        Before building the tree, items that share a title with a
-        sibling are merged together (combining their quantities where
-        possible) - see _merge_duplicate_titles(). Running this on
-        every read, rather than only when our own UI creates an item,
-        is what makes it catch duplicates added through ANY path: a
-        voice assistant or automation calling todo.add_item directly
-        bypasses this integration entirely, but our card already
-        reactively re-reads the list whenever the entity's state
-        changes (see the live-sync handling in the frontend), so those
-        additions still end up back through here.
+        weekday_anchor picks which end of its siblings a level's "day"
+        pins (see manager_types.PIN_TYPES) block together at - a plain
+        per-call parameter sourced from the card's own config, exactly
+        like group_completed, never stored; irrelevant for a list with
+        no "day" pins at all.
+
+        Before building the tree: any "day" pin whose weekday just
+        stopped being "today" is rolled over (see manager_rollover.py -
+        completed children removed, incomplete ones moved to an
+        auto-created "Overdue" parent), then items that share a title
+        with a sibling are merged together (combining their quantities
+        where possible - see _merge_duplicate_titles()). Both run on
+        every read, rather than only when our own UI causes them, so
+        they catch changes made through ANY path: a voice assistant or
+        automation calling todo.add_item directly bypasses this
+        integration entirely, but our card already reactively re-reads
+        the list whenever the entity's state changes (see the live-sync
+        handling in the frontend), so those additions still end up back
+        through here.
         """
 
         async with self._lock_for(entity_id):
-            return await self._get_list_impl(entity_id, group_completed)
+            return await self._get_list_impl(entity_id, group_completed, weekday_anchor)
 
-    async def _get_list_impl(self, entity_id: str, group_completed: bool = False) -> TodoList:
+    async def _get_list_impl(
+        self,
+        entity_id: str,
+        group_completed: bool = False,
+        weekday_anchor: WeekdayAnchor = "top",
+    ) -> TodoList:
         """The actual body of get_list(), callable by other locked public
         methods (see save_list) without re-entering self._lock_for(),
         since asyncio.Lock isn't reentrant and get_list() already holds
         it for the entity by the time such a caller reaches here."""
 
         items = await self._adapter.get_items(entity_id)
+        positions = await self._metadata_store.get_relationships(entity_id)
+        metadata = await self._load_metadata(entity_id)
 
-        positions = await self._metadata_store.get_relationships(
-            entity_id,
-        )
-
-        quantities = await self._metadata_store.get_quantities(entity_id)
-        tags = await self._metadata_store.get_tags(entity_id)
-        trigger_on_due = await self._metadata_store.get_trigger_on_due(entity_id)
-        pin_types = await self._metadata_store.get_pin_types(entity_id)
-        item_links = await self._metadata_store.get_item_links(entity_id)
-        delete_protected = await self._metadata_store.get_delete_protected(entity_id)
-
-        items, positions, quantities, tags, trigger_on_due, pin_types, item_links, delete_protected = (
-            await self._reconcile_orphaned_metadata(
-                entity_id, items, positions, quantities, tags, trigger_on_due, pin_types, item_links,
-                delete_protected,
-            )
-        )
-
-        items, positions, quantities, tags, trigger_on_due, pin_types, item_links, delete_protected = (
-            await self._merge_duplicate_titles(
-                entity_id, items, positions, quantities, tags, trigger_on_due, pin_types, item_links,
-                delete_protected,
-            )
-        )
+        items, positions, metadata = await self._process_day_rollovers(entity_id, items, positions, metadata)
+        items, positions, metadata = await self._reconcile_orphaned_metadata(entity_id, items, positions, metadata)
+        items, positions, metadata = await self._merge_duplicate_titles(entity_id, items, positions, metadata)
 
         return TodoList(
             entity_id=entity_id,
             items=build_tree(
-                items, positions, quantities, tags, trigger_on_due, group_completed, pin_types,
-                set(item_links), delete_protected,
+                items, positions, metadata.quantities, metadata.tags, metadata.trigger_on_due,
+                group_completed, metadata.pin_types, set(metadata.item_links), metadata.delete_protected,
+                metadata.weekdays, self._today_weekday_fn(), weekday_anchor,
             ),
+        )
+
+    async def _load_metadata(self, entity_id: str) -> ListMetadata:
+        return ListMetadata(
+            quantities=await self._metadata_store.get_quantities(entity_id),
+            tags=await self._metadata_store.get_tags(entity_id),
+            trigger_on_due=await self._metadata_store.get_trigger_on_due(entity_id),
+            pin_types=await self._metadata_store.get_pin_types(entity_id),
+            item_links=await self._metadata_store.get_item_links(entity_id),
+            delete_protected=await self._metadata_store.get_delete_protected(entity_id),
+            weekdays=await self._metadata_store.get_weekdays(entity_id),
         )
 
     async def _reconcile_orphaned_metadata(
@@ -84,19 +93,12 @@ class TreeMixin:
         entity_id: str,
         items: list[TodoItem],
         positions: dict[str, ItemPosition],
-        quantities: dict[str, str],
-        tags: dict[str, list[str]],
-        trigger_on_due: set[str],
-        pin_types: dict[str, str],
-        item_links: dict[str, dict[str, str]],
-        delete_protected: set[str],
-    ) -> tuple[
-        list[TodoItem], dict[str, ItemPosition], dict[str, str], dict[str, list[str]], set[str], dict[str, str],
-        dict[str, dict[str, str]], set[str],
-    ]:
+        metadata: ListMetadata,
+    ) -> tuple[list[TodoItem], dict[str, ItemPosition], ListMetadata]:
         """Drop stored positions/quantities/tags/trigger_on_due/pin_type/
-        item_link/delete_protected (and the scheduler's due_fired
-        bookkeeping) for ids that no longer exist on the native list.
+        item_link/delete_protected/weekday (and the scheduler's
+        due_fired bookkeeping) for ids that no longer exist on the
+        native list.
 
         An item can disappear through paths this integration never sees -
         the native todo card, a voice assistant, an automation calling
@@ -116,13 +118,16 @@ class TreeMixin:
         """
 
         live_ids = {item.id for item in items}
-        orphaned_set = set()
+        orphaned_set: set[str] = set()
 
-        for source in (positions, quantities, tags, trigger_on_due, pin_types, item_links, delete_protected):
+        for source in (
+            positions, metadata.quantities, metadata.tags, metadata.trigger_on_due, metadata.pin_types,
+            metadata.item_links, metadata.delete_protected, metadata.weekdays,
+        ):
             orphaned_set.update(item_id for item_id in source if item_id not in live_ids)
 
         if not orphaned_set:
-            return items, positions, quantities, tags, trigger_on_due, pin_types, item_links, delete_protected
+            return items, positions, metadata
 
         orphaned = list(orphaned_set)
 
@@ -133,35 +138,31 @@ class TreeMixin:
         await self._metadata_store.remove_due_fired_for_items(entity_id, orphaned)
         await self._metadata_store.remove_pin_types(entity_id, orphaned)
         await self._metadata_store.remove_delete_protected_for_items(entity_id, orphaned)
+        await self._metadata_store.remove_weekdays(entity_id, orphaned)
 
         for item_id in orphaned:
             await self._metadata_store.remove_item_link(entity_id, item_id)
 
         positions = {k: v for k, v in positions.items() if k not in orphaned_set}
-        quantities = {k: v for k, v in quantities.items() if k not in orphaned_set}
-        tags = {k: v for k, v in tags.items() if k not in orphaned_set}
-        trigger_on_due = {item_id for item_id in trigger_on_due if item_id not in orphaned_set}
-        pin_types = {k: v for k, v in pin_types.items() if k not in orphaned_set}
-        item_links = {k: v for k, v in item_links.items() if k not in orphaned_set}
-        delete_protected = {item_id for item_id in delete_protected if item_id not in orphaned_set}
+        metadata = ListMetadata(
+            quantities={k: v for k, v in metadata.quantities.items() if k not in orphaned_set},
+            tags={k: v for k, v in metadata.tags.items() if k not in orphaned_set},
+            trigger_on_due={i for i in metadata.trigger_on_due if i not in orphaned_set},
+            pin_types={k: v for k, v in metadata.pin_types.items() if k not in orphaned_set},
+            item_links={k: v for k, v in metadata.item_links.items() if k not in orphaned_set},
+            delete_protected={i for i in metadata.delete_protected if i not in orphaned_set},
+            weekdays={k: v for k, v in metadata.weekdays.items() if k not in orphaned_set},
+        )
 
-        return items, positions, quantities, tags, trigger_on_due, pin_types, item_links, delete_protected
+        return items, positions, metadata
 
     async def _merge_duplicate_titles(
         self,
         entity_id: str,
         items: list[TodoItem],
         positions: dict[str, ItemPosition],
-        quantities: dict[str, str],
-        tags: dict[str, list[str]],
-        trigger_on_due: set[str],
-        pin_types: dict[str, str],
-        item_links: dict[str, dict[str, str]],
-        delete_protected: set[str],
-    ) -> tuple[
-        list[TodoItem], dict[str, ItemPosition], dict[str, str], dict[str, list[str]], set[str], dict[str, str],
-        dict[str, dict[str, str]], set[str],
-    ]:
+        metadata: ListMetadata,
+    ) -> tuple[list[TodoItem], dict[str, ItemPosition], ListMetadata]:
         """Collapse sibling items that share a title into one, combining
         their quantities where possible (see _combine_quantities) and
         unioning their tags.
@@ -177,6 +178,14 @@ class TreeMixin:
         any children the removed duplicate had are reparented onto it
         rather than being silently orphaned or lost.
         """
+
+        quantities = metadata.quantities
+        tags = metadata.tags
+        trigger_on_due = metadata.trigger_on_due
+        pin_types = metadata.pin_types
+        item_links = metadata.item_links
+        delete_protected = metadata.delete_protected
+        weekdays = metadata.weekdays
 
         groups: dict[tuple[str | None, str], list[TodoItem]] = {}
 
@@ -203,6 +212,14 @@ class TreeMixin:
             # survivor has none at all, so a merge never silently drops
             # a pin that was only ever set on the duplicate being removed.
             combined_pin_type = pin_types.get(survivor.id)
+            # Same "survivor wins, duplicate only fills a gap" rule -
+            # only ever meaningful alongside pin_type == "day", and a
+            # day pin's title IS its weekday's own name (see
+            # set_pin_type), so two same-titled day pins can only ever
+            # already agree on this by construction; kept in step with
+            # pin_type here purely for consistency, not because a real
+            # mismatch is expected.
+            combined_weekday = weekdays.get(survivor.id)
             # Same "survivor wins, duplicate only fills a gap" rule as
             # pin_type above - but a link is a TWO-sided relationship
             # (see item_links.py), so adopting the duplicate's own link
@@ -233,6 +250,9 @@ class TreeMixin:
 
                 if combined_pin_type is None:
                     combined_pin_type = pin_types.get(duplicate.id)
+
+                if combined_weekday is None:
+                    combined_weekday = weekdays.get(duplicate.id)
 
                 if combined_item_link is None:
                     combined_item_link = item_links.get(duplicate.id)
@@ -281,6 +301,10 @@ class TreeMixin:
                 await self._metadata_store.set_pin_type(entity_id, survivor.id, combined_pin_type)
                 pin_types[survivor.id] = combined_pin_type
 
+            if combined_weekday is not None and weekdays.get(survivor.id) != combined_weekday:
+                await self._metadata_store.set_weekday(entity_id, survivor.id, combined_weekday)
+                weekdays[survivor.id] = combined_weekday
+
             if combined_item_link and item_links.get(survivor.id) != combined_item_link:
                 await self._metadata_store.set_item_link(
                     entity_id, survivor.id,
@@ -308,7 +332,7 @@ class TreeMixin:
             await self._metadata_store.set_positions(entity_id, reparented)
 
         if not removed_ids:
-            return items, positions, quantities, tags, trigger_on_due, pin_types, item_links, delete_protected
+            return items, positions, metadata
 
         await self._metadata_store.remove_positions(entity_id, removed_ids)
         await self._metadata_store.remove_quantities(entity_id, removed_ids)
@@ -317,6 +341,7 @@ class TreeMixin:
         await self._metadata_store.remove_due_fired_for_items(entity_id, removed_ids)
         await self._metadata_store.remove_pin_types(entity_id, removed_ids)
         await self._metadata_store.remove_delete_protected_for_items(entity_id, removed_ids)
+        await self._metadata_store.remove_weekdays(entity_id, removed_ids)
 
         for removed_id in removed_ids:
             await self._metadata_store.remove_item_link(entity_id, removed_id)
@@ -324,11 +349,14 @@ class TreeMixin:
         removed_id_set = set(removed_ids)
         items = [item for item in items if item.id not in removed_id_set]
         positions = {k: v for k, v in positions.items() if k not in removed_id_set}
-        quantities = {k: v for k, v in quantities.items() if k not in removed_id_set}
-        tags = {k: v for k, v in tags.items() if k not in removed_id_set}
-        trigger_on_due = {item_id for item_id in trigger_on_due if item_id not in removed_id_set}
-        pin_types = {k: v for k, v in pin_types.items() if k not in removed_id_set}
-        item_links = {k: v for k, v in item_links.items() if k not in removed_id_set}
-        delete_protected = {item_id for item_id in delete_protected if item_id not in removed_id_set}
+        metadata = ListMetadata(
+            quantities={k: v for k, v in quantities.items() if k not in removed_id_set},
+            tags={k: v for k, v in tags.items() if k not in removed_id_set},
+            trigger_on_due={i for i in trigger_on_due if i not in removed_id_set},
+            pin_types={k: v for k, v in pin_types.items() if k not in removed_id_set},
+            item_links={k: v for k, v in item_links.items() if k not in removed_id_set},
+            delete_protected={i for i in delete_protected if i not in removed_id_set},
+            weekdays={k: v for k, v in weekdays.items() if k not in removed_id_set},
+        )
 
-        return items, positions, quantities, tags, trigger_on_due, pin_types, item_links, delete_protected
+        return items, positions, metadata

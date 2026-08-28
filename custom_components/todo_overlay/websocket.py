@@ -41,6 +41,7 @@ from .errors import (
     ItemLinkTargetNotFoundError,
     ItemNotFoundError,
     SnapshotNotFoundError,
+    WeekdayRequiredError,
 )
 from .runtime_data import get_item_links, get_manager, get_metadata_store
 
@@ -61,6 +62,7 @@ _ERROR_CODES: dict[type[Exception], str] = {
     InvalidPinTypeError: "invalid_pin_type",
     ItemLinkTargetNotFoundError: "item_link_target_not_found",
     ItemDeleteProtectedError: "item_delete_protected",
+    WeekdayRequiredError: "weekday_required",
 }
 
 WebSocketHandler = Callable[
@@ -98,6 +100,7 @@ def _handle_manager_errors(handler: WebSocketHandler) -> WebSocketHandler:
         vol.Required("type"): WS_TYPE_GET_LIST,
         vol.Required("entity_id"): cv.entity_id,
         vol.Optional("group_completed", default=False): bool,
+        vol.Optional("weekday_anchor", default="top"): vol.In(["top", "bottom"]),
     }
 )
 @websocket_api.async_response
@@ -115,6 +118,7 @@ async def websocket_get_list(
     todo_list = await manager.get_list(
         msg["entity_id"],
         group_completed=msg["group_completed"],
+        weekday_anchor=msg["weekday_anchor"],
     )
 
     link = await metadata_store.get_link(msg["entity_id"])
@@ -548,7 +552,8 @@ async def websocket_set_quantity(
         vol.Required("type"): WS_TYPE_SET_PIN_TYPE,
         vol.Required("entity_id"): cv.entity_id,
         vol.Required("item_id"): str,
-        vol.Optional("pin_type"): vol.In(["category", "person"]),
+        vol.Optional("pin_type"): vol.In(["category", "person", "day"]),
+        vol.Optional("weekday"): vol.All(int, vol.Range(min=0, max=6)),
     }
 )
 @websocket_api.async_response
@@ -558,7 +563,9 @@ async def websocket_set_pin_type(
     connection: websocket_api.ActiveConnection,
     msg,
 ) -> None:
-    """Set (or clear) an item's pin type."""
+    """Set (or clear) an item's pin type. weekday (0=Monday..6=Sunday)
+    is required alongside pin_type="day" - see TodoManager.set_pin_type's
+    own docstring."""
 
     manager = get_manager(hass)
 
@@ -566,6 +573,7 @@ async def websocket_set_pin_type(
         entity_id=msg["entity_id"],
         item_id=msg["item_id"],
         pin_type=msg.get("pin_type"),
+        weekday=msg.get("weekday"),
     )
 
     connection.send_result(msg["id"])

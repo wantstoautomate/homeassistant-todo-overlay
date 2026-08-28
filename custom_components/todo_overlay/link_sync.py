@@ -5,9 +5,10 @@ broker involved.
 
 Scope, deliberately (see the architecture discussion this was designed
 against):
-- Item CONTENT syncs (title, completed, description, due_date/
-  due_datetime, quantity, tags) AND position/hierarchy (parent +
-  before/after/inside a sibling - see _compute_position_message/
+- Item CONTENT syncs (see _SYNCED_FIELDS: title, completed, description,
+  due_date/due_datetime, quantity, tags, pin_type, weekday,
+  delete_protected) AND position/hierarchy (parent + before/after/inside
+  a sibling - see _compute_position_message/
   _apply_incoming_position) - both ride the same last-write-wins-by-
   timestamp message a content change already used alone. Position is
   necessarily best-effort, not strongly consistent: two sides
@@ -60,7 +61,7 @@ _LOGGER = logging.getLogger(__name__)
 
 _SYNCED_FIELDS = (
     "title", "completed", "description", "due_date", "due_datetime", "quantity", "tags", "pin_type",
-    "delete_protected",
+    "weekday", "delete_protected",
 )
 
 # Fired directly on this instance's own event bus after successfully
@@ -107,6 +108,14 @@ def _sanitize_incoming_fields(fields: dict[str, Any] | None) -> dict[str, Any] |
     pin_type = fields.get("pin_type")
     pin_type = pin_type if pin_type in PIN_TYPES else None
 
+    # Only meaningful (and only ever present) alongside pin_type ==
+    # "day" - see manager_items.py's own set_pin_type - but sanitized
+    # unconditionally here regardless of pin_type, same as every other
+    # field, since this function's only job is "is this a well-formed
+    # value of its own type", not cross-field business logic.
+    weekday = fields.get("weekday")
+    weekday = weekday if isinstance(weekday, int) and 0 <= weekday <= 6 else None
+
     return {
         "title": title[:_MAX_TEXT_LENGTH],
         "completed": bool(fields.get("completed")),
@@ -116,6 +125,7 @@ def _sanitize_incoming_fields(fields: dict[str, Any] | None) -> dict[str, Any] |
         "quantity": _text(fields.get("quantity"), 64),
         "tags": tags,
         "pin_type": pin_type,
+        "weekday": weekday,
         "delete_protected": bool(fields.get("delete_protected")),
     }
 
@@ -297,6 +307,7 @@ class LinkSyncManager:
         quantities = await self._metadata_store.get_quantities(entity_id)
         tags = await self._metadata_store.get_tags(entity_id)
         pin_types = await self._metadata_store.get_pin_types(entity_id)
+        weekdays = await self._metadata_store.get_weekdays(entity_id)
         delete_protected = await self._metadata_store.get_delete_protected(entity_id)
 
         fields = {
@@ -308,6 +319,7 @@ class LinkSyncManager:
             "quantity": quantities.get(item_id),
             "tags": tags.get(item_id, []),
             "pin_type": pin_types.get(item_id),
+            "weekday": weekdays.get(item_id),
             "delete_protected": item_id in delete_protected,
         }
 
@@ -653,6 +665,9 @@ class LinkSyncManager:
             if pin_type:
                 await self._metadata_store.set_pin_type(entity_id, native_uid, pin_type)
 
+            if pin_type == "day":
+                await self._metadata_store.set_weekday(entity_id, native_uid, fields.get("weekday"))
+
             if fields.get("delete_protected"):
                 await self._metadata_store.set_delete_protected(entity_id, native_uid, True)
 
@@ -672,6 +687,10 @@ class LinkSyncManager:
             await self._metadata_store.set_quantity(entity_id, native_uid, fields.get("quantity"))
             await self._metadata_store.set_tags(entity_id, native_uid, fields.get("tags") or [])
             await self._metadata_store.set_pin_type(entity_id, native_uid, fields.get("pin_type"))
+            await self._metadata_store.set_weekday(
+                entity_id, native_uid,
+                fields.get("weekday") if fields.get("pin_type") == "day" else None,
+            )
             await self._metadata_store.set_delete_protected(
                 entity_id, native_uid, bool(fields.get("delete_protected"))
             )

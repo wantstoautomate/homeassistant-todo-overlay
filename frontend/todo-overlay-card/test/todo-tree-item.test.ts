@@ -179,6 +179,26 @@ describe("todo-overlay-tree-item", () => {
         expect(category.shadowRoot?.querySelector(".summary")?.classList.contains("structural")).toBe(true);
     });
 
+    it("renders a 'day' pin's own day_label instead of its stored title when set", async () => {
+        const today = await renderItem(
+            makeItem({pin_type: "day", weekday: 2, title: "Wednesday", day_label: "Today"}),
+        );
+        expect(today.shadowRoot?.querySelector(".summary")?.textContent).toBe("Today");
+        expect(today.shadowRoot?.querySelector(".summary")?.classList.contains("structural")).toBe(true);
+    });
+
+    it("falls back to the stored title for a 'day' pin with no day_label (not due soon)", async () => {
+        const friday = await renderItem(
+            makeItem({pin_type: "day", weekday: 4, title: "Friday", day_label: null}),
+        );
+        expect(friday.shadowRoot?.querySelector(".summary")?.textContent).toBe("Friday");
+    });
+
+    it("never renders an avatar for a 'day' pin (only 'person' gets one)", async () => {
+        const el = await renderItem(makeItem({pin_type: "day", weekday: 2, title: "Wednesday"}));
+        expect(el.shadowRoot?.querySelector(".person-avatar")).toBeNull();
+    });
+
     it("hides the checkbox unconditionally for a pinned item, even with showCheckboxes and hideCompleteForParents both off", async () => {
         const el = await renderItem(
             makeItem({pin_type: "category", title: "Groceries"}),

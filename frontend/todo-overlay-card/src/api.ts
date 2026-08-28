@@ -1,16 +1,18 @@
 import type { HassLike } from "./hass";
-import type { LoadMode, PinType, Placement, TodoList } from "./models";
+import type { LoadMode, PinType, Placement, TodoList, WeekdayAnchor } from "./models";
 
 export async function getList(
     hass: HassLike,
     entityId: string,
     groupCompleted: boolean,
+    weekdayAnchor: WeekdayAnchor = "top",
 ): Promise<TodoList> {
 
     return await hass.connection.sendMessagePromise<TodoList>({
         type: "todo_overlay/get_list",
         entity_id: entityId,
         group_completed: groupCompleted,
+        weekday_anchor: weekdayAnchor,
     });
 
 }
@@ -234,6 +236,7 @@ export async function setPinType(
     entityId: string,
     itemId: string,
     pinType: PinType | undefined,
+    weekday: number | undefined = undefined,
 ): Promise<void> {
 
     await hass.connection.sendMessagePromise<void>({
@@ -241,6 +244,7 @@ export async function setPinType(
         entity_id: entityId,
         item_id: itemId,
         pin_type: pinType,
+        weekday,
     });
 
 }

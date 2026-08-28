@@ -54,6 +54,18 @@ class TodoItem:
     # one careless swipe or a "clear completed" tap away from being
     # gone. See manager_items.py's set_delete_protected.
     delete_protected: bool = False
+    # Only meaningful alongside pin_type == "day" - which weekday this
+    # item represents (0=Monday..6=Sunday, see manager_types.
+    # WEEKDAY_NAMES), stored permanently and never itself changed by
+    # the passage of time. See day_label below for what DOES change day
+    # to day - tree.py's build_tree computes both from this plus
+    # today's actual weekday.
+    weekday: int | None = None
+    # "Today"/"Tomorrow" if this "day" pin's own weekday is 0/1 days
+    # from today, else None (render its plain title instead) - purely a
+    # computed display overlay, recomputed fresh on every read from
+    # weekday above and the current date; nothing here is ever stored.
+    day_label: str | None = None
     children: list["TodoItem"] = field(default_factory=list)
 
     def to_dict(self) -> dict:
@@ -70,8 +82,33 @@ class TodoItem:
             "pin_type": self.pin_type,
             "linked": self.linked,
             "delete_protected": self.delete_protected,
+            "weekday": self.weekday,
+            "day_label": self.day_label,
             "children": [child.to_dict() for child in self.children],
         }
+
+
+@dataclass(slots=True)
+class ListMetadata:
+    """Every per-item overlay field MetadataStore tracks for one entity,
+    bundled together purely so manager_tree.py's own reconciliation/merge
+    passes (and now the day-rollover pass - see manager_rollover.py)
+    thread ONE value through instead of one positional parameter per
+    field. Grew out of exactly that problem: each new overlay field
+    (quantity, tags, trigger_on_due, pin_type, item_links,
+    delete_protected, weekday) had been adding another position to an
+    already-long parameter list and return tuple, in the same order,
+    every time - this replaces that with named, self-documenting
+    attributes instead. Purely a data bag: nothing here validates or
+    interprets these fields itself, same as before this existed."""
+
+    quantities: dict[str, str]
+    tags: dict[str, list[str]]
+    trigger_on_due: set[str]
+    pin_types: dict[str, str]
+    item_links: dict[str, dict[str, str]]
+    delete_protected: set[str]
+    weekdays: dict[str, int]
 
 
 @dataclass(slots=True)

@@ -3,6 +3,7 @@ import {customElement, property, state} from "lit/decorators.js";
 import {classMap} from "lit/directives/class-map.js";
 
 import type {PinType} from "../models";
+import {WEEKDAY_NAMES} from "../models";
 
 const CALENDAR_ICON = html`
     <svg viewBox="0 0 24 24">
@@ -37,6 +38,13 @@ export interface TodoItemFormValue {
     // so it can sit in the same string-keyed updateField() path every
     // other text field already goes through.
     pinType: "" | PinType;
+    // Only meaningful alongside pinType === "day" - a plain <select>
+    // value ("" | "0".."6", see models.ts's own WEEKDAY_NAMES), same
+    // "fits the string-keyed updateField() path" reasoning as pinType
+    // above. onDialogSave converts this to a real number (or undefined)
+    // before sending it - see its own comment for why the title field
+    // is disabled once this is anything but "".
+    dayWeekday: string;
     // Mirrors this item onto another item elsewhere - possibly on a
     // completely different todo.* entity (see the backend's own
     // item_links.py) - e.g. "Tent" here mirrored onto "Brodie" on a
@@ -77,6 +85,7 @@ export const EMPTY_FORM_VALUE: TodoItemFormValue = {
     dueTime: "",
     triggerOnDue: false,
     pinType: "",
+    dayWeekday: "",
     linked: false,
     linkTarget: "",
     deleteProtected: false,
@@ -607,6 +616,24 @@ export class TodoItemDialog extends LitElement {
         }
     }
 
+    // Belt-and-suspenders alongside each <option>'s own ?selected
+    // binding in render() - a <select>'s selection state has real
+    // engine-specific quirks around exactly when a dynamically-mapped
+    // list of <option> children ends up reflected in the parent
+    // <select>'s own .value once rendering settles (confirmed live,
+    // not assumed: happy-dom's own handling of this specific pattern
+    // left the wrong option selected in this project's own test suite,
+    // despite each <option>'s ?selected binding being individually
+    // correct). Forcing it here, after every update, costs nothing when
+    // it's already right and guarantees it never drifts either way.
+    protected updated(): void {
+        const select = this.renderRoot.querySelector("#todo-item-day-weekday") as HTMLSelectElement | null;
+
+        if (select && select.value !== this.draftValue.dayWeekday) {
+            select.value = this.draftValue.dayWeekday;
+        }
+    }
+
     private close() {
         this.dispatchEvent(
             new CustomEvent("dialog-close", {bubbles: true, composed: true}),
@@ -614,13 +641,18 @@ export class TodoItemDialog extends LitElement {
     }
 
     private save() {
-        if (this.triggerOnDueBlocked) {
+        if (this.triggerOnDueBlocked || this.dayPinMissingWeekday) {
             return;
         }
 
         this.dispatchEvent(
             new CustomEvent("dialog-save", {
-                detail: this.draftValue,
+                // effectiveTitle, not the possibly-stale raw title - a
+                // "day" pin's title is always its weekday's own name
+                // (see effectiveTitle's own comment); this keeps that
+                // true even before its own setPinType call runs, not
+                // just after.
+                detail: {...this.draftValue, title: this.effectiveTitle},
                 bubbles: true,
                 composed: true,
             }),
@@ -695,6 +727,25 @@ export class TodoItemDialog extends LitElement {
         return this.draftValue.linked && !this.originallyLinked;
     }
 
+    // A "day" pin's title is always its weekday's own plain name (see
+    // the backend's own set_pin_type docstring) - the title input
+    // itself is disabled in that case (see render()), showing this
+    // computed preview instead of whatever raw title happens to be
+    // stored, so what's on screen always matches what saving will
+    // actually produce. "" (no weekday picked yet) shows a blank
+    // field rather than a stale leftover title.
+    private get effectiveTitle(): string {
+        if (this.draftValue.pinType !== "day") {
+            return this.draftValue.title;
+        }
+
+        const index = Number(this.draftValue.dayWeekday);
+
+        return this.draftValue.dayWeekday !== "" && index >= 0 && index < WEEKDAY_NAMES.length
+            ? WEEKDAY_NAMES[index]
+            : "";
+    }
+
     private updateField(field: keyof Omit<TodoItemFormValue, "triggerOnDue" | "linked" | "deleteProtected">, fieldValue: string) {
         this.draftValue = {...this.draftValue, [field]: fieldValue};
     }
@@ -760,6 +811,13 @@ export class TodoItemDialog extends LitElement {
     // round-trip error.
     private get triggerOnDueBlocked(): boolean {
         return this.draftValue.triggerOnDue && !(this.draftValue.dueDate && this.draftValue.dueTime);
+    }
+
+    // Same "block Save rather than round-trip an error" reasoning as
+    // triggerOnDueBlocked above - the backend enforces this too (see
+    // WeekdayRequiredError).
+    private get dayPinMissingWeekday(): boolean {
+        return this.draftValue.pinType === "day" && this.draftValue.dayWeekday === "";
     }
 
     // Rendered inline, full-width, right below .due-row - not as an
@@ -830,7 +888,13 @@ export class TodoItemDialog extends LitElement {
                         <input
                             id="todo-item-title"
                             type="text"
-                            .value=${this.draftValue.title}
+                            .value=${this.effectiveTitle}
+                            ?disabled=${this.draftValue.pinType === "day"}
+                            title=${
+                                this.draftValue.pinType === "day"
+                                    ? "Set by the weekday picked below"
+                                    : ""
+                            }
                             @input=${(e: InputEvent) =>
                                 this.updateField("title", (e.target as HTMLInputElement).value)}
                         />
@@ -906,15 +970,42 @@ export class TodoItemDialog extends LitElement {
                         <option value="">Normal item</option>
                         <option value="category">Category (e.g. "Groceries")</option>
                         <option value="person">Person (e.g. "Brodie")</option>
+                        <option value="day">Day of week</option>
                     </select>
                     ${
-                        this.draftValue.pinType
+                        this.draftValue.pinType === "day"
                             ? html`
+                                <select
+                                    id="todo-item-day-weekday"
+                                    class="day-weekday-select"
+                                    @change=${(e: Event) =>
+                                        this.updateField("dayWeekday", (e.target as HTMLSelectElement).value)}
+                                >
+                                    <option value="" disabled ?selected=${this.draftValue.dayWeekday === ""}>
+                                        Which day?
+                                    </option>
+                                    ${WEEKDAY_NAMES.map(
+                                        (name, index) => html`
+                                            <option
+                                                value=${index}
+                                                ?selected=${this.draftValue.dayWeekday === String(index)}
+                                            >${name}</option>
+                                        `,
+                                    )}
+                                </select>
                                 <div class="field-hint pin-type-hint">
-                                    Always shown as a section header, even with nothing under it yet.
+                                    Always shown as a section header. Titled with the day's own name, and
+                                    reads "Today"/"Tomorrow" when it's due - both update automatically, so
+                                    there's nothing to maintain once it's set.
                                 </div>
                             `
-                            : ""
+                            : this.draftValue.pinType
+                                ? html`
+                                    <div class="field-hint pin-type-hint">
+                                        Always shown as a section header, even with nothing under it yet.
+                                    </div>
+                                `
+                                : ""
                     }
                 </div>
 
@@ -1137,7 +1228,10 @@ export class TodoItemDialog extends LitElement {
                                         `
                                         : ""
                                 }
-                                <button @click=${this.save} ?disabled=${this.triggerOnDueBlocked}>
+                                <button
+                                    @click=${this.save}
+                                    ?disabled=${this.triggerOnDueBlocked || this.dayPinMissingWeekday}
+                                >
                                     Save
                                 </button>
                             `
