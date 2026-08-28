@@ -1,6 +1,7 @@
 import {LitElement, html, css} from "lit";
 import {customElement, property} from "lit/decorators.js";
 import {classMap} from "lit/directives/class-map.js";
+import {repeat} from "lit/directives/repeat.js";
 
 import {groupSiblingsForDisplay} from "../grouping";
 import type {Placement, TodoItem, WeekdayAnchor} from "../models";
@@ -108,6 +109,21 @@ export class TodoTree extends LitElement {
         // Root level has no real parent id of its own - see grouping.ts's
         // own otherGroupId, which treats undefined as "root" for exactly
         // this call site.
+        //
+        // Rendered via repeat() keyed by item.id below, not a plain
+        // .map() - live-reproduced bug: a plain .map() lets lit reuse
+        // each <todo-overlay-tree-item> by ARRAY POSITION rather than by
+        // which item it's actually showing, so if sibling order changes
+        // between renders (the one thing "day" pins do on their own,
+        // independent of any drag - see tree.py's own build_tree), a row
+        // already mid-gesture (a swipe, or its post-release collapse
+        // animation - see dispatchDeleteAfterCollapse) can get silently
+        // reassigned to a DIFFERENT item at the same screen position
+        // before that gesture actually resolves, deleting whatever item
+        // now occupies that slot instead of the one actually swiped.
+        // repeat() ties each rendered instance to its own item id for
+        // life, so a reorder moves DOM nodes around instead of
+        // reassigning their data.
         const displayItems = groupSiblingsForDisplay(this.items, undefined, this.weekdayAnchor);
 
         return html`
@@ -124,7 +140,9 @@ export class TodoTree extends LitElement {
                                 </div>
                             </li>
                         `
-                        : displayItems.map(
+                        : repeat(
+                            displayItems,
+                            item => item.id,
                             item => html`
                                 <todo-overlay-tree-item
                                     .item=${item}

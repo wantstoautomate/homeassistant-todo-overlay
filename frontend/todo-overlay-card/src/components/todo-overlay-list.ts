@@ -2798,6 +2798,7 @@ export class TodoOverlayList extends LitElement {
                             .heading=${this.dialogMode === "edit" ? "Edit item" : "Add item"}
                             .value=${this.dialogFormValue}
                             .fieldSupport=${this.fieldSupport}
+                            ?entityIsLinked=${!!this.list?.link_id}
                             ?showDelete=${this.dialogMode === "edit"}
                             ?confirmDelete=${this.confirmDelete}
                             ?showCompleteToggle=${

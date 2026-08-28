@@ -1179,6 +1179,39 @@ describe("todo-overlay-tree-item", () => {
             expect(detail).toEqual({id: "1"});
         });
 
+        it("still deletes the originally-clicked item, not whatever this.item has become, if it's reassigned during the collapse animation", async () => {
+            // Live-reproduced bug: this component instance is reused (by
+            // design - see todo-tree.ts's own repeat()) for whichever
+            // item currently occupies its slot; if it's ever reassigned
+            // to a DIFFERENT item mid-flight (the very thing repeat()'s
+            // keying now prevents - this test simulates the reassignment
+            // directly, at the component level, to prove the dispatch
+            // itself is also correct in isolation, not just relying on
+            // the keying fix never letting it happen) while a delete's
+            // own collapse animation is still pending, the eventual
+            // dispatch must still target the item that was ACTUALLY
+            // clicked/swiped, not whatever this.item points to by the
+            // time the deferred timeout fires.
+            const el = await renderItem(makeItem({id: "monday"}), {confirmDelete: false, deleteModeActive: true});
+
+            let detail: {id: string} | undefined;
+            el.addEventListener("tree-delete-item", (e) => {
+                detail = (e as CustomEvent<{id: string}>).detail;
+            });
+
+            (el.shadowRoot?.querySelector(".delete-button") as HTMLElement).click();
+
+            // Simulates a reorder reassigning this same DOM/component
+            // instance to a different item while the collapse animation
+            // (and its deferred dispatch) is still pending.
+            el.item = makeItem({id: "tuesday"});
+            await el.updateComplete;
+
+            await flushRowCollapse();
+
+            expect(detail).toEqual({id: "monday"});
+        });
+
         it("requires a second click to confirm when confirmDelete is on (the default)", async () => {
             const el = await renderItem(makeItem(), {deleteModeActive: true});
 
