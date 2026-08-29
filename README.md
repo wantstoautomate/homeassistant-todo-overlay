@@ -73,8 +73,20 @@ or use the visual card editor from the dashboard's "Add Card" dialog, which also
 | `todo_overlay.save_list` | Save a list's current items/hierarchy as a named, reusable template. |
 | `todo_overlay.load_list` | Recreate a saved template onto any `todo.*` entity. |
 | `todo_overlay.delete_saved_list` | Delete a saved template. |
+| `todo_overlay.query_items` | Read items with server-side filtering (completed, tags, due dates, pin type, weekday, delete-protected, linked, quantity) and hierarchy lookups (direct children, or every descendant at any depth) - a response action, see below. |
 
 See each service's own description in the Home Assistant UI (**Developer Tools → Actions**) for its full field list.
+
+`query_items` is a response action - call it with a response variable set and reference `<variable>.items` afterwards, rather than a target/trigger. It returns every overlay field per item (unlike the native `todo.get_items` service, which knows nothing about them), and can answer hierarchy questions the open-items sensor's own single-level `parent_title` can't - e.g. everything under "Brodie" at any depth, not just his direct children:
+
+```yaml
+action: todo_overlay.query_items
+data:
+  entity_id: todo.household
+  under_title: Brodie
+  completed: false
+response_variable: brodie_open_items
+```
 
 ## Automation triggers
 

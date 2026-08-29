@@ -36,6 +36,7 @@ SERVICE_SET_TRIGGER_ON_DUE = "set_trigger_on_due"
 SERVICE_CREATE_LINK = "create_link"
 SERVICE_JOIN_LINK = "join_link"
 SERVICE_UNLINK = "unlink"
+SERVICE_QUERY_ITEMS = "query_items"
 
 # Options-flow keys for the (optional, instance-wide) MQTT broker used
 # for linked lists - see mqtt_link.py/link_sync.py. Absent entirely
@@ -79,6 +80,27 @@ ATTR_TAGS = "tags"
 ATTR_ENABLED = "enabled"
 ATTR_TRIGGER_ON_DUE = "trigger_on_due"
 ATTR_LINK_ID = "link_id"
+
+# query_items fields - see manager_query.py's own docstring for what
+# each one actually does.
+ATTR_COMPLETED = "completed"
+ATTR_TAGS_MODE = "tags_mode"
+ATTR_HAS_DUE_DATE = "has_due_date"
+ATTR_OVERDUE = "overdue"
+ATTR_DUE_BEFORE = "due_before"
+ATTR_DUE_AFTER = "due_after"
+ATTR_DELETE_PROTECTED = "delete_protected"
+ATTR_LINKED = "linked"
+ATTR_HAS_QUANTITY = "has_quantity"
+ATTR_PARENT_ID = "parent_id"
+ATTR_PARENT_TITLE = "parent_title"
+ATTR_UNDER_ID = "under_id"
+ATTR_UNDER_TITLE = "under_title"
+ATTR_TOP_LEVEL_ONLY = "top_level_only"
+ATTR_INCLUDE_ANCESTORS = "include_ancestors"
+ATTR_INCLUDE_CHILDREN = "include_children"
+ATTR_LIMIT = "limit"
+ATTR_ITEMS = "items"
 
 # The exact shape create_link's uuid.uuid4().hex always produces. join_link
 # must reject anything else - a link_id is spliced directly into an MQTT

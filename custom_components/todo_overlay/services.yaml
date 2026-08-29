@@ -266,3 +266,133 @@ unlink:
       selector:
         entity:
           domain: todo
+
+query_items:
+  name: Query items
+  description: Read this list's items with server-side filtering and hierarchy lookups - call with a response variable set (e.g. "result") in a script/automation action, then reference result.items. Every filter given is combined with AND. Returns every overlay field (quantity, tags, pin_type, weekday, delete_protected, linked, trigger_on_due) plus parent_id/parent_title, not just what the native todo.get_items service or the open-items sensor expose.
+  fields:
+    entity_id:
+      required: true
+      selector:
+        entity:
+          domain: todo
+    completed:
+      required: false
+      description: Only completed (true) or only incomplete (false) items. Omit for both.
+      selector:
+        boolean:
+    tag:
+      required: false
+      description: Only items carrying this one tag.
+      selector:
+        text:
+    tags:
+      required: false
+      description: Only items carrying any (or all, see tags_mode) of these tags.
+      selector:
+        text:
+          multiple: true
+    tags_mode:
+      required: false
+      description: Whether "tags" above requires any one of them (default) or all of them.
+      selector:
+        select:
+          options:
+            - any
+            - all
+    has_due_date:
+      required: false
+      description: Only items with (true) or without (false) any due date/time set.
+      selector:
+        boolean:
+    overdue:
+      required: false
+      description: Only items whose due date is strictly before today and aren't complete (true), or the opposite (false). Same day-level definition the card itself uses.
+      selector:
+        boolean:
+    due_before:
+      required: false
+      description: Only items due strictly before this date (items with no due date never match).
+      selector:
+        date:
+    due_after:
+      required: false
+      description: Only items due strictly after this date (items with no due date never match).
+      selector:
+        date:
+    pin_type:
+      required: false
+      description: Only items pinned as this type. "none" means plain leaf items with no pin at all.
+      selector:
+        select:
+          options:
+            - category
+            - person
+            - day
+            - none
+    weekday:
+      required: false
+      description: Only "day" pins representing this weekday (0=Monday..6=Sunday).
+      selector:
+        number:
+          min: 0
+          max: 6
+    delete_protected:
+      required: false
+      selector:
+        boolean:
+    linked:
+      required: false
+      description: Only items mirrored to another list (see the item dialog's "Link to shared list") or, with false, only ones that aren't.
+      selector:
+        boolean:
+    trigger_on_due:
+      required: false
+      selector:
+        boolean:
+    has_quantity:
+      required: false
+      description: Only items with (true) or without (false) a quantity set.
+      selector:
+        boolean:
+    parent_id:
+      required: false
+      description: Only this item's DIRECT children - by item id or title. Mutually exclusive with parent_title/under_id/under_title.
+      selector:
+        text:
+    parent_title:
+      required: false
+      description: Same as parent_id, but by title instead.
+      selector:
+        text:
+    under_id:
+      required: false
+      description: Every DESCENDANT of this item at any depth, not just direct children - by item id. Mutually exclusive with parent_id/parent_title/under_title.
+      selector:
+        text:
+    under_title:
+      required: false
+      description: Same as under_id, but by title instead.
+      selector:
+        text:
+    top_level_only:
+      required: false
+      description: Only root items. Ignored if parent_id/parent_title/under_id/under_title is given.
+      selector:
+        boolean:
+    include_ancestors:
+      required: false
+      description: Attach each matched item's full root-to-parent ancestor chain (id + title), not just its direct parent.
+      selector:
+        boolean:
+    include_children:
+      required: false
+      description: Attach each matched item's own nested children (unfiltered) alongside it.
+      selector:
+        boolean:
+    limit:
+      required: false
+      description: Cap the number of items returned.
+      selector:
+        number:
+          min: 1

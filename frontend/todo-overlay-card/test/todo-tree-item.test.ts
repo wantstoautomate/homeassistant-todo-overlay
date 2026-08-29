@@ -588,6 +588,36 @@ describe("todo-overlay-tree-item", () => {
             expect(deleted).toBe(false);
         });
 
+        it("a delete_protected DAY PIN (structural, with children) doesn't reveal or move at all on a leftward swipe", async () => {
+            // Direct repro attempt for the live report that a
+            // delete_protected day pin still got swipe-deleted after
+            // 1.6.2 - checking whether pin_type "day" or having real
+            // children changes this component's own swipe behaviour at
+            // all (it shouldn't - trackSwipe/resolveSwipe only ever
+            // look at this.item.delete_protected).
+            const el = await renderItem(makeItem({
+                id: "1",
+                pin_type: "day",
+                weekday: 0,
+                delete_protected: true,
+                children: [makeItem({id: "2", title: "Laundry"})],
+            }));
+
+            let deleted = false;
+            el.addEventListener("tree-delete-item", () => { deleted = true; });
+
+            touchPress(el);
+            move(el, -(SWIPE_ACTION_THRESHOLD_PX + 10), 0);
+            await el.updateComplete;
+
+            expect(el.shadowRoot?.querySelector(".swipe-action-layer")).toBeNull();
+
+            touchRelease();
+            await flushRowCollapse();
+
+            expect(deleted).toBe(false);
+        });
+
         it("a delete_protected item still reveals and completes a rightward (add-child) swipe normally", async () => {
             const el = await renderItem(makeItem({id: "1", delete_protected: true}));
 
