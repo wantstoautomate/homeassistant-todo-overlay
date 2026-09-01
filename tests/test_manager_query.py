@@ -318,6 +318,24 @@ async def test_query_items_include_children_attaches_nested_unfiltered_children(
 
 
 @pytest.mark.asyncio
+async def test_query_items_include_children_can_show_a_matched_descendant_twice():
+    """Documents a deliberate, non-obvious interaction rather than
+    guarding against it: under_title scope + include_children=True
+    enriches each MATCHED result with its own children independently -
+    it doesn't change which results matched. "grandchild" is itself a
+    descendant of "brodie" (so it's its own top-level result here too)
+    AND "sub"'s own child (so it shows up nested there as well)."""
+
+    manager = await make_manager()
+
+    items = await manager.query_items(ENTITY_ID, under_title="Brodie", include_children=True)
+
+    sub = next(item for item in items if item["id"] == "sub")
+    assert [child["id"] for child in sub["children"]] == ["grandchild"]
+    assert "grandchild" in {item["id"] for item in items}
+
+
+@pytest.mark.asyncio
 async def test_query_items_limit_caps_the_result_count():
     manager = await make_manager()
 

@@ -172,8 +172,16 @@ QUERY_ITEMS_SCHEMA = vol.Schema(
         vol.Optional(ATTR_TAGS_MODE, default="any"): vol.In(["any", "all"]),
         vol.Optional(ATTR_HAS_DUE_DATE): bool,
         vol.Optional(ATTR_OVERDUE): bool,
-        vol.Optional(ATTR_DUE_BEFORE): str,
-        vol.Optional(ATTR_DUE_AFTER): str,
+        # cv.date both validates (a malformed value raises a clean
+        # vol.Invalid here rather than crashing deep inside
+        # manager_query.py's own date.fromisoformat) and normalizes -
+        # vol.Coerce(str) of the date object it returns is that same
+        # ISO format, which is the plain string query_items() itself
+        # expects. Plain `str` here (rather than vol.Coerce(str)) would
+        # NOT do this coercion - voluptuous treats a bare type as an
+        # instance check, not a callable to run the value through.
+        vol.Optional(ATTR_DUE_BEFORE): vol.All(cv.date, vol.Coerce(str)),
+        vol.Optional(ATTR_DUE_AFTER): vol.All(cv.date, vol.Coerce(str)),
         vol.Optional(ATTR_PIN_TYPE): vol.In([*sorted(PIN_TYPES), "none"]),
         vol.Optional(ATTR_WEEKDAY): vol.All(int, vol.Range(min=0, max=6)),
         vol.Optional(ATTR_DELETE_PROTECTED): bool,

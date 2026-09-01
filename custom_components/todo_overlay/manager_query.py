@@ -147,13 +147,24 @@ class QueryMixin:
         target_item resolution convention (see manager_items.py's own
         _resolve_item) - raises ItemNotFoundError if given but nothing
         in the tree matches.
+
+        include_children attaches each MATCHED item's own children
+        independently of whether those children separately satisfy the
+        scope/filters too - so under_title="Brodie" with
+        include_children=True can legitimately show "Grandchild" twice
+        (once nested under its own matched parent "Sub", once again as
+        its own flat top-level result, since it's also a descendant of
+        Brodie) rather than something being wrong. Same reasoning as a
+        REST API's own ?expand= param: it enriches each result with
+        more of its own context, it doesn't change which results
+        matched in the first place.
         """
 
         todo_list = await self.get_list(entity_id)
         candidates = _flatten(todo_list.items, [], 0)
 
         scope = self._scope_candidates(
-            candidates, parent_id, parent_title, under_id, under_title, top_level_only,
+            candidates, entity_id, parent_id, parent_title, under_id, under_title, top_level_only,
         )
 
         today = self._today_date_fn()
@@ -181,6 +192,7 @@ class QueryMixin:
     @staticmethod
     def _scope_candidates(
         candidates: list[_Candidate],
+        entity_id: str,
         parent_id: str | None,
         parent_title: str | None,
         under_id: str | None,
@@ -196,7 +208,7 @@ class QueryMixin:
             )
 
             if target is None:
-                raise ItemNotFoundError(f"No item {parent_key!r} (by id or title) found")
+                raise ItemNotFoundError(f"No item {parent_key!r} (by id or title) found on {entity_id}")
 
             return [
                 c for c in candidates
@@ -209,7 +221,7 @@ class QueryMixin:
             )
 
             if target is None:
-                raise ItemNotFoundError(f"No item {under_key!r} (by id or title) found")
+                raise ItemNotFoundError(f"No item {under_key!r} (by id or title) found on {entity_id}")
 
             return [
                 c for c in candidates

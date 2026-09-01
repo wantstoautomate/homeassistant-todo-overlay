@@ -387,7 +387,7 @@ query_items:
         boolean:
     include_children:
       required: false
-      description: Attach each matched item's own nested children (unfiltered) alongside it.
+      description: Attach each matched item's own nested children (unfiltered) alongside it. With under_id/under_title, a child that also independently matches can appear both nested here and again as its own top-level result - each result is enriched independently, matching doesn't change.
       selector:
         boolean:
     limit:

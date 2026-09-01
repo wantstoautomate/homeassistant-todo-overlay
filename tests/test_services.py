@@ -495,6 +495,21 @@ def test_query_items_schema_accepts_pin_type_none_for_plain_leaf_items():
     assert result["pin_type"] == "none"
 
 
+def test_query_items_schema_rejects_a_malformed_due_before():
+    """Live gap: this used to be a bare `str`, so a typo'd date reached
+    manager_query.py's own date.fromisoformat unvalidated and crashed
+    with a raw ValueError instead of a clean, actionable error."""
+
+    with pytest.raises(vol.Invalid):
+        QUERY_ITEMS_SCHEMA({"entity_id": ENTITY_ID, "due_before": "not-a-date"})
+
+
+def test_query_items_schema_normalizes_due_before_to_an_iso_string():
+    result = QUERY_ITEMS_SCHEMA({"entity_id": ENTITY_ID, "due_before": "2026-01-01"})
+
+    assert result["due_before"] == "2026-01-01"
+
+
 def test_query_items_schema_fills_in_every_default():
     result = QUERY_ITEMS_SCHEMA({"entity_id": ENTITY_ID})
 
