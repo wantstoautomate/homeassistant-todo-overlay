@@ -424,7 +424,6 @@ def _query_call_data(**overrides) -> dict:
         "tags_mode": "any",
         "top_level_only": False,
         "include_ancestors": False,
-        "include_children": False,
     }
     data.update(overrides)
 
@@ -468,8 +467,9 @@ async def test_service_query_items_resolves_parent_title_and_reports_it_back():
         "id": "passport", "title": "Passport", "completed": False, "description": None,
         "due_date": None, "due_datetime": None, "quantity": None, "tags": [],
         "trigger_on_due": False, "pin_type": None, "weekday": None, "day_label": None,
-        "linked": False, "delete_protected": False, "depth": 1,
-        "parent_id": "brodie", "parent_title": "Brodie",
+        "linked": False, "delete_protected": False, "depth": 1, "top_level": False,
+        "parent_id": "brodie", "parent_title": "Brodie", "child_ids": [],
+        "overdue": False, "has_open_descendants": False, "has_overdue_descendants": False,
     }]
 
 
@@ -516,4 +516,3 @@ def test_query_items_schema_fills_in_every_default():
     assert result["tags_mode"] == "any"
     assert result["top_level_only"] is False
     assert result["include_ancestors"] is False
-    assert result["include_children"] is False

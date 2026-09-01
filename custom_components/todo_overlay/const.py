@@ -98,7 +98,6 @@ ATTR_UNDER_ID = "under_id"
 ATTR_UNDER_TITLE = "under_title"
 ATTR_TOP_LEVEL_ONLY = "top_level_only"
 ATTR_INCLUDE_ANCESTORS = "include_ancestors"
-ATTR_INCLUDE_CHILDREN = "include_children"
 ATTR_LIMIT = "limit"
 ATTR_ITEMS = "items"
 
