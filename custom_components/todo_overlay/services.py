@@ -18,7 +18,6 @@ from .const import (
     ATTR_HAS_DUE_DATE,
     ATTR_HAS_QUANTITY,
     ATTR_INCLUDE_ANCESTORS,
-    ATTR_INCLUDE_CHILDREN,
     ATTR_ITEM,
     ATTR_ITEMS,
     ATTR_LIMIT,
@@ -194,7 +193,6 @@ QUERY_ITEMS_SCHEMA = vol.Schema(
         vol.Exclusive(ATTR_UNDER_TITLE, _QUERY_SCOPE_GROUP): str,
         vol.Optional(ATTR_TOP_LEVEL_ONLY, default=False): bool,
         vol.Optional(ATTR_INCLUDE_ANCESTORS, default=False): bool,
-        vol.Optional(ATTR_INCLUDE_CHILDREN, default=False): bool,
         vol.Optional(ATTR_LIMIT): vol.All(int, vol.Range(min=1)),
     }
 )
@@ -317,7 +315,6 @@ def async_register_services(hass: HomeAssistant) -> None:
             under_title=call.data.get(ATTR_UNDER_TITLE),
             top_level_only=call.data[ATTR_TOP_LEVEL_ONLY],
             include_ancestors=call.data[ATTR_INCLUDE_ANCESTORS],
-            include_children=call.data[ATTR_INCLUDE_CHILDREN],
             limit=call.data.get(ATTR_LIMIT),
         )
 

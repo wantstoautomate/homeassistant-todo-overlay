@@ -88,6 +88,8 @@ data:
 response_variable: brodie_open_items
 ```
 
+The result is always a flat list, one entry per matched item regardless of depth - the right shape for Jinja's own `selectattr`/`map`/`groupby`, which have no clean idiom for walking a nested tree. Each item also carries `child_ids` (not full duplicated child objects - just ids, since with `under_id`/`under_title` every descendant is already its own entry in the same flat list) and four precomputed answers so a template never has to redo date math or its own recursive walk: `top_level`, `overdue`, `has_open_descendants`, and `has_overdue_descendants` (the last two look at every descendant, any depth - not just a direct child).
+
 ## Automation triggers
 
 Nine triggers are available - one per kind of change - each showing up in the automation editor's "+ Add Trigger" picker under "Custom to-do item created", "Custom to-do item completed", etc. (search for "Custom to-do"):

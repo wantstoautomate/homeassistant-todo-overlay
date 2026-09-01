@@ -3,6 +3,10 @@
 All notable changes to this project are documented here. Versions follow the
 integration's `manifest.json`/card's `package.json` (kept in lockstep).
 
+## 1.7.1
+
+**Changed: `query_items`'s output shape, refined before its first real use.** Dropped `include_children` (attaching each matched item's own nested children) - it turned out to be pure duplication whenever scope was `under_id`/`under_title` or unset, since every descendant is already its own flat entry in that case; replaced with a `child_ids` list (just ids, always present, no duplicated payload) on every item. Also added four precomputed fields so a template never has to redo date math or its own recursive tree walk: `top_level`, `overdue` (now on every item, not just as a filter), `has_open_descendants`, and `has_overdue_descendants` (the last two look at every descendant at any depth, not just a direct child).
+
 ## 1.7.0
 
 **New: `todo_overlay.query_items` - server-side filtering and hierarchy lookups for automations.** The only ways to read this integration's own data used to be the native `todo.get_items` service (no overlay fields at all - quantity, tags, pin type, weekday, delete-protected, linked, trigger-on-due are all invisible to it) or the open-items sensor's own attribute (always every open item, each with its direct parent only - "everything under Brodie" was unanswerable the moment Brodie had grandchildren). `query_items` is a response action: filter by completion, tags, due dates, overdue, pin type, weekday, delete-protected, linked, trigger-on-due, or quantity presence (all combined with AND), and scope to an item's direct children (`parent_id`/`parent_title`) or every descendant at any depth (`under_id`/`under_title` - the thing neither existing path could do at all). Returns every overlay field per item, plus its parent and, opt-in, its full ancestor chain or nested children.

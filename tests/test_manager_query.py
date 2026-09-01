@@ -90,8 +90,9 @@ async def test_query_items_serializes_every_overlay_field_and_direct_parent():
         "id": "milk", "title": "Milk", "completed": False, "description": None,
         "due_date": None, "due_datetime": None, "quantity": "2L", "tags": ["urgent"],
         "trigger_on_due": False, "pin_type": None, "weekday": None, "day_label": None,
-        "linked": False, "delete_protected": False, "depth": 1,
-        "parent_id": "groceries", "parent_title": "Groceries",
+        "linked": False, "delete_protected": False, "depth": 1, "top_level": False,
+        "parent_id": "groceries", "parent_title": "Groceries", "child_ids": [],
+        "overdue": False, "has_open_descendants": False, "has_overdue_descendants": False,
     }
 
 
@@ -308,31 +309,114 @@ async def test_query_items_without_include_ancestors_omits_the_key_entirely():
 
 
 @pytest.mark.asyncio
-async def test_query_items_include_children_attaches_nested_unfiltered_children():
+async def test_query_items_child_ids_lists_direct_children_by_id():
     manager = await make_manager()
 
-    items = await manager.query_items(ENTITY_ID, parent_id="brodie", include_children=True)
+    items = await manager.query_items(ENTITY_ID, parent_id="brodie")
     sub = next(item for item in items if item["id"] == "sub")
 
-    assert [child["id"] for child in sub["children"]] == ["grandchild"]
+    assert sub["child_ids"] == ["grandchild"]
 
 
 @pytest.mark.asyncio
-async def test_query_items_include_children_can_show_a_matched_descendant_twice():
-    """Documents a deliberate, non-obvious interaction rather than
-    guarding against it: under_title scope + include_children=True
-    enriches each MATCHED result with its own children independently -
-    it doesn't change which results matched. "grandchild" is itself a
-    descendant of "brodie" (so it's its own top-level result here too)
-    AND "sub"'s own child (so it shows up nested there as well)."""
+async def test_query_items_child_ids_is_always_present_even_with_no_children():
+    manager = await make_manager()
+
+    items = await manager.query_items(ENTITY_ID, parent_id="brodie")
+    passport = next(item for item in items if item["id"] == "passport")
+
+    assert passport["child_ids"] == []
+
+
+@pytest.mark.asyncio
+async def test_query_items_child_ids_can_reference_an_id_outside_the_result_set():
+    """Same already-accepted situation parent_id can be in too (see
+    manager_query.py's own docstring): top_level_only excludes "gym"
+    (depth 1) from the result set entirely, but "monday" (its parent,
+    a root item) still lists it in child_ids - a child_id not present
+    as its own key in the result just means that child didn't
+    separately satisfy the filters/scope, here the scope itself."""
 
     manager = await make_manager()
 
-    items = await manager.query_items(ENTITY_ID, under_title="Brodie", include_children=True)
+    items = await manager.query_items(ENTITY_ID, top_level_only=True)
+    monday = next(item for item in items if item["id"] == "monday")
 
+    assert monday["child_ids"] == ["gym"]
+    assert "gym" not in {item["id"] for item in items}
+
+
+@pytest.mark.asyncio
+async def test_query_items_top_level_field_matches_depth_zero():
+    manager = await make_manager()
+
+    items = await manager.query_items(ENTITY_ID)
+
+    assert {item["id"] for item in items if item["top_level"]} == {
+        "groceries", "brodie", "monday", "solo",
+    }
+
+
+@pytest.mark.asyncio
+async def test_query_items_overdue_field_is_always_present_not_just_a_filter():
+    manager = await make_manager()
+
+    items = await manager.query_items(ENTITY_ID)
+
+    assert next(item for item in items if item["id"] == "passport")["overdue"] is True
+    assert next(item for item in items if item["id"] == "solo")["overdue"] is False
+
+
+@pytest.mark.asyncio
+async def test_query_items_has_open_descendants_is_true_at_any_depth_not_just_direct_children():
+    # "brodie" has no INCOMPLETE direct child of its own that's a leaf -
+    # its incomplete descendant ("grandchild") is two levels down, under
+    # "sub" - has_open_descendants must still see it.
+    manager = await make_manager()
+
+    items = await manager.query_items(ENTITY_ID)
+
+    brodie = next(item for item in items if item["id"] == "brodie")
     sub = next(item for item in items if item["id"] == "sub")
-    assert [child["id"] for child in sub["children"]] == ["grandchild"]
-    assert "grandchild" in {item["id"] for item in items}
+    solo = next(item for item in items if item["id"] == "solo")
+
+    assert brodie["has_open_descendants"] is True
+    assert sub["has_open_descendants"] is True
+    # A leaf with no children at all never has open descendants,
+    # regardless of its own completed status.
+    assert solo["has_open_descendants"] is False
+
+
+@pytest.mark.asyncio
+async def test_query_items_has_overdue_descendants_is_true_at_any_depth():
+    # "passport" (overdue) sits directly under "brodie", but is itself
+    # a leaf with no descendants of its own.
+    manager = await make_manager()
+
+    items = await manager.query_items(ENTITY_ID)
+
+    brodie = next(item for item in items if item["id"] == "brodie")
+    passport = next(item for item in items if item["id"] == "passport")
+    sub = next(item for item in items if item["id"] == "sub")
+
+    assert brodie["has_overdue_descendants"] is True
+    assert passport["has_overdue_descendants"] is False
+    assert sub["has_overdue_descendants"] is False
+
+
+@pytest.mark.asyncio
+async def test_query_items_has_overdue_descendants_reaches_below_a_non_overdue_intermediate_parent():
+    # Overdue-ness doesn't derive/bubble up through completed the way
+    # has_open_descendants does - this pins down that the dedicated
+    # whole-tree pass actually walks every level rather than stopping
+    # at the first intermediate parent.
+    manager = await make_manager()
+    await manager.move_item(ENTITY_ID, "passport", reference_id="sub", placement="inside")
+
+    items = await manager.query_items(ENTITY_ID)
+    sub = next(item for item in items if item["id"] == "sub")
+
+    assert sub["has_overdue_descendants"] is True
 
 
 @pytest.mark.asyncio
