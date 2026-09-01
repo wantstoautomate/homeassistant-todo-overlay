@@ -269,7 +269,7 @@ unlink:
 
 query_items:
   name: Query items
-  description: Read this list's items with server-side filtering and hierarchy lookups - call with a response variable set (e.g. "result") in a script/automation action, then reference result.items. Every filter given is combined with AND. Always returns a flat list (one entry per matched item, any depth) with every overlay field (quantity, tags, pin_type, weekday, delete_protected, linked, trigger_on_due) plus parent_id/parent_title/child_ids and precomputed top_level/overdue/has_open_descendants/has_overdue_descendants flags, not just what the native todo.get_items service or the open-items sensor expose.
+  description: Read this list's items with server-side filtering and hierarchy lookups - call with a response variable set (e.g. "result") in a script/automation action, then reference result.items. Every filter given is combined with AND. Always returns a flat list (one entry per matched item, any depth) with every overlay field (quantity, tags, pin_type, weekday, delete_protected, linked, trigger_on_due) plus parent_id/parent_title/child_ids and precomputed top_level/overdue/days_overdue/has_open_descendants/has_overdue_descendants flags, not just what the native todo.get_items service or the open-items sensor expose.
   fields:
     entity_id:
       required: true
@@ -308,6 +308,11 @@ query_items:
     overdue:
       required: false
       description: Only items whose due date is strictly before today and aren't complete (true), or the opposite (false). Same day-level definition the card itself uses.
+      selector:
+        boolean:
+    due_today:
+      required: false
+      description: Only items due exactly today (true), or not (false). Unlike overdue, this doesn't exclude completed items - it's a fact about the due date, not a statement about an outstanding obligation. Add completed=false alongside it for "still left to do today".
       selector:
         boolean:
     due_before:

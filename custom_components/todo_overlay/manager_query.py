@@ -79,19 +79,31 @@ def _due_day(item: TodoItem) -> date | None:
     return None
 
 
-def _is_overdue(item: TodoItem, today: date) -> bool:
-    """Same day-level definition the card's own models.ts isOverdue()
+def _overdue_status(item: TodoItem, today: date) -> tuple[bool, int | None]:
+    """(is this item overdue, and if so by how many days) - one shared
+    computation since both answer the same underlying date comparison
+    at different granularity; kept together so nothing can compute the
+    boolean and the count from two subtly different code paths.
+
+    Same day-level definition the card's own models.ts isOverdue()
     uses (kept in step deliberately, not re-derived independently): a
     leaf whose due date/datetime's own DATE portion is strictly before
     today, and isn't already complete - a due time earlier today isn't
     overdue until tomorrow."""
 
     if item.completed:
-        return False
+        return False, None
 
     due_day = _due_day(item)
 
-    return due_day is not None and due_day < today
+    if due_day is None or due_day >= today:
+        return False, None
+
+    return True, (today - due_day).days
+
+
+def _is_overdue(item: TodoItem, today: date) -> bool:
+    return _overdue_status(item, today)[0]
 
 
 def _compute_overdue_descendants(
@@ -131,6 +143,7 @@ class QueryMixin:
         tags_mode: str = "any",
         has_due_date: bool | None = None,
         overdue: bool | None = None,
+        due_today: bool | None = None,
         due_before: str | None = None,
         due_after: str | None = None,
         pin_type: str | None = None,
@@ -191,18 +204,27 @@ class QueryMixin:
         _resolve_item) - raises ItemNotFoundError if given but nothing
         in the tree matches.
 
-        Every result also carries four small precomputed answers, so a
+        Every result also carries small precomputed answers, so a
         template never has to redo date math or its own tree walk just
         to ask the questions an automation actually has ("is there
         still anything open under Brodie" shouldn't require the
         template author to know this integration derives a parent's
         own completed flag bottom-up, or to write a recursive Jinja
         macro): top_level (no parent at all - same field name/meaning
-        as sensor.py's own open-items sensor), overdue (this item
-        itself, day-level - the same thing the overdue filter checks),
+        as sensor.py's own open-items sensor), overdue and days_overdue
+        (this item itself, day-level - the same thing the overdue
+        filter checks; days_overdue is None whenever overdue is False),
         has_open_descendants and has_overdue_descendants (true if ANY
         descendant at any depth - not just a direct child - is
         incomplete/overdue respectively).
+
+        due_today deliberately does NOT exclude completed items the way
+        overdue does - overdue is a statement about an outstanding
+        obligation (complete = no longer outstanding = definitionally
+        not overdue), but "due today" is just a fact about the due
+        date, useful for both "what's left today" and "what did I get
+        done that was due today" - compose completed=False alongside it
+        for the former.
         """
 
         todo_list = await self.get_list(entity_id)
@@ -221,7 +243,7 @@ class QueryMixin:
             if self._matches_filters(
                 candidate.item, today,
                 completed=completed, tag=tag, tags=tags, tags_mode=tags_mode,
-                has_due_date=has_due_date, overdue=overdue,
+                has_due_date=has_due_date, overdue=overdue, due_today=due_today,
                 due_before=due_before, due_after=due_after,
                 pin_type=pin_type, weekday=weekday,
                 delete_protected=delete_protected, linked=linked,
@@ -292,6 +314,7 @@ class QueryMixin:
         tags_mode: str,
         has_due_date: bool | None,
         overdue: bool | None,
+        due_today: bool | None,
         due_before: str | None,
         due_after: str | None,
         pin_type: str | None,
@@ -323,6 +346,9 @@ class QueryMixin:
             return False
 
         due_day = _due_day(item)
+
+        if due_today is not None and (due_day == today) != due_today:
+            return False
 
         if due_before is not None and (due_day is None or due_day >= date.fromisoformat(due_before)):
             return False
@@ -361,6 +387,7 @@ class QueryMixin:
     ) -> dict:
         item = candidate.item
         parent = candidate.ancestors[-1] if candidate.ancestors else None
+        is_overdue, days_overdue = _overdue_status(item, today)
 
         result = {
             "id": item.id,
@@ -382,7 +409,8 @@ class QueryMixin:
             "parent_id": parent.id if parent is not None else None,
             "parent_title": parent.title if parent is not None else None,
             "child_ids": [child.id for child in item.children],
-            "overdue": _is_overdue(item, today),
+            "overdue": is_overdue,
+            "days_overdue": days_overdue,
             # Any descendant at any depth, not just a direct child - a
             # parent's own `completed` above is already derived exactly
             # that way (see build_tree's own finalize()), so this is

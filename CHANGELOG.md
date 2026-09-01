@@ -3,6 +3,10 @@
 All notable changes to this project are documented here. Versions follow the
 integration's `manifest.json`/card's `package.json` (kept in lockstep).
 
+## 1.7.2
+
+**New: `query_items` gained `due_today` (filter) and `days_overdue` (field)** after weighing which computations genuinely belong server-side versus what an automation should do itself in Jinja. Both clear the same bar `overdue` already did: exact date math tied to "today" that a template shouldn't have to reconstruct by hand. `due_today` deliberately doesn't exclude completed items the way `overdue` does - it's a fact about the due date, not a statement about an outstanding obligation - so pair it with `completed: false` for "still left to do today". Deliberately NOT added, on the same weighing: cross-entity aggregation, sorting/counting/grouping (Jinja's own filters already do this well over the flat list), a formatted breadcrumb string, sibling lookup, or any notion of "urgent" - each one is either already trivial client-side or too opinionated to bake into one definition.
+
 ## 1.7.1
 
 **Changed: `query_items`'s output shape, refined before its first real use.** Dropped `include_children` (attaching each matched item's own nested children) - it turned out to be pure duplication whenever scope was `under_id`/`under_title` or unset, since every descendant is already its own flat entry in that case; replaced with a `child_ids` list (just ids, always present, no duplicated payload) on every item. Also added four precomputed fields so a template never has to redo date math or its own recursive tree walk: `top_level`, `overdue` (now on every item, not just as a filter), `has_open_descendants`, and `has_overdue_descendants` (the last two look at every descendant at any depth, not just a direct child).

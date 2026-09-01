@@ -14,6 +14,7 @@ from .const import (
     ATTR_DUE_BEFORE,
     ATTR_DUE_DATE,
     ATTR_DUE_DATETIME,
+    ATTR_DUE_TODAY,
     ATTR_ENABLED,
     ATTR_HAS_DUE_DATE,
     ATTR_HAS_QUANTITY,
@@ -171,6 +172,7 @@ QUERY_ITEMS_SCHEMA = vol.Schema(
         vol.Optional(ATTR_TAGS_MODE, default="any"): vol.In(["any", "all"]),
         vol.Optional(ATTR_HAS_DUE_DATE): bool,
         vol.Optional(ATTR_OVERDUE): bool,
+        vol.Optional(ATTR_DUE_TODAY): bool,
         # cv.date both validates (a malformed value raises a clean
         # vol.Invalid here rather than crashing deep inside
         # manager_query.py's own date.fromisoformat) and normalizes -
@@ -301,6 +303,7 @@ def async_register_services(hass: HomeAssistant) -> None:
             tags_mode=call.data[ATTR_TAGS_MODE],
             has_due_date=call.data.get(ATTR_HAS_DUE_DATE),
             overdue=call.data.get(ATTR_OVERDUE),
+            due_today=call.data.get(ATTR_DUE_TODAY),
             due_before=call.data.get(ATTR_DUE_BEFORE),
             due_after=call.data.get(ATTR_DUE_AFTER),
             pin_type=call.data.get(ATTR_PIN_TYPE),
