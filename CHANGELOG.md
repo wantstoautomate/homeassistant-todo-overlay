@@ -3,6 +3,10 @@
 All notable changes to this project are documented here. Versions follow the
 integration's `manifest.json`/card's `package.json` (kept in lockstep).
 
+## 1.7.0
+
+**New: `todo_overlay.query_items` - server-side filtering and hierarchy lookups for automations.** The only ways to read this integration's own data used to be the native `todo.get_items` service (no overlay fields at all - quantity, tags, pin type, weekday, delete-protected, linked, trigger-on-due are all invisible to it) or the open-items sensor's own attribute (always every open item, each with its direct parent only - "everything under Brodie" was unanswerable the moment Brodie had grandchildren). `query_items` is a response action: filter by completion, tags, due dates, overdue, pin type, weekday, delete-protected, linked, trigger-on-due, or quantity presence (all combined with AND), and scope to an item's direct children (`parent_id`/`parent_title`) or every descendant at any depth (`under_id`/`under_title` - the thing neither existing path could do at all). Returns every overlay field per item, plus its parent and, opt-in, its full ancestor chain or nested children.
+
 ## 1.6.2
 
 **Fixed: swiping to delete an item on mobile could delete a completely different item instead** - live-reported: swiping a delete-protected "day" pin (which should refuse to delete at all) instead deleted a different day pin further down the list. Root cause was generic, not specific to day pins: the row list was rendered with a plain array `.map()`, so when sibling order changes between renders (day pins are the first thing in this app to reorder themselves, independent of any drag), the framework could reuse a row already mid-delete-animation for a *different* item before its deferred delete actually fired - deleting whatever ended up in that slot instead of what was actually swiped. Fixed at the root (rows are now tied to their own item's identity, not their screen position) plus defense in depth (a delete now always targets the item that was actually acted on, not whatever the row happens to be showing by the time its animation finishes).

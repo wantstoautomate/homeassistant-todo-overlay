@@ -16,7 +16,11 @@ import voluptuous as vol
 from custom_components.todo_overlay.const import DOMAIN
 from custom_components.todo_overlay.manager import TodoManager
 from custom_components.todo_overlay.models import ItemPosition, TodoItem
-from custom_components.todo_overlay.services import JOIN_LINK_SCHEMA, async_register_services
+from custom_components.todo_overlay.services import (
+    JOIN_LINK_SCHEMA,
+    QUERY_ITEMS_SCHEMA,
+    async_register_services,
+)
 
 from fakes import FakeAdapter, FakeConfigEntries, FakeMetadataStore
 
@@ -72,6 +76,7 @@ def test_async_register_services_registers_every_service():
         "create_link",
         "join_link",
         "unlink",
+        "query_items",
     }
 
 
@@ -405,3 +410,110 @@ def test_join_link_schema_rejects_anything_that_could_widen_the_mqtt_subscriptio
 
     with pytest.raises(vol.Invalid):
         JOIN_LINK_SCHEMA({"entity_id": ENTITY_ID, "link_id": bad_link_id})
+
+
+# --- query_items --------------------------------------------------------
+
+def _query_call_data(**overrides) -> dict:
+    """Every field the real schema would have filled in, defaults
+    included - see this file's own module docstring for why (the
+    handler is invoked directly, bypassing QUERY_ITEMS_SCHEMA)."""
+
+    data = {
+        "entity_id": ENTITY_ID,
+        "tags_mode": "any",
+        "top_level_only": False,
+        "include_ancestors": False,
+        "include_children": False,
+    }
+    data.update(overrides)
+
+    return data
+
+
+@pytest.mark.asyncio
+async def test_service_query_items_wraps_the_result_under_items():
+    manager = make_manager(items=[
+        TodoItem(id="1", title="Milk", completed=False),
+        TodoItem(id="2", title="Bread", completed=True),
+    ])
+    _, services = make_hass(manager)
+
+    result = await services.handlers["query_items"](
+        FakeServiceCall(_query_call_data(completed=False)),
+    )
+
+    assert [item["id"] for item in result["items"]] == ["1"]
+
+
+@pytest.mark.asyncio
+async def test_service_query_items_resolves_parent_title_and_reports_it_back():
+    manager = make_manager(
+        items=[
+            TodoItem(id="brodie", title="Brodie", completed=False),
+            TodoItem(id="passport", title="Passport", completed=False),
+        ],
+        positions={
+            "brodie": ItemPosition(parent_id=None, order=0),
+            "passport": ItemPosition(parent_id="brodie", order=0),
+        },
+    )
+    _, services = make_hass(manager)
+
+    result = await services.handlers["query_items"](
+        FakeServiceCall(_query_call_data(parent_title="Brodie")),
+    )
+
+    assert result["items"] == [{
+        "id": "passport", "title": "Passport", "completed": False, "description": None,
+        "due_date": None, "due_datetime": None, "quantity": None, "tags": [],
+        "trigger_on_due": False, "pin_type": None, "weekday": None, "day_label": None,
+        "linked": False, "delete_protected": False, "depth": 1,
+        "parent_id": "brodie", "parent_title": "Brodie",
+    }]
+
+
+def test_query_items_schema_rejects_combining_parent_and_under_scope():
+    """parent_id/parent_title/under_id/under_title all share one
+    vol.Exclusive group - see QUERY_ITEMS_SCHEMA's own comment for why
+    mixing them is ambiguous rather than just redundant."""
+
+    with pytest.raises(vol.Invalid):
+        QUERY_ITEMS_SCHEMA({
+            "entity_id": ENTITY_ID, "parent_title": "Brodie", "under_title": "Anna",
+        })
+
+
+def test_query_items_schema_rejects_an_invalid_pin_type():
+    with pytest.raises(vol.Invalid):
+        QUERY_ITEMS_SCHEMA({"entity_id": ENTITY_ID, "pin_type": "not-a-real-type"})
+
+
+def test_query_items_schema_accepts_pin_type_none_for_plain_leaf_items():
+    result = QUERY_ITEMS_SCHEMA({"entity_id": ENTITY_ID, "pin_type": "none"})
+
+    assert result["pin_type"] == "none"
+
+
+def test_query_items_schema_rejects_a_malformed_due_before():
+    """Live gap: this used to be a bare `str`, so a typo'd date reached
+    manager_query.py's own date.fromisoformat unvalidated and crashed
+    with a raw ValueError instead of a clean, actionable error."""
+
+    with pytest.raises(vol.Invalid):
+        QUERY_ITEMS_SCHEMA({"entity_id": ENTITY_ID, "due_before": "not-a-date"})
+
+
+def test_query_items_schema_normalizes_due_before_to_an_iso_string():
+    result = QUERY_ITEMS_SCHEMA({"entity_id": ENTITY_ID, "due_before": "2026-01-01"})
+
+    assert result["due_before"] == "2026-01-01"
+
+
+def test_query_items_schema_fills_in_every_default():
+    result = QUERY_ITEMS_SCHEMA({"entity_id": ENTITY_ID})
+
+    assert result["tags_mode"] == "any"
+    assert result["top_level_only"] is False
+    assert result["include_ancestors"] is False
+    assert result["include_children"] is False
