@@ -88,7 +88,7 @@ data:
 response_variable: brodie_open_items
 ```
 
-The result is always a flat list, one entry per matched item regardless of depth - the right shape for Jinja's own `selectattr`/`map`/`groupby`, which have no clean idiom for walking a nested tree. Each item also carries `child_ids` (not full duplicated child objects - just ids, since with `under_id`/`under_title` every descendant is already its own entry in the same flat list) and four precomputed answers so a template never has to redo date math or its own recursive walk: `top_level`, `overdue`, `has_open_descendants`, and `has_overdue_descendants` (the last two look at every descendant, any depth - not just a direct child).
+The result is always a flat list, one entry per matched item regardless of depth - the right shape for Jinja's own `selectattr`/`map`/`groupby`, which have no clean idiom for walking a nested tree. Each item also carries `child_ids` (not full duplicated child objects - just ids, since with `under_id`/`under_title` every descendant is already its own entry in the same flat list) and precomputed answers so a template never has to redo date math or its own recursive walk: `top_level`, `overdue`/`days_overdue`, and `has_open_descendants`/`has_overdue_descendants` (the last two look at every descendant, any depth - not just a direct child). `due_today` is also available as its own filter alongside `overdue`, for exactly-today rather than strictly-before-today.
 
 ## Automation triggers
 

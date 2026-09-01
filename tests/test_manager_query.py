@@ -92,7 +92,8 @@ async def test_query_items_serializes_every_overlay_field_and_direct_parent():
         "trigger_on_due": False, "pin_type": None, "weekday": None, "day_label": None,
         "linked": False, "delete_protected": False, "depth": 1, "top_level": False,
         "parent_id": "groceries", "parent_title": "Groceries", "child_ids": [],
-        "overdue": False, "has_open_descendants": False, "has_overdue_descendants": False,
+        "overdue": False, "days_overdue": None,
+        "has_open_descendants": False, "has_overdue_descendants": False,
     }
 
 
@@ -159,6 +160,50 @@ async def test_query_items_overdue_is_false_for_a_due_date_that_has_not_arrived_
     items = await manager.query_items(ENTITY_ID, overdue=True)
 
     assert items == []
+
+
+@pytest.mark.asyncio
+async def test_query_items_filters_by_due_today():
+    manager = await make_manager(today=date(2026, 1, 1))
+
+    items = await manager.query_items(ENTITY_ID, due_today=True)
+
+    assert {item["id"] for item in items} == {"passport"}
+
+
+@pytest.mark.asyncio
+async def test_query_items_due_today_does_not_exclude_completed_items():
+    # Deliberately different from overdue's own semantics - see
+    # query_items' own docstring for why: "due today" is a fact about
+    # the due date, not a statement about an outstanding obligation.
+    manager = await make_manager(today=date(2026, 1, 1))
+    await manager.set_completed(ENTITY_ID, "passport", True)
+
+    items = await manager.query_items(ENTITY_ID, due_today=True)
+
+    assert {item["id"] for item in items} == {"passport"}
+
+
+@pytest.mark.asyncio
+async def test_query_items_days_overdue_field_matches_the_actual_gap():
+    manager = await make_manager(today=date(2026, 1, 4))
+
+    items = await manager.query_items(ENTITY_ID)
+    passport = next(item for item in items if item["id"] == "passport")
+
+    assert passport["overdue"] is True
+    assert passport["days_overdue"] == 3
+
+
+@pytest.mark.asyncio
+async def test_query_items_days_overdue_is_none_when_not_overdue():
+    manager = await make_manager()
+
+    items = await manager.query_items(ENTITY_ID)
+    solo = next(item for item in items if item["id"] == "solo")
+
+    assert solo["overdue"] is False
+    assert solo["days_overdue"] is None
 
 
 @pytest.mark.asyncio

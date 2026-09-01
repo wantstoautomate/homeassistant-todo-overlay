@@ -469,7 +469,8 @@ async def test_service_query_items_resolves_parent_title_and_reports_it_back():
         "trigger_on_due": False, "pin_type": None, "weekday": None, "day_label": None,
         "linked": False, "delete_protected": False, "depth": 1, "top_level": False,
         "parent_id": "brodie", "parent_title": "Brodie", "child_ids": [],
-        "overdue": False, "has_open_descendants": False, "has_overdue_descendants": False,
+        "overdue": False, "days_overdue": None,
+        "has_open_descendants": False, "has_overdue_descendants": False,
     }]
 
 
