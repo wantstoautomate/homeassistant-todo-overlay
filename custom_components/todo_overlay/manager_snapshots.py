@@ -164,6 +164,13 @@ class SnapshotMixin:
             "tags": item.tags,
             "trigger_on_due": item.trigger_on_due,
             "pin_type": item.pin_type,
+            # Only meaningful alongside pin_type == "day" - captured
+            # unconditionally anyway (None for anything else), same as
+            # every other field here. Missing this was a real bug: a
+            # saved-and-reloaded "day" pin came back with pin_type
+            # "day" but no weekday at all, since _create_snapshot_nodes
+            # only ever had pin_type to work with.
+            "weekday": item.weekday,
             "linked": item.linked,
             "completed": item.completed if persist_states else False,
             "children": [
@@ -268,7 +275,10 @@ class SnapshotMixin:
                 # Only adopts the incoming pin_type when the existing
                 # (matched) item has none at all, same "existing wins,
                 # incoming only fills a gap" rule the duplicate-title
-                # merge in manager_tree.py uses.
+                # merge in manager_tree.py uses. weekday only ever
+                # travels alongside pin_type actually being adopted here
+                # - if the existing item already has its own pin_type,
+                # its own weekday (if any) is left alone too.
                 incoming_pin_type = node.get("pin_type")
 
                 if incoming_pin_type:
@@ -276,6 +286,9 @@ class SnapshotMixin:
 
                     if not existing_pin_types.get(target_id):
                         await self._metadata_store.set_pin_type(entity_id, target_id, incoming_pin_type)
+
+                        if incoming_pin_type == "day" and node.get("weekday") is not None:
+                            await self._metadata_store.set_weekday(entity_id, target_id, node["weekday"])
             else:
                 target_id = await self._adapter.add_item(
                     entity_id,
@@ -299,6 +312,9 @@ class SnapshotMixin:
 
                 if node.get("pin_type"):
                     await self._metadata_store.set_pin_type(entity_id, target_id, node["pin_type"])
+
+                    if node["pin_type"] == "day" and node.get("weekday") is not None:
+                        await self._metadata_store.set_weekday(entity_id, target_id, node["weekday"])
 
                 if node.get("completed"):
                     await self._adapter.set_completed(entity_id, target_id, True)

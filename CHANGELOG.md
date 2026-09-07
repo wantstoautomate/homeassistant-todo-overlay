@@ -3,6 +3,10 @@
 All notable changes to this project are documented here. Versions follow the
 integration's `manifest.json`/card's `package.json` (kept in lockstep).
 
+## 1.7.3
+
+**Fixed: saving a list containing a "day" pin and loading it back lost the pin's weekday.** `_snapshot_node()` never captured `weekday` at all, so a reloaded "day" pin came back with `pin_type: "day"` but no weekday - it could no longer rotate through "Today"/"Tomorrow" or sort correctly. Now captured and restored on both the new-item and merge-matched load paths, without overwriting an existing item's own weekday when merge's "existing wins" rule already applies.
+
 ## 1.7.2
 
 **New: `query_items` gained `due_today` (filter) and `days_overdue` (field)** after weighing which computations genuinely belong server-side versus what an automation should do itself in Jinja. Both clear the same bar `overdue` already did: exact date math tied to "today" that a template shouldn't have to reconstruct by hand. `due_today` deliberately doesn't exclude completed items the way `overdue` does - it's a fact about the due date, not a statement about an outstanding obligation - so pair it with `completed: false` for "still left to do today". Deliberately NOT added, on the same weighing: cross-entity aggregation, sorting/counting/grouping (Jinja's own filters already do this well over the flat list), a formatted breadcrumb string, sibling lookup, or any notion of "urgent" - each one is either already trivial client-side or too opinionated to bake into one definition.
