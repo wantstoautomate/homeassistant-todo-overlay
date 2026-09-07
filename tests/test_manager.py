@@ -1691,6 +1691,86 @@ async def test_manager_save_and_load_list_round_trips_quantity():
 
 
 @pytest.mark.asyncio
+async def test_manager_save_and_load_list_round_trips_weekday_for_a_day_pin():
+    # Live-reported bug: a saved-and-reloaded "day" pin came back with
+    # pin_type "day" but no weekday at all - _snapshot_node never
+    # captured it, so build_tree could never rotate/label the loaded
+    # copy (see tree.py's own "day" pin sort_key/day_label, both of
+    # which require weekday is not None).
+    adapter = FakeAdapter(items=[TodoItem(id="1", title="Monday", completed=False)])
+    metadata_store = FakeMetadataStore({"1": ItemPosition(parent_id=None, order=0)})
+    manager = TodoManager(adapter=adapter, metadata_store=metadata_store)
+
+    await manager.set_pin_type("todo.shopping", "1", "day", weekday=0)
+    await manager.save_list(entity_id="todo.shopping", name="template")
+
+    await manager.load_list(entity_id="todo.other", name="template", mode="full_merge")
+
+    todo_list = await manager.get_list("todo.other")
+    loaded = next(item for item in todo_list.items if item.id != "1")
+    assert loaded.pin_type == "day"
+    assert loaded.weekday == 0
+    assert loaded.day_label == "Today"
+
+
+@pytest.mark.asyncio
+async def test_manager_load_list_merge_adopts_weekday_alongside_pin_type_for_a_newly_matched_item():
+    # merge mode's OWN "existing wins, incoming only fills a gap" path
+    # for pin_type (not full_merge's always-create-new path above) -
+    # confirms weekday travels through that branch too, not just the
+    # new-item one.
+    adapter = FakeAdapter(items=[
+        TodoItem(id="1", title="Monday", completed=False),
+        TodoItem(id="2", title="Monday", completed=False),
+    ])
+    metadata_store = FakeMetadataStore({
+        "1": ItemPosition(parent_id=None, order=0),
+        "2": ItemPosition(parent_id=None, order=1),
+    })
+    manager = TodoManager(adapter=adapter, metadata_store=metadata_store)
+
+    await manager.set_pin_type("todo.shopping", "1", "day", weekday=0)
+    await manager.save_list(entity_id="todo.shopping", name="template")
+
+    # "2" already exists (same title, same root level, no pin_type of
+    # its own yet) - merge mode matches it by title path rather than
+    # creating a third item, and should adopt the incoming day pin's
+    # weekday right along with its pin_type.
+    await manager.load_list(entity_id="todo.shopping", name="template", mode="merge")
+
+    weekdays = await metadata_store.get_weekdays("todo.shopping")
+    assert weekdays.get("2") == 0
+
+
+@pytest.mark.asyncio
+async def test_manager_load_list_merge_does_not_overwrite_an_existing_pin_types_own_weekday():
+    # The other side of "existing wins outright" - a matched item that
+    # ALREADY has its own pin_type keeps its own weekday untouched too,
+    # even if the incoming snapshot node is a day pin with a different one.
+    adapter = FakeAdapter(items=[
+        TodoItem(id="1", title="Monday", completed=False),
+        TodoItem(id="2", title="Monday", completed=False),
+    ])
+    metadata_store = FakeMetadataStore({
+        "1": ItemPosition(parent_id=None, order=0),
+        "2": ItemPosition(parent_id=None, order=1),
+    })
+    manager = TodoManager(adapter=adapter, metadata_store=metadata_store)
+
+    await manager.set_pin_type("todo.shopping", "1", "day", weekday=0)
+    await manager.save_list(entity_id="todo.shopping", name="template")
+
+    await manager.set_pin_type("todo.shopping", "2", "person")
+
+    await manager.load_list(entity_id="todo.shopping", name="template", mode="merge")
+
+    pin_types = await metadata_store.get_pin_types("todo.shopping")
+    weekdays = await metadata_store.get_weekdays("todo.shopping")
+    assert pin_types.get("2") == "person"
+    assert weekdays.get("2") is None
+
+
+@pytest.mark.asyncio
 async def test_manager_load_list_full_merge_creates_true_duplicates_without_quantity():
 
     # Without any quantity involved, get_list()'s merge is deliberately
