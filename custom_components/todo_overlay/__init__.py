@@ -1,3 +1,4 @@
+import logging
 from pathlib import Path
 
 from homeassistant.components.http import StaticPathConfig
@@ -33,6 +34,8 @@ from .runtime_data import TodoOverlayConfigEntry, TodoOverlayData
 from .sensor import OpenItemsSensorRegistry
 from .services import async_register_services
 from .websocket import async_register_websocket
+
+_LOGGER = logging.getLogger(__name__)
 
 FRONTEND_URL_PATH = "/todo_overlay_static"
 FRONTEND_DIST = Path(__file__).parent / "frontend_dist"
@@ -108,7 +111,33 @@ async def async_setup_entry(hass: HomeAssistant, entry: TodoOverlayConfigEntry) 
         er.EVENT_ENTITY_REGISTRY_UPDATED, _handle_entity_registry_updated,
     )
 
-    link_sync = await _async_setup_link_sync(hass, entry, manager, metadata_store)
+    # Live-reproduced production outage: PahoMqttTransport.async_connect()
+    # makes a blocking, synchronous connect() call to the broker (see
+    # mqtt_link.py's own comment) - a broker that's briefly unreachable
+    # (network blip, broker restart, DNS hiccup) raises straight out of
+    # it, and unguarded, that exception would propagate out of this
+    # whole function BEFORE entry.runtime_data is ever assigned below.
+    # Every websocket command and service was already registered by
+    # this point (see async_register_websocket/async_register_services
+    # above), so the entry LOOKS loaded to Home Assistant while the
+    # entity picking up literally every request off it - get_manager()
+    # - has nothing to return: everything from a plain get_list() to
+    # query_items() fails with a bare AttributeError, everywhere, until
+    # the entry is reloaded. Cross-instance linked lists are the one
+    # genuinely optional feature here - degrading it alone (logged,
+    # link_sync left None, exactly like "no broker configured" already
+    # behaves) rather than taking the entire integration down with it
+    # is the only sane failure mode for a broker connectivity issue.
+    try:
+        link_sync = await _async_setup_link_sync(hass, entry, manager, metadata_store)
+    except Exception:  # noqa: BLE001 - intentionally broad, see comment above
+        _LOGGER.exception(
+            "Failed to connect to the configured MQTT broker - linked lists "
+            "won't sync until this entry is reloaded (Settings -> Devices & "
+            "Services -> Todo Overlay -> reload), but every other feature "
+            "will otherwise work normally."
+        )
+        link_sync = None
 
     item_links = ItemLinkManager(
         hass,
@@ -145,12 +174,22 @@ async def async_unload_entry(hass: HomeAssistant, entry: TodoOverlayConfigEntry)
 
     unloaded = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
 
-    entry.runtime_data.due_scheduler.async_stop()
-    entry.runtime_data.unsub_entity_registry()
-    entry.runtime_data.item_links.async_shutdown()
+    # Defensive: async_setup_entry() can still fail before ever reaching
+    # entry.runtime_data = ... (e.g. a genuinely unexpected error, not
+    # just the MQTT-connect case already caught there) - HA can call
+    # unload as part of retrying that failed setup, and this must not
+    # compound the outage with a second AttributeError of its own.
+    data = getattr(entry, "runtime_data", None)
 
-    if entry.runtime_data.link_sync is not None:
-        await entry.runtime_data.link_sync.async_shutdown()
+    if data is None:
+        return unloaded
+
+    data.due_scheduler.async_stop()
+    data.unsub_entity_registry()
+    data.item_links.async_shutdown()
+
+    if data.link_sync is not None:
+        await data.link_sync.async_shutdown()
 
     return unloaded
 
