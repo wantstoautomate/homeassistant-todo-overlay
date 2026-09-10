@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import HomeAssistantError
 
 from .const import DOMAIN
 from .due_scheduler import DueScheduler
@@ -45,29 +46,52 @@ class TodoOverlayData:
 TodoOverlayConfigEntry = ConfigEntry[TodoOverlayData]
 
 
-def get_manager(hass: HomeAssistant) -> TodoManager:
-    """Look up the running integration's TodoManager.
+def _get_data(hass: HomeAssistant) -> TodoOverlayData:
+    """Look up the running integration's own runtime_data.
 
     Websocket commands and services only ever receive `hass`, never the
     ConfigEntry itself - and since this integration declares
     single_config_entry (see manifest.json), there's always exactly one
     to find once setup has completed.
+
+    A bare `entry.runtime_data` access here would raise an opaque
+    AttributeError if setup never reached the point of assigning it -
+    live-reproduced: a broker connectivity failure during MQTT link
+    setup used to propagate straight out of async_setup_entry() before
+    runtime_data was ever set, and every websocket command/service
+    (already registered by that point) failed with nothing more
+    informative than "Unknown error" in the UI. async_setup_entry()
+    itself now catches that specific case, but this stays the one
+    place every entry point ultimately funnels through, so any other
+    not-yet-imagined setup failure still surfaces a clear, actionable
+    message instead of a bare attribute error with no context.
     """
 
     entry = hass.config_entries.async_entries(DOMAIN)[0]
-    return entry.runtime_data.manager
+    data = getattr(entry, "runtime_data", None)
+
+    if data is None:
+        raise HomeAssistantError(
+            "Todo Overlay isn't fully set up yet - check Settings -> System -> "
+            "Logs for why (a network issue reaching a configured MQTT broker is "
+            "the most common cause), then reload the integration."
+        )
+
+    return data
+
+
+def get_manager(hass: HomeAssistant) -> TodoManager:
+    return _get_data(hass).manager
 
 
 def get_metadata_store(hass: HomeAssistant) -> MetadataStore:
-    entry = hass.config_entries.async_entries(DOMAIN)[0]
-    return entry.runtime_data.metadata_store
+    return _get_data(hass).metadata_store
 
 
 def get_link_sync(hass: HomeAssistant) -> LinkSyncManager | None:
     """None unless an MQTT broker is configured - see TodoOverlayData."""
 
-    entry = hass.config_entries.async_entries(DOMAIN)[0]
-    return entry.runtime_data.link_sync
+    return _get_data(hass).link_sync
 
 
 def get_item_links(hass: HomeAssistant) -> ItemLinkManager:
@@ -75,5 +99,4 @@ def get_item_links(hass: HomeAssistant) -> ItemLinkManager:
     item_links.py) don't need an MQTT broker at all, since they never
     cross an instance boundary."""
 
-    entry = hass.config_entries.async_entries(DOMAIN)[0]
-    return entry.runtime_data.item_links
+    return _get_data(hass).item_links

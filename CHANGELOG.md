@@ -3,6 +3,10 @@
 All notable changes to this project are documented here. Versions follow the
 integration's `manifest.json`/card's `package.json` (kept in lockstep).
 
+## 1.7.4
+
+**Fixed: a critical outage where every card and service call failed with "Unknown error" across every list.** A momentary failure connecting to the configured MQTT broker (a network blip, broker restart, DNS hiccup - anything) during startup used to propagate out of the whole integration's setup *before* it finished initializing, leaving every websocket command and service already registered but with nothing behind them - so `get_list`, `query_items`, and the card itself all failed everywhere, even though cross-instance linked lists were the only feature that actually needed the broker. A broker connection failure is now caught and logged there instead: linked lists pause until the next reload, and everything else keeps working normally. Also added a clear, actionable error message for this and any similar not-yet-imagined setup failure, replacing a bare, uninformative `AttributeError`.
+
 ## 1.7.3
 
 **Fixed: saving a list containing a "day" pin and loading it back lost the pin's weekday.** `_snapshot_node()` never captured `weekday` at all, so a reloaded "day" pin came back with `pin_type: "day"` but no weekday - it could no longer rotate through "Today"/"Tomorrow" or sort correctly. Now captured and restored on both the new-item and merge-matched load paths, without overwriting an existing item's own weekday when merge's "existing wins" rule already applies.

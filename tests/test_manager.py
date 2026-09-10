@@ -1697,9 +1697,15 @@ async def test_manager_save_and_load_list_round_trips_weekday_for_a_day_pin():
     # captured it, so build_tree could never rotate/label the loaded
     # copy (see tree.py's own "day" pin sort_key/day_label, both of
     # which require weekday is not None).
+    # today_date_fn pinned to an actual Monday - this must not depend
+    # on whatever day it happens to be when the suite runs (see
+    # test_manager_get_list_uses_the_injected_today_weekday_fn_end_to_end
+    # for the same reasoning).
     adapter = FakeAdapter(items=[TodoItem(id="1", title="Monday", completed=False)])
     metadata_store = FakeMetadataStore({"1": ItemPosition(parent_id=None, order=0)})
-    manager = TodoManager(adapter=adapter, metadata_store=metadata_store)
+    manager = TodoManager(
+        adapter=adapter, metadata_store=metadata_store, today_date_fn=lambda: date(2026, 1, 5),
+    )
 
     await manager.set_pin_type("todo.shopping", "1", "day", weekday=0)
     await manager.save_list(entity_id="todo.shopping", name="template")
