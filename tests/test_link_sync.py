@@ -1241,3 +1241,79 @@ async def test_incoming_delete_protected_is_applied_locally_on_update():
 
     delete_protected = await store.get_delete_protected(ENTITY_ID)
     assert "1" in delete_protected
+
+
+# --- untracked task exceptions -------------------------------------------
+#
+# Live-reproduced production bug: hass.async_create_task's returned Task
+# was never awaited or given a done-callback (see async_start_link's own
+# _on_item/_on_snapshot closures), so any exception raised while applying
+# an incoming message - a startup-ordering race calling todo.update_item
+# before the underlying platform had even registered it, in the wild -
+# surfaced only as a bare, context-free "Task exception was never
+# retrieved (task: None)" with no indication of which entity or message
+# actually failed. _create_tracked_task's job is making sure this is
+# caught and actually logged instead.
+
+@pytest.mark.asyncio
+async def test_a_failing_incoming_item_message_is_logged_not_left_untracked(caplog):
+    hass, adapter, store, manager, transport, sync = make_sync_manager(items=[])
+    await sync.async_setup()
+    await store.set_link(ENTITY_ID, LINK_ID)
+    await sync.async_start_link(ENTITY_ID)
+
+    async def _boom(*args, **kwargs):
+        raise RuntimeError("boom")
+
+    sync._apply_incoming_content = _boom
+
+    with caplog.at_level("ERROR"):
+        transport.deliver(f"todo_overlay/link/{LINK_ID}/item/sync-1", {
+            "origin": "some-other-instance",
+            "sync_id": "sync-1",
+            "updated_at": "2026-01-01T00:00:00+00:00",
+            "deleted": False,
+            "fields": {"title": "Bread", "completed": False, "description": None,
+                        "due_date": None, "due_datetime": None, "quantity": None, "tags": []},
+        })
+
+        # Must not raise/propagate - that's the whole point of the fix.
+        await _flush(hass)
+
+    assert any(
+        "Failed to apply an incoming linked-list item update" in record.message
+        for record in caplog.records
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_failing_incoming_snapshot_message_is_logged_not_left_untracked(caplog):
+    hass, adapter, store, manager, transport, sync = make_sync_manager(items=[])
+    await sync.async_setup()
+    await store.set_link(ENTITY_ID, LINK_ID)
+    await sync.async_start_link(ENTITY_ID)
+
+    async def _boom(*args, **kwargs):
+        raise RuntimeError("boom")
+
+    sync._apply_incoming_content = _boom
+
+    with caplog.at_level("ERROR"):
+        transport.deliver(f"todo_overlay/link/{LINK_ID}/snapshot/some-other-instance", {
+            "origin": "some-other-instance",
+            "items": {
+                "sync-1": {
+                    "updated_at": "2026-01-01T00:00:00+00:00",
+                    "deleted": False,
+                    "fields": {"title": "Bread", "completed": False, "description": None,
+                                "due_date": None, "due_datetime": None, "quantity": None, "tags": []},
+                },
+            },
+        })
+
+        await _flush(hass)
+
+    assert any(
+        "Failed to apply an incoming linked-list snapshot" in record.message
+        for record in caplog.records
+    )

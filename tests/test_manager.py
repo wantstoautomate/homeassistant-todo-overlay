@@ -2702,6 +2702,29 @@ async def test_manager_load_list_unknown_snapshot_raises_snapshot_not_found_erro
         await manager.load_list(entity_id="todo.shopping", name="nonexistent")
 
 
+@pytest.mark.asyncio
+async def test_manager_load_list_unknown_snapshot_error_names_what_is_actually_available():
+    # HA's own service schema has no way to offer a live dropdown of
+    # saved names in an automation's load_list field (they're this
+    # integration's own runtime data, not something HA's frontend can
+    # enumerate) - naming what's actually available right in the error
+    # is the next best thing for catching a typo.
+    manager = TodoManager(adapter=FakeAdapter(), metadata_store=FakeMetadataStore())
+    await manager.save_list(entity_id="todo.shopping", name="Weekly shop")
+    await manager.save_list(entity_id="todo.shopping", name="Pack for a trip")
+
+    with pytest.raises(SnapshotNotFoundError, match="Weekly shop.*Pack for a trip|Pack for a trip.*Weekly shop"):
+        await manager.load_list(entity_id="todo.shopping", name="typo'd name")
+
+
+@pytest.mark.asyncio
+async def test_manager_load_list_unknown_snapshot_error_when_none_saved_yet():
+    manager = TodoManager(adapter=FakeAdapter(), metadata_store=FakeMetadataStore())
+
+    with pytest.raises(SnapshotNotFoundError, match="none saved yet"):
+        await manager.load_list(entity_id="todo.shopping", name="anything")
+
+
 # --- per-entity concurrency -------------------------------------------
 
 @pytest.mark.asyncio

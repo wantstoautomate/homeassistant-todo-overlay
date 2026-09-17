@@ -73,6 +73,7 @@ or use the visual card editor from the dashboard's "Add Card" dialog, which also
 | `todo_overlay.save_list` | Save a list's current items/hierarchy as a named, reusable template. |
 | `todo_overlay.load_list` | Recreate a saved template onto any `todo.*` entity. |
 | `todo_overlay.delete_saved_list` | Delete a saved template. |
+| `todo_overlay.list_saved` | Get the names of every saved template - a response action, see below. Home Assistant has no way to turn `load_list`'s own `name` field into a live dropdown of these (they're this integration's own data, not something its selectors can enumerate), so this - or `load_list`'s own error, which names what's available if you get it wrong - is the closest thing to catching a typo before it happens. |
 | `todo_overlay.query_items` | Read items with server-side filtering (completed, tags, due dates, pin type, weekday, delete-protected, linked, quantity) and hierarchy lookups (direct children, or every descendant at any depth) - a response action, see below. |
 
 See each service's own description in the Home Assistant UI (**Developer Tools → Actions**) for its full field list.

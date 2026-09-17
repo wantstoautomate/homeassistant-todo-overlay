@@ -27,6 +27,7 @@ WS_TYPE_SET_DELETE_PROTECTED = "todo_overlay/set_delete_protected"
 SERVICE_SAVE_LIST = "save_list"
 SERVICE_LOAD_LIST = "load_list"
 SERVICE_DELETE_SAVED_LIST = "delete_saved_list"
+SERVICE_LIST_SAVED = "list_saved"
 SERVICE_ADD_TAG = "add_tag"
 SERVICE_REMOVE_TAG = "remove_tag"
 SERVICE_CREATE_ITEM = "create_item"
@@ -101,6 +102,7 @@ ATTR_TOP_LEVEL_ONLY = "top_level_only"
 ATTR_INCLUDE_ANCESTORS = "include_ancestors"
 ATTR_LIMIT = "limit"
 ATTR_ITEMS = "items"
+ATTR_NAMES = "names"
 
 # The exact shape create_link's uuid.uuid4().hex always produces. join_link
 # must reject anything else - a link_id is spliced directly into an MQTT

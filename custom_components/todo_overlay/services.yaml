@@ -20,7 +20,7 @@ save_list:
 
 load_list:
   name: Load list
-  description: Recreate a saved snapshot's items onto a Todo Overlay list.
+  description: Recreate a saved snapshot's items onto a Todo Overlay list. There's no live dropdown of saved names here (they're this integration's own data, not something Home Assistant's own selectors can enumerate) - use list_saved first to see the exact current names, or check the error here, which names them too if "name" doesn't match.
   fields:
     entity_id:
       required: true
@@ -57,6 +57,10 @@ delete_saved_list:
       example: weekly_groceries
       selector:
         text:
+
+list_saved:
+  name: List saved lists
+  description: Get the names of every saved list snapshot - call with a response variable set (e.g. "result") in a script/automation action, then reference result.names. Takes no fields.
 
 add_tag:
   name: Add tag

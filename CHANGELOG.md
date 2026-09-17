@@ -3,6 +3,12 @@
 All notable changes to this project are documented here. Versions follow the
 integration's `manifest.json`/card's `package.json` (kept in lockstep).
 
+## 1.7.5
+
+**Fixed: a rare startup-ordering race could drop an incoming linked-list message with "Action todo.update_item not found", and leave no trace beyond a bare "Task exception was never retrieved".** A retained MQTT message could get applied - trying to call the native `todo.update_item` service - before the integration actually providing that entity had registered its own services yet, since connecting to the broker never waited for Home Assistant to finish starting. Deferred to match every other startup-order-sensitive part of this integration; a broker connection failure occurring there is still caught and logged, same as before, without taking anything else down. Also fixed the underlying reporting gap: any failure applying an incoming linked-list message is now actually logged with real context, not silently lost.
+
+**New: `todo_overlay.list_saved`** - get the names of every saved list template, for scripting or for checking exact names before hand-writing a `load_list` call (Home Assistant has no way to turn a custom integration's own runtime data into a live dropdown, so this - plus `load_list`'s own error, which now names what's actually available if you get the name wrong - is the closest thing to catching a typo before it happens).
+
 ## 1.7.4
 
 **Fixed: a critical outage where every card and service call failed with "Unknown error" across every list.** A momentary failure connecting to the configured MQTT broker (a network blip, broker restart, DNS hiccup - anything) during startup used to propagate out of the whole integration's setup *before* it finished initializing, leaving every websocket command and service already registered but with nothing behind them - so `get_list`, `query_items`, and the card itself all failed everywhere, even though cross-instance linked lists were the only feature that actually needed the broker. A broker connection failure is now caught and logged there instead: linked lists pause until the next reload, and everything else keeps working normally. Also added a clear, actionable error message for this and any similar not-yet-imagined setup failure, replacing a bare, uninformative `AttributeError`.

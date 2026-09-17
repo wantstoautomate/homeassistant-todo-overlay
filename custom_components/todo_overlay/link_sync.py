@@ -199,6 +199,27 @@ class LinkSyncManager:
 
         await self.async_handle_local_change(data["entity_id"], data["item_id"], data["action"])
 
+    def _create_tracked_task(self, coro: Any, description: str) -> None:
+        """hass.async_create_task fires a coroutine as a background task
+        with nothing ever awaiting the returned Task - if the coroutine
+        raises, Python has no one to report the exception to until
+        garbage collection, which surfaces as a bare, context-free
+        "Task exception was never retrieved (task: None)" with no
+        indication of which entity or message actually failed.
+        Live-reproduced: a single incoming snapshot message dropped
+        during a startup race (see __init__.py's own
+        _async_setup_link_sync) left exactly that behind. Wrapping the
+        coroutine so it logs its own failure, with real context, before
+        the Task is ever allowed to become garbage."""
+
+        async def _run() -> None:
+            try:
+                await coro
+            except Exception:  # noqa: BLE001 - intentionally broad, see comment above
+                _LOGGER.exception("Failed to apply an incoming linked-list %s", description)
+
+        self._hass.async_create_task(_run())
+
     def _notify_local_refresh(self, entity_id: str, item_id: str, title: str) -> None:
         """Tell any open card on THIS instance to reload after applying an
         incoming remote change - fired directly on the event bus, never
@@ -229,10 +250,14 @@ class LinkSyncManager:
         link_id = link["link_id"]
 
         def _on_item(topic: str, payload: bytes, entity_id: str = entity_id) -> None:
-            self._hass.async_create_task(self._on_item_message(entity_id, payload))
+            self._create_tracked_task(
+                self._on_item_message(entity_id, payload), f"item update on {entity_id}",
+            )
 
         def _on_snapshot(topic: str, payload: bytes, entity_id: str = entity_id) -> None:
-            self._hass.async_create_task(self._on_snapshot_message(entity_id, payload))
+            self._create_tracked_task(
+                self._on_snapshot_message(entity_id, payload), f"snapshot for {entity_id}",
+            )
 
         self._transport.subscribe(_item_topic_filter(link_id), _on_item)
         self._transport.subscribe(_snapshot_topic_filter(link_id), _on_snapshot)
