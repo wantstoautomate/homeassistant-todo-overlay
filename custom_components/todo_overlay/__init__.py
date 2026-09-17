@@ -111,33 +111,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: TodoOverlayConfigEntry) 
         er.EVENT_ENTITY_REGISTRY_UPDATED, _handle_entity_registry_updated,
     )
 
-    # Live-reproduced production outage: PahoMqttTransport.async_connect()
-    # makes a blocking, synchronous connect() call to the broker (see
-    # mqtt_link.py's own comment) - a broker that's briefly unreachable
-    # (network blip, broker restart, DNS hiccup) raises straight out of
-    # it, and unguarded, that exception would propagate out of this
-    # whole function BEFORE entry.runtime_data is ever assigned below.
-    # Every websocket command and service was already registered by
-    # this point (see async_register_websocket/async_register_services
-    # above), so the entry LOOKS loaded to Home Assistant while the
-    # entity picking up literally every request off it - get_manager()
-    # - has nothing to return: everything from a plain get_list() to
-    # query_items() fails with a bare AttributeError, everywhere, until
-    # the entry is reloaded. Cross-instance linked lists are the one
-    # genuinely optional feature here - degrading it alone (logged,
-    # link_sync left None, exactly like "no broker configured" already
-    # behaves) rather than taking the entire integration down with it
-    # is the only sane failure mode for a broker connectivity issue.
-    try:
-        link_sync = await _async_setup_link_sync(hass, entry, manager, metadata_store)
-    except Exception:  # noqa: BLE001 - intentionally broad, see comment above
-        _LOGGER.exception(
-            "Failed to connect to the configured MQTT broker - linked lists "
-            "won't sync until this entry is reloaded (Settings -> Devices & "
-            "Services -> Todo Overlay -> reload), but every other feature "
-            "will otherwise work normally."
-        )
-        link_sync = None
+    link_sync = await _async_setup_link_sync(hass, entry, manager, metadata_store)
 
     item_links = ItemLinkManager(
         hass,
@@ -175,10 +149,11 @@ async def async_unload_entry(hass: HomeAssistant, entry: TodoOverlayConfigEntry)
     unloaded = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
 
     # Defensive: async_setup_entry() can still fail before ever reaching
-    # entry.runtime_data = ... (e.g. a genuinely unexpected error, not
-    # just the MQTT-connect case already caught there) - HA can call
-    # unload as part of retrying that failed setup, and this must not
-    # compound the outage with a second AttributeError of its own.
+    # entry.runtime_data = ... (a genuinely unexpected error - an MQTT
+    # broker connectivity failure specifically can't cause this anymore,
+    # see _async_setup_link_sync's own docstring) - HA can call unload
+    # as part of retrying that failed setup, and this must not compound
+    # the outage with a second AttributeError of its own.
     data = getattr(entry, "runtime_data", None)
 
     if data is None:
@@ -200,9 +175,40 @@ async def _async_setup_link_sync(
     manager: TodoManager,
     metadata_store: MetadataStore,
 ) -> LinkSyncManager | None:
-    """Connect to the configured MQTT broker and resume any lists already
-    linked before this restart - None (no-op) unless a broker has been
-    set up via the options flow (see config_flow.py)."""
+    """Build the LinkSyncManager for a configured MQTT broker - None (no-op)
+    unless one has been set up via the options flow (see config_flow.py).
+
+    The actual connect (link_sync.async_setup(), which subscribes and
+    immediately starts receiving whatever's already retained/queued on
+    the broker) is deferred until Home Assistant has finished starting,
+    same reasoning - and same pattern - as due_scheduler.py's own
+    deferral: HA doesn't guarantee integration setup order, so a
+    retained snapshot message could otherwise get applied before the
+    todo integration actually providing this entity has even registered
+    its own services yet. Live-reproduced: exactly that race, once,
+    right after a restart - "Action todo.update_item not found" - one
+    incoming message silently lost (self-healing on the next change
+    either side publishes, but not immediate, and previously invisible
+    beyond a bare, context-free "Task exception was never retrieved" -
+    see _create_tracked_task in link_sync.py for the other half of
+    that fix).
+
+    Also where a broker that's unreachable at connect time (a network
+    blip, broker restart, DNS hiccup) is caught: live-reproduced
+    production outage before this was deferred - PahoMqttTransport.
+    async_connect() makes a blocking, synchronous connect() call (see
+    mqtt_link.py's own comment), and unguarded, that exception used to
+    propagate out of async_setup_entry() BEFORE entry.runtime_data was
+    ever assigned - every websocket command/service was already
+    registered by that point, so get_manager() had nothing to return
+    and EVERYTHING failed with a bare AttributeError, not just linked
+    lists. Deferred or not, the same failure mode is possible, so it's
+    still caught here - logged, link_sync's own connection left
+    unestablished (get_link_sync() still returns it: configured is a
+    different question from currently connected), rather than ever
+    letting a broker problem cascade into the rest of the integration
+    again.
+    """
 
     if not entry.options.get(CONF_MQTT_HOST):
         return None
@@ -224,7 +230,22 @@ async def _async_setup_link_sync(
     link_sync = LinkSyncManager(
         hass, manager, metadata_store, HomeAssistantTodoProvider(hass), transport,
     )
-    await link_sync.async_setup()
+
+    async def _connect(_event=None) -> None:
+        try:
+            await link_sync.async_setup()
+        except Exception:  # noqa: BLE001 - intentionally broad, see docstring above
+            _LOGGER.exception(
+                "Failed to connect to the configured MQTT broker - linked "
+                "lists won't sync until this entry is reloaded (Settings -> "
+                "Devices & Services -> Todo Overlay -> reload), but every "
+                "other feature works normally regardless."
+            )
+
+    if hass.state == CoreState.running:
+        await _connect()
+    else:
+        hass.bus.async_listen_once(EVENT_HOMEASSISTANT_STARTED, _connect)
 
     return link_sync
 

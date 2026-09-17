@@ -67,6 +67,7 @@ def test_async_register_services_registers_every_service():
         "save_list",
         "load_list",
         "delete_saved_list",
+        "list_saved",
         "add_tag",
         "remove_tag",
         "create_item",
@@ -133,6 +134,33 @@ async def test_service_delete_saved_list():
     await services.handlers["delete_saved_list"](FakeServiceCall({"name": "template"}))
 
     assert await manager.list_saved() == []
+
+
+@pytest.mark.asyncio
+async def test_service_list_saved_returns_names_under_the_response():
+    manager = make_manager()
+    _, services = make_hass(manager)
+
+    await services.handlers["save_list"](FakeServiceCall({
+        "entity_id": ENTITY_ID, "name": "Weekly shop", "persist_states": False,
+    }))
+    await services.handlers["save_list"](FakeServiceCall({
+        "entity_id": ENTITY_ID, "name": "Pack for a trip", "persist_states": False,
+    }))
+
+    result = await services.handlers["list_saved"](FakeServiceCall({}))
+
+    assert sorted(result["names"]) == ["Pack for a trip", "Weekly shop"]
+
+
+@pytest.mark.asyncio
+async def test_service_list_saved_is_empty_when_nothing_is_saved():
+    manager = make_manager()
+    _, services = make_hass(manager)
+
+    result = await services.handlers["list_saved"](FakeServiceCall({}))
+
+    assert result["names"] == []
 
 
 @pytest.mark.asyncio

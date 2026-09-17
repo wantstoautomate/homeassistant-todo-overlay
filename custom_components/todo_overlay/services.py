@@ -26,6 +26,7 @@ from .const import (
     ATTR_LINKED,
     ATTR_MODE,
     ATTR_NAME,
+    ATTR_NAMES,
     ATTR_OVERDUE,
     ATTR_PARENT_ID,
     ATTR_PARENT_TITLE,
@@ -49,6 +50,7 @@ from .const import (
     SERVICE_CREATE_LINK,
     SERVICE_DELETE_SAVED_LIST,
     SERVICE_JOIN_LINK,
+    SERVICE_LIST_SAVED,
     SERVICE_LOAD_LIST,
     SERVICE_QUERY_ITEMS,
     SERVICE_REMOVE_TAG,
@@ -85,6 +87,17 @@ DELETE_SAVED_LIST_SCHEMA = vol.Schema(
         vol.Required(ATTR_NAME): str,
     }
 )
+
+# No fields at all - list_saved() takes none. Home Assistant's own
+# service schema has no mechanism to turn this into a live dropdown for
+# load_list/delete_saved_list's own `name` field (saved snapshot names
+# are this integration's own runtime data, not an entity/device/area HA
+# itself can enumerate) - this is the next best thing: call it from
+# Developer Tools -> Actions (or a script) to see the exact current
+# names before composing a load_list/delete_saved_list call by hand,
+# rather than guessing and hitting a typo. See also load_list's own
+# improved SnapshotNotFoundError, which names what's available inline.
+LIST_SAVED_SCHEMA = vol.Schema({})
 
 ADD_OR_REMOVE_TAG_SCHEMA = vol.Schema(
     {
@@ -230,6 +243,11 @@ def async_register_services(hass: HomeAssistant) -> None:
             name=call.data[ATTR_NAME],
         )
 
+    async def handle_list_saved(call: ServiceCall) -> dict:
+        manager = get_manager(hass)
+
+        return {ATTR_NAMES: await manager.list_saved()}
+
     async def handle_add_tag(call: ServiceCall) -> None:
         manager = get_manager(hass)
 
@@ -374,6 +392,13 @@ def async_register_services(hass: HomeAssistant) -> None:
         SERVICE_DELETE_SAVED_LIST,
         handle_delete_saved_list,
         schema=DELETE_SAVED_LIST_SCHEMA,
+    )
+    hass.services.async_register(
+        DOMAIN,
+        SERVICE_LIST_SAVED,
+        handle_list_saved,
+        schema=LIST_SAVED_SCHEMA,
+        supports_response=SupportsResponse.ONLY,
     )
     hass.services.async_register(
         DOMAIN, SERVICE_ADD_TAG, handle_add_tag, schema=ADD_OR_REMOVE_TAG_SCHEMA

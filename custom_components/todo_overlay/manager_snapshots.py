@@ -81,7 +81,16 @@ class SnapshotMixin:
         snapshot = await self._metadata_store.get_snapshot(name)
 
         if snapshot is None:
-            raise SnapshotNotFoundError(f"No saved list named {name!r}")
+            # Home Assistant's own service schema has no way to offer a
+            # live dropdown of names here (they're this integration's
+            # own runtime data, not an entity/device/area HA's frontend
+            # can enumerate on its own) - the next best thing for
+            # catching a typo is naming what IS actually available right
+            # in the error, rather than making a separate list_saved
+            # call the only way to find out.
+            available = await self._metadata_store.list_snapshots()
+            hint = f" - available: {', '.join(sorted(available))}" if available else " - none saved yet"
+            raise SnapshotNotFoundError(f"No saved list named {name!r}{hint}")
 
         async with self._lock_for(entity_id):
             target_id: str | None = None
