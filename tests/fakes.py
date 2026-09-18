@@ -162,6 +162,7 @@ class FakeMetadataStore:
         self._delete_protected: set[str] = set()
         self._weekdays: dict[str, int] = {}
         self._last_rollover_date: str | None = None
+        self._repeats: dict[str, dict] = {}
 
     async def get_last_rollover_date(self, entity_id: str) -> str | None:
         return self._last_rollover_date
@@ -237,6 +238,28 @@ class FakeMetadataStore:
     ) -> None:
         for item_id in item_ids:
             self._weekdays.pop(item_id, None)
+
+    async def get_repeats(self, entity_id: str) -> dict[str, dict]:
+        return {k: dict(v) for k, v in self._repeats.items()}
+
+    async def set_repeat(
+        self,
+        entity_id: str,
+        item_id: str,
+        repeat: dict | None,
+    ) -> None:
+        if repeat is not None:
+            self._repeats[item_id] = dict(repeat)
+        else:
+            self._repeats.pop(item_id, None)
+
+    async def remove_repeats_for_items(
+        self,
+        entity_id: str,
+        item_ids: list[str],
+    ) -> None:
+        for item_id in item_ids:
+            self._repeats.pop(item_id, None)
 
     async def get_item_link(self, entity_id: str, item_id: str) -> dict | None:
         return self._item_links.get(item_id)
@@ -571,6 +594,7 @@ class FakeMultiEntityMetadataStore:
         self._delete_protected: dict[str, set[str]] = {}
         self._weekdays: dict[str, dict[str, int]] = {}
         self._last_rollover_date: dict[str, str] = {}
+        self._repeats: dict[str, dict[str, dict]] = {}
         self.set_positions_calls: list[tuple[str, dict[str, ItemPosition]]] = []
 
     async def get_last_rollover_date(self, entity_id: str) -> str | None:
@@ -629,6 +653,23 @@ class FakeMultiEntityMetadataStore:
 
     async def remove_weekdays(self, entity_id: str, item_ids: list[str]) -> None:
         bucket = self._weekdays.get(entity_id, {})
+
+        for item_id in item_ids:
+            bucket.pop(item_id, None)
+
+    async def get_repeats(self, entity_id: str) -> dict[str, dict]:
+        return {k: dict(v) for k, v in self._repeats.get(entity_id, {}).items()}
+
+    async def set_repeat(self, entity_id: str, item_id: str, repeat: dict | None) -> None:
+        bucket = self._repeats.setdefault(entity_id, {})
+
+        if repeat is not None:
+            bucket[item_id] = dict(repeat)
+        else:
+            bucket.pop(item_id, None)
+
+    async def remove_repeats_for_items(self, entity_id: str, item_ids: list[str]) -> None:
+        bucket = self._repeats.get(entity_id, {})
 
         for item_id in item_ids:
             bucket.pop(item_id, None)

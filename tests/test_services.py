@@ -73,6 +73,7 @@ def test_async_register_services_registers_every_service():
         "create_item",
         "set_quantity",
         "set_pin_type",
+        "set_repeat",
         "set_trigger_on_due",
         "create_link",
         "join_link",
@@ -241,6 +242,85 @@ async def test_service_create_item_with_pin_type():
     todo_list = await manager.get_list(ENTITY_ID)
     brodie = next(i for i in todo_list.items if i.title == "Brodie")
     assert brodie.pin_type == "person"
+
+
+@pytest.mark.asyncio
+async def test_service_create_item_with_repeat():
+    manager = make_manager()
+    _, services = make_hass(manager)
+
+    await services.handlers["create_item"](FakeServiceCall({
+        "entity_id": ENTITY_ID,
+        "title": "Bins",
+        "description": None,
+        "due_date": "2026-01-05",
+        "due_datetime": None,
+        "quantity": None,
+        "tags": None,
+        "trigger_on_due": False,
+        "repeat_interval": 1,
+        "repeat_unit": "weeks",
+        "repeat_from": "due",
+    }))
+
+    todo_list = await manager.get_list(ENTITY_ID)
+    bins = next(i for i in todo_list.items if i.title == "Bins")
+    assert bins.repeat_interval == 1
+    assert bins.repeat_unit == "weeks"
+    assert bins.repeat_from == "due"
+
+
+@pytest.mark.asyncio
+async def test_service_set_repeat_resolves_by_title():
+    manager = make_manager()
+    _, services = make_hass(manager)
+    await manager.update_item(entity_id=ENTITY_ID, item_id="1", due_date="2026-01-05")
+
+    await services.handlers["set_repeat"](FakeServiceCall({
+        "entity_id": ENTITY_ID, "item": "Shopping",
+        "repeat_interval": 2, "repeat_unit": "days", "repeat_from": "completion",
+    }))
+
+    todo_list = await manager.get_list(ENTITY_ID)
+    item = next(i for i in todo_list.items if i.id == "1")
+    assert item.repeat_interval == 2
+    assert item.repeat_unit == "days"
+    assert item.repeat_from == "completion"
+
+
+@pytest.mark.asyncio
+async def test_service_set_repeat_can_clear_by_omitting_the_field():
+    manager = make_manager()
+    _, services = make_hass(manager)
+    await manager.update_item(entity_id=ENTITY_ID, item_id="1", due_date="2026-01-05")
+
+    await services.handlers["set_repeat"](FakeServiceCall({
+        "entity_id": ENTITY_ID, "item": "Shopping",
+        "repeat_interval": 2, "repeat_unit": "days", "repeat_from": "completion",
+    }))
+    await services.handlers["set_repeat"](FakeServiceCall({
+        "entity_id": ENTITY_ID, "item": "Shopping",
+    }))
+
+    todo_list = await manager.get_list(ENTITY_ID)
+    item = next(i for i in todo_list.items if i.id == "1")
+    assert item.repeat_interval is None
+    assert item.repeat_unit is None
+    assert item.repeat_from is None
+
+
+@pytest.mark.asyncio
+async def test_service_set_repeat_raises_repeat_requires_due_date_for_an_item_with_no_due_date():
+    from custom_components.todo_overlay.errors import RepeatRequiresDueDateError
+
+    manager = make_manager()
+    _, services = make_hass(manager)
+
+    with pytest.raises(RepeatRequiresDueDateError):
+        await services.handlers["set_repeat"](FakeServiceCall({
+            "entity_id": ENTITY_ID, "item": "Shopping",
+            "repeat_interval": 1, "repeat_unit": "days", "repeat_from": "due",
+        }))
 
 
 @pytest.mark.asyncio
@@ -495,6 +575,7 @@ async def test_service_query_items_resolves_parent_title_and_reports_it_back():
         "id": "passport", "title": "Passport", "completed": False, "description": None,
         "due_date": None, "due_datetime": None, "quantity": None, "tags": [],
         "trigger_on_due": False, "pin_type": None, "weekday": None, "day_label": None,
+        "repeat_interval": None, "repeat_unit": None, "repeat_from": None,
         "linked": False, "delete_protected": False, "depth": 1, "top_level": False,
         "parent_id": "brodie", "parent_title": "Brodie", "child_ids": [],
         "overdue": False, "days_overdue": None,

@@ -158,6 +158,7 @@ class DayRolloverMixin:
             await self._metadata_store.remove_pin_types(entity_id, removed_ids)
             await self._metadata_store.remove_delete_protected_for_items(entity_id, removed_ids)
             await self._metadata_store.remove_weekdays(entity_id, removed_ids)
+            await self._metadata_store.remove_repeats_for_items(entity_id, removed_ids)
 
             for removed_id in removed_ids:
                 await self._metadata_store.remove_item_link(entity_id, removed_id)
@@ -184,6 +185,7 @@ class DayRolloverMixin:
                 item_links={k: v for k, v in metadata.item_links.items() if k not in removed_id_set},
                 delete_protected={i for i in metadata.delete_protected if i not in removed_id_set},
                 weekdays={k: v for k, v in metadata.weekdays.items() if k not in removed_id_set},
+                repeats={k: v for k, v in metadata.repeats.items() if k not in removed_id_set},
             ),
         )
 

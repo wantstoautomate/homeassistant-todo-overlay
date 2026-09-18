@@ -68,3 +68,19 @@ class ItemDeleteProtectedError(TodoOverlayError):
     quietly nothing happening. clear_completed/clear_all don't raise
     this - a bulk sweep skips a protected item/subtree instead of
     failing outright (see their own docstrings)."""
+
+
+class RepeatRequiresDueDateError(TodoOverlayError):
+    """Raised when set_repeat is given an interval/unit/from with no
+    due_date or due_datetime already set on the item - same "only means
+    something tied to a real date" rule WeekdayRequiredError enforces
+    for pin_type="day", since manager_recurrence.py has nothing to
+    advance from otherwise."""
+
+
+class InvalidRepeatError(TodoOverlayError):
+    """Raised when set_repeat's interval/unit/from don't form a valid,
+    complete repeat spec - interval isn't a positive int, unit/from
+    isn't one of manager_types.REPEAT_UNITS/REPEAT_FROM_VALUES, or only
+    some of the three were given (they're all-or-nothing - see
+    TodoItem's own repeat_interval/repeat_unit/repeat_from)."""

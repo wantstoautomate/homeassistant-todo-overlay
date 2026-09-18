@@ -90,6 +90,7 @@ async def test_query_items_serializes_every_overlay_field_and_direct_parent():
         "id": "milk", "title": "Milk", "completed": False, "description": None,
         "due_date": None, "due_datetime": None, "quantity": "2L", "tags": ["urgent"],
         "trigger_on_due": False, "pin_type": None, "weekday": None, "day_label": None,
+        "repeat_interval": None, "repeat_unit": None, "repeat_from": None,
         "linked": False, "delete_protected": False, "depth": 1, "top_level": False,
         "parent_id": "groceries", "parent_title": "Groceries", "child_ids": [],
         "overdue": False, "days_overdue": None,
@@ -260,6 +261,26 @@ async def test_query_items_filters_by_has_quantity():
     items = await manager.query_items(ENTITY_ID, has_quantity=True)
 
     assert {item["id"] for item in items} == {"milk"}
+
+
+@pytest.mark.asyncio
+async def test_query_items_filters_by_recurring():
+    # Isolated from make_manager()'s own shared fixture - setting a
+    # repeat there would advance/uncomplete "passport" the moment any
+    # OTHER test in this file completes it, coupling unrelated tests.
+    adapter = FakeAdapter(items=[
+        TodoItem(id="bins", title="Bins", completed=False, due_date="2026-01-05"),
+        TodoItem(id="milk", title="Milk", completed=False),
+    ])
+    metadata_store = FakeMetadataStore({
+        "bins": ItemPosition(parent_id=None, order=0),
+        "milk": ItemPosition(parent_id=None, order=1),
+    })
+    await metadata_store.set_repeat(ENTITY_ID, "bins", {"interval": 1, "unit": "weeks", "from": "due"})
+    manager = TodoManager(adapter=adapter, metadata_store=metadata_store)
+
+    assert {item["id"] for item in await manager.query_items(ENTITY_ID, recurring=True)} == {"bins"}
+    assert {item["id"] for item in await manager.query_items(ENTITY_ID, recurring=False)} == {"milk"}
 
 
 @pytest.mark.asyncio

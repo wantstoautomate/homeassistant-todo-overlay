@@ -1243,6 +1243,109 @@ async def test_incoming_delete_protected_is_applied_locally_on_update():
     assert "1" in delete_protected
 
 
+# --- repeat config sync -----------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_local_repeat_change_publishes_it_even_though_other_content_is_unchanged():
+    hass, adapter, store, manager, transport, sync = make_sync_manager(
+        items=[TodoItem(id="1", title="Bins", completed=False, due_date="2026-01-05")],
+    )
+    await sync.async_setup()
+    await store.set_link(ENTITY_ID, LINK_ID)
+    await sync.async_start_link(ENTITY_ID)
+
+    await sync.async_handle_local_change(ENTITY_ID, "1", "created")
+    transport.published.clear()
+
+    await manager.set_repeat(ENTITY_ID, "1", 1, "weeks", "due")
+    await sync.async_handle_local_change(ENTITY_ID, "1", "updated")
+
+    assert len(transport.published) == 1
+    _, payload = transport.published[0]
+    assert payload["fields"]["repeat_interval"] == 1
+    assert payload["fields"]["repeat_unit"] == "weeks"
+    assert payload["fields"]["repeat_from"] == "due"
+
+
+@pytest.mark.asyncio
+async def test_incoming_repeat_is_applied_locally_on_create():
+    hass, adapter, store, manager, transport, sync = make_sync_manager(items=[])
+    await sync.async_setup()
+    await store.set_link(ENTITY_ID, LINK_ID)
+    await sync.async_start_link(ENTITY_ID)
+
+    transport.deliver(f"todo_overlay/link/{LINK_ID}/item/sync-1", {
+        "origin": "some-other-instance",
+        "sync_id": "sync-1",
+        "updated_at": "2026-01-01T00:00:00+00:00",
+        "deleted": False,
+        "fields": {"title": "Bins", "completed": False, "description": None,
+                    "due_date": "2026-01-05", "due_datetime": None, "quantity": None, "tags": [],
+                    "pin_type": None, "delete_protected": False,
+                    "repeat_interval": 1, "repeat_unit": "weeks", "repeat_from": "due"},
+    })
+    await _flush(hass)
+
+    items = await adapter.get_items(ENTITY_ID)
+    new_item = next(item for item in items if item.title == "Bins")
+
+    repeats = await store.get_repeats(ENTITY_ID)
+    assert repeats.get(new_item.id) == {"interval": 1, "unit": "weeks", "from": "due"}
+
+
+@pytest.mark.asyncio
+async def test_incoming_repeat_is_applied_locally_on_update():
+    hass, adapter, store, manager, transport, sync = make_sync_manager(
+        items=[TodoItem(id="1", title="Bins", completed=False, due_date="2026-01-05")],
+    )
+    await sync.async_setup()
+    await store.set_link(ENTITY_ID, LINK_ID)
+    await sync.async_start_link(ENTITY_ID)
+    await store.set_native_sync_mapping(ENTITY_ID, "1", "sync-1")
+
+    transport.deliver(f"todo_overlay/link/{LINK_ID}/item/sync-1", {
+        "origin": "some-other-instance",
+        "sync_id": "sync-1",
+        "updated_at": "2026-01-01T00:00:00+00:00",
+        "deleted": False,
+        "fields": {"title": "Bins", "completed": False, "description": None,
+                    "due_date": "2026-01-05", "due_datetime": None, "quantity": None, "tags": [],
+                    "pin_type": None, "delete_protected": False,
+                    "repeat_interval": 2, "repeat_unit": "months", "repeat_from": "completion"},
+    })
+    await _flush(hass)
+
+    repeats = await store.get_repeats(ENTITY_ID)
+    assert repeats.get("1") == {"interval": 2, "unit": "months", "from": "completion"}
+
+
+@pytest.mark.asyncio
+async def test_incoming_message_with_an_invalid_repeat_falls_back_to_none_without_crashing():
+    hass, adapter, store, manager, transport, sync = make_sync_manager(items=[])
+    await sync.async_setup()
+    await store.set_link(ENTITY_ID, LINK_ID)
+    await sync.async_start_link(ENTITY_ID)
+
+    transport.deliver(f"todo_overlay/link/{LINK_ID}/item/sync-1", {
+        "origin": "some-other-instance",
+        "sync_id": "sync-1",
+        "updated_at": "2026-01-01T00:00:00+00:00",
+        "deleted": False,
+        "fields": {"title": "Bins", "completed": False, "description": None,
+                    "due_date": "2026-01-05", "due_datetime": None, "quantity": None, "tags": [],
+                    "pin_type": None, "delete_protected": False,
+                    "repeat_interval": 1, "repeat_unit": "fortnights", "repeat_from": "due"},
+    })
+    await _flush(hass)
+
+    items = await adapter.get_items(ENTITY_ID)
+    new_item = next(item for item in items if item.title == "Bins")
+
+    repeats = await store.get_repeats(ENTITY_ID)
+    assert repeats.get(new_item.id) is None
+
+
 # --- untracked task exceptions -------------------------------------------
 #
 # Live-reproduced production bug: hass.async_create_task's returned Task

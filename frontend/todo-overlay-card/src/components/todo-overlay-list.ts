@@ -21,6 +21,7 @@ import {
     setDeleteProtected,
     setPinType,
     setQuantity,
+    setRepeat,
     setTags,
     setTriggerOnDue,
     transferItem,
@@ -2084,6 +2085,9 @@ export class TodoOverlayList extends LitElement {
             linked: item.linked,
             linkTarget: "",
             deleteProtected: item.delete_protected,
+            repeatInterval: item.repeat_interval,
+            repeatUnit: item.repeat_unit ?? "",
+            repeatFrom: item.repeat_from ?? "",
         };
     }
 
@@ -2109,6 +2113,9 @@ export class TodoOverlayList extends LitElement {
             .filter(tag => tag.length > 0);
         const pinType = value.pinType || undefined;
         const weekday = pinType === "day" ? Number(value.dayWeekday) : undefined;
+        const repeatInterval = value.repeatInterval ?? undefined;
+        const repeatUnit = value.repeatUnit || undefined;
+        const repeatFrom = value.repeatFrom || undefined;
 
         try {
             if (this.dialogMode === "edit" && this.dialogItem) {
@@ -2143,6 +2150,7 @@ export class TodoOverlayList extends LitElement {
                     setTriggerOnDue(this.hass, this.entity, this.dialogItem.id, value.triggerOnDue),
                     setPinType(this.hass, this.entity, this.dialogItem.id, pinType, weekday),
                     setDeleteProtected(this.hass, this.entity, this.dialogItem.id, value.deleteProtected),
+                    setRepeat(this.hass, this.entity, this.dialogItem.id, repeatInterval, repeatUnit, repeatFrom),
                 ]);
 
                 // Deliberately AFTER the batch above, not inside it -
@@ -2167,6 +2175,9 @@ export class TodoOverlayList extends LitElement {
                     triggerOnDue: value.triggerOnDue,
                     pinType,
                     weekday,
+                    repeatInterval,
+                    repeatUnit,
+                    repeatFrom,
                 });
             }
 

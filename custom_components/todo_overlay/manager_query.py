@@ -152,6 +152,7 @@ class QueryMixin:
         linked: bool | None = None,
         trigger_on_due: bool | None = None,
         has_quantity: bool | None = None,
+        recurring: bool | None = None,
         parent_id: str | None = None,
         parent_title: str | None = None,
         under_id: str | None = None,
@@ -248,6 +249,7 @@ class QueryMixin:
                 pin_type=pin_type, weekday=weekday,
                 delete_protected=delete_protected, linked=linked,
                 trigger_on_due=trigger_on_due, has_quantity=has_quantity,
+                recurring=recurring,
             )
         ]
 
@@ -323,6 +325,7 @@ class QueryMixin:
         linked: bool | None,
         trigger_on_due: bool | None,
         has_quantity: bool | None,
+        recurring: bool | None,
     ) -> bool:
         if completed is not None and item.completed != completed:
             return False
@@ -376,6 +379,9 @@ class QueryMixin:
         if has_quantity is not None and bool(item.quantity) != has_quantity:
             return False
 
+        if recurring is not None and (item.repeat_interval is not None) != recurring:
+            return False
+
         return True
 
     @staticmethod
@@ -402,6 +408,9 @@ class QueryMixin:
             "pin_type": item.pin_type,
             "weekday": item.weekday,
             "day_label": item.day_label,
+            "repeat_interval": item.repeat_interval,
+            "repeat_unit": item.repeat_unit,
+            "repeat_from": item.repeat_from,
             "linked": item.linked,
             "delete_protected": item.delete_protected,
             "depth": candidate.depth,

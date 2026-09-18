@@ -23,3 +23,18 @@ WEEKDAY_NAMES: tuple[str, ...] = (
 # group_completed), never stored - a card that doesn't use this feature
 # never needs to think about it, and one that does can pick per list.
 WeekdayAnchor = Literal["top", "bottom"]
+
+# See manager_recurrence.py's own module docstring for what these
+# actually drive. "months" uses real calendar-month arithmetic (see
+# _advance_date there), not a fixed day count - a monthly item due
+# Jan 31 lands on Feb 28/29, not "31 days later".
+RepeatUnit = Literal["days", "weeks", "months"]
+REPEAT_UNITS: frozenset[str] = frozenset(("days", "weeks", "months"))
+# "due": fixed schedule - the next occurrence always counts from the
+# PREVIOUS due date, so it never drifts even if completed late (rolls
+# forward past today if several cycles were missed entirely - see
+# manager_recurrence.py). "completion": floating schedule - counts from
+# whenever the item is actually completed instead, so finishing late
+# never compresses the next cycle.
+RepeatFrom = Literal["due", "completion"]
+REPEAT_FROM_VALUES: frozenset[str] = frozenset(("due", "completion"))

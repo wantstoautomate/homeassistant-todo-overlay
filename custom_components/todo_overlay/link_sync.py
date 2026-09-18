@@ -7,7 +7,7 @@ Scope, deliberately (see the architecture discussion this was designed
 against):
 - Item CONTENT syncs (see _SYNCED_FIELDS: title, completed, description,
   due_date/due_datetime, quantity, tags, pin_type, weekday,
-  delete_protected) AND position/hierarchy (parent + before/after/inside
+  delete_protected, repeat config) AND position/hierarchy (parent + before/after/inside
   a sibling - see _compute_position_message/
   _apply_incoming_position) - both ride the same last-write-wins-by-
   timestamp message a content change already used alone. Position is
@@ -53,7 +53,7 @@ from .const import EVENT_ITEM_CHANGED
 from .errors import CycleError, ItemNotFoundError
 from .ha_adapter import HomeAssistantTodoProvider
 from .manager import TodoManager
-from .manager_types import PIN_TYPES, Placement
+from .manager_types import PIN_TYPES, REPEAT_FROM_VALUES, REPEAT_UNITS, Placement
 from .metadata_store import MetadataStore
 from .mqtt_link import TOPIC_PREFIX, LinkTransport
 
@@ -61,7 +61,7 @@ _LOGGER = logging.getLogger(__name__)
 
 _SYNCED_FIELDS = (
     "title", "completed", "description", "due_date", "due_datetime", "quantity", "tags", "pin_type",
-    "weekday", "delete_protected",
+    "weekday", "delete_protected", "repeat_interval", "repeat_unit", "repeat_from",
 )
 
 # Fired directly on this instance's own event bus after successfully
@@ -116,6 +116,22 @@ def _sanitize_incoming_fields(fields: dict[str, Any] | None) -> dict[str, Any] |
     weekday = fields.get("weekday")
     weekday = weekday if isinstance(weekday, int) and 0 <= weekday <= 6 else None
 
+    # All-or-nothing, same rule manager_items.py's own _validate_repeat
+    # enforces - checked here too since this path writes straight to
+    # metadata_store, bypassing that validation entirely.
+    repeat_interval = fields.get("repeat_interval")
+    repeat_unit = fields.get("repeat_unit")
+    repeat_from = fields.get("repeat_from")
+
+    if (
+        not isinstance(repeat_interval, int)
+        or isinstance(repeat_interval, bool)
+        or repeat_interval <= 0
+        or repeat_unit not in REPEAT_UNITS
+        or repeat_from not in REPEAT_FROM_VALUES
+    ):
+        repeat_interval = repeat_unit = repeat_from = None
+
     return {
         "title": title[:_MAX_TEXT_LENGTH],
         "completed": bool(fields.get("completed")),
@@ -127,6 +143,9 @@ def _sanitize_incoming_fields(fields: dict[str, Any] | None) -> dict[str, Any] |
         "pin_type": pin_type,
         "weekday": weekday,
         "delete_protected": bool(fields.get("delete_protected")),
+        "repeat_interval": repeat_interval,
+        "repeat_unit": repeat_unit,
+        "repeat_from": repeat_from,
     }
 
 
@@ -334,6 +353,7 @@ class LinkSyncManager:
         pin_types = await self._metadata_store.get_pin_types(entity_id)
         weekdays = await self._metadata_store.get_weekdays(entity_id)
         delete_protected = await self._metadata_store.get_delete_protected(entity_id)
+        repeat = (await self._metadata_store.get_repeats(entity_id)).get(item_id)
 
         fields = {
             "title": item.title,
@@ -346,6 +366,9 @@ class LinkSyncManager:
             "pin_type": pin_types.get(item_id),
             "weekday": weekdays.get(item_id),
             "delete_protected": item_id in delete_protected,
+            "repeat_interval": repeat["interval"] if repeat else None,
+            "repeat_unit": repeat["unit"] if repeat else None,
+            "repeat_from": repeat["from"] if repeat else None,
         }
 
         # Wherever the item currently sits, described as sync-id
@@ -696,6 +719,16 @@ class LinkSyncManager:
             if fields.get("delete_protected"):
                 await self._metadata_store.set_delete_protected(entity_id, native_uid, True)
 
+            if fields.get("repeat_interval") is not None:
+                await self._metadata_store.set_repeat(
+                    entity_id, native_uid,
+                    {
+                        "interval": fields["repeat_interval"],
+                        "unit": fields.get("repeat_unit"),
+                        "from": fields.get("repeat_from"),
+                    },
+                )
+
             if fields.get("completed"):
                 await self._adapter.set_completed(entity_id, native_uid, True)
 
@@ -718,6 +751,18 @@ class LinkSyncManager:
             )
             await self._metadata_store.set_delete_protected(
                 entity_id, native_uid, bool(fields.get("delete_protected"))
+            )
+            await self._metadata_store.set_repeat(
+                entity_id, native_uid,
+                (
+                    {
+                        "interval": fields["repeat_interval"],
+                        "unit": fields.get("repeat_unit"),
+                        "from": fields.get("repeat_from"),
+                    }
+                    if fields.get("repeat_interval") is not None
+                    else None
+                ),
             )
 
         await self._metadata_store.set_link_item_state(

@@ -2,11 +2,13 @@ from __future__ import annotations
 
 from .errors import (
     InvalidPinTypeError,
+    InvalidRepeatError,
     ItemDeleteProtectedError,
     ItemNotFoundError,
+    RepeatRequiresDueDateError,
     WeekdayRequiredError,
 )
-from .manager_types import PIN_TYPES, WEEKDAY_NAMES, Placement
+from .manager_types import PIN_TYPES, REPEAT_FROM_VALUES, REPEAT_UNITS, WEEKDAY_NAMES, Placement
 from .models import TodoItem
 
 
@@ -19,6 +21,43 @@ def _validate_pin_type(pin_type: str | None, weekday: int | None) -> None:
     if pin_type == "day" and (weekday is None or not 0 <= weekday <= 6):
         raise WeekdayRequiredError(
             f"pin_type='day' requires weekday to be an int 0-6 (Monday-Sunday), got {weekday!r}"
+        )
+
+
+def _validate_repeat(
+    interval: int | None,
+    unit: str | None,
+    repeat_from: str | None,
+    has_due_date: bool,
+) -> None:
+    """interval/unit/repeat_from are all-or-nothing (see TodoItem's own
+    fields) - None on all three just means "doesn't repeat", never
+    reached as an error case. Anything else validates the full triple."""
+
+    if interval is None and unit is None and repeat_from is None:
+        return
+
+    if interval is None or unit is None or repeat_from is None:
+        raise InvalidRepeatError(
+            "repeat_interval, repeat_unit, and repeat_from must all be given together "
+            f"(or all omitted) - got interval={interval!r}, unit={unit!r}, from={repeat_from!r}"
+        )
+
+    if not isinstance(interval, int) or isinstance(interval, bool) or interval < 1:
+        raise InvalidRepeatError(f"repeat_interval must be a positive int, got {interval!r}")
+
+    if unit not in REPEAT_UNITS:
+        raise InvalidRepeatError(f"repeat_unit must be one of {sorted(REPEAT_UNITS)}, got {unit!r}")
+
+    if repeat_from not in REPEAT_FROM_VALUES:
+        raise InvalidRepeatError(
+            f"repeat_from must be one of {sorted(REPEAT_FROM_VALUES)}, got {repeat_from!r}"
+        )
+
+    if not has_due_date:
+        raise RepeatRequiresDueDateError(
+            "repeat_interval/repeat_unit/repeat_from require the item to already have "
+            "a due date or due date+time set"
         )
 
 
@@ -43,6 +82,9 @@ class ItemMixin:
         placement: Placement | None = None,
         pin_type: str | None = None,
         weekday: int | None = None,
+        repeat_interval: int | None = None,
+        repeat_unit: str | None = None,
+        repeat_from: str | None = None,
     ) -> str:
         """Create an item, including overlay-only fields (quantity,
         tags, trigger_on_due, pin_type) that Home Assistant's native
@@ -58,6 +100,11 @@ class ItemMixin:
         doesn't end up with a due_datetime (either none was given, or
         the entity doesn't support the feature and add_item dropped it)
         - same "gracefully degrade" precedent as due_datetime itself.
+
+        repeat_interval/repeat_unit/repeat_from (see manager_recurrence.py
+        and set_repeat's own docstring) are all-or-nothing, and require
+        due_date or due_datetime to also be given here - there's nothing
+        to advance from otherwise.
 
         reference_id/placement optionally position the new item
         relative to an existing one (same before/after/inside semantics
@@ -80,6 +127,7 @@ class ItemMixin:
         # behind with no pin_type set, a partial failure the caller
         # never asked for.
         _validate_pin_type(pin_type, weekday)
+        _validate_repeat(repeat_interval, repeat_unit, repeat_from, has_due_date=bool(due_date or due_datetime))
 
         if pin_type == "day":
             title = WEEKDAY_NAMES[weekday]
@@ -104,6 +152,12 @@ class ItemMixin:
 
             if pin_type == "day":
                 await self._metadata_store.set_weekday(entity_id, item_id, weekday)
+
+            if repeat_interval is not None:
+                await self._metadata_store.set_repeat(
+                    entity_id, item_id,
+                    {"interval": repeat_interval, "unit": repeat_unit, "from": repeat_from},
+                )
 
             if trigger_on_due:
                 created = await self._adapter.get_items(entity_id)
@@ -311,6 +365,85 @@ class ItemMixin:
         async with self._lock_for(entity_id):
             resolved = await self._resolve_item(entity_id, item)
             await self._set_pin_type_impl(entity_id, resolved.id, pin_type, weekday)
+
+    async def set_repeat(
+        self,
+        entity_id: str,
+        item_id: str,
+        interval: int | None,
+        unit: str | None = None,
+        repeat_from: str | None = None,
+    ) -> None:
+        """Set (or clear, if interval is None) an item's recurrence -
+        overlay-only metadata, same shape as pin_type/weekday. interval/
+        unit/repeat_from are all-or-nothing (see TodoItem's own
+        repeat_interval/repeat_unit/repeat_from) and require the item to
+        already have a due_date or due_datetime - manager_recurrence.py
+        has nothing to advance from otherwise.
+
+        repeat_from picks what the next occurrence counts from once this
+        item is completed: "due" keeps a fixed schedule (always counts
+        from the PREVIOUS due date, rolling forward past today if
+        several cycles were missed entirely, so it never drifts even if
+        completed late); "completion" is a floating schedule (counts
+        from whenever it's actually completed instead, so finishing late
+        never compresses the next cycle) - see manager_recurrence.py's
+        own module docstring for the full mechanics."""
+
+        items = await self._adapter.get_items(entity_id)
+        item = next((candidate for candidate in items if candidate.id == item_id), None)
+        has_due_date = item is not None and bool(item.due_date or item.due_datetime)
+
+        _validate_repeat(interval, unit, repeat_from, has_due_date)
+
+        async with self._lock_for(entity_id):
+            await self._set_repeat_impl(entity_id, item_id, interval, unit, repeat_from)
+
+    async def _set_repeat_impl(
+        self,
+        entity_id: str,
+        item_id: str,
+        interval: int | None,
+        unit: str | None,
+        repeat_from: str | None,
+    ) -> None:
+        """The actual body of set_repeat(), callable by
+        set_repeat_by_item() without re-entering self._lock_for() - see
+        TreeMixin._get_list_impl()'s docstring for why that split exists.
+        Validation already happened in set_repeat() before the lock was
+        ever taken, so this trusts the values as-is."""
+
+        repeat = {"interval": interval, "unit": unit, "from": repeat_from} if interval is not None else None
+        await self._metadata_store.set_repeat(entity_id, item_id, repeat)
+
+        items = await self._adapter.get_items(entity_id)
+        item = next((candidate for candidate in items if candidate.id == item_id), None)
+
+        if item is not None:
+            self._fire_event(
+                entity_id, item_id, item.title, "repeat_changed",
+                repeat_interval=interval, repeat_unit=unit, repeat_from=repeat_from,
+            )
+
+    async def set_repeat_by_item(
+        self,
+        entity_id: str,
+        item: str,
+        interval: int | None,
+        unit: str | None = None,
+        repeat_from: str | None = None,
+    ) -> None:
+        """Set an item's recurrence, identified by uid or title - the
+        service-facing counterpart to set_repeat(), which callers with a
+        real item_id already in hand (the frontend) use directly."""
+
+        async with self._lock_for(entity_id):
+            resolved = await self._resolve_item(entity_id, item)
+            has_due_date = bool(resolved.due_date or resolved.due_datetime)
+
+            _validate_repeat(interval, unit, repeat_from, has_due_date)
+
+            await self._set_repeat_impl(entity_id, resolved.id, interval, unit, repeat_from)
 
     async def set_delete_protected(
         self,

@@ -7,8 +7,10 @@ from custom_components.todo_overlay.const import EVENT_ITEM_CHANGED
 from custom_components.todo_overlay.errors import (
     CycleError,
     InvalidPinTypeError,
+    InvalidRepeatError,
     ItemDeleteProtectedError,
     ItemNotFoundError,
+    RepeatRequiresDueDateError,
     SnapshotNotFoundError,
     WeekdayRequiredError,
 )
@@ -73,6 +75,9 @@ async def test_manager_returns_serialisable_list():
                 "delete_protected": False,
                 "weekday": None,
                 "day_label": None,
+                "repeat_interval": None,
+                "repeat_unit": None,
+                "repeat_from": None,
                 "children": [
                     {
                         "id": "2",
@@ -89,6 +94,9 @@ async def test_manager_returns_serialisable_list():
                         "delete_protected": False,
                         "weekday": None,
                         "day_label": None,
+                        "repeat_interval": None,
+                        "repeat_unit": None,
+                        "repeat_from": None,
                         "children": [],
                     }
                 ],
@@ -1777,6 +1785,71 @@ async def test_manager_load_list_merge_does_not_overwrite_an_existing_pin_types_
 
 
 @pytest.mark.asyncio
+async def test_manager_save_and_load_list_round_trips_repeat_config():
+
+    adapter = FakeAdapter(items=[TodoItem(id="1", title="Bins", completed=False, due_date="2026-01-05")])
+    metadata_store = FakeMetadataStore({"1": ItemPosition(parent_id=None, order=0)})
+    manager = TodoManager(adapter=adapter, metadata_store=metadata_store)
+
+    await manager.set_repeat("todo.shopping", "1", 1, "weeks", "due")
+    await manager.save_list(entity_id="todo.shopping", name="template")
+
+    await manager.load_list(entity_id="todo.other", name="template", mode="full_merge")
+
+    todo_list = await manager.get_list("todo.other")
+    loaded = next(item for item in todo_list.items if item.id != "1")
+    assert loaded.repeat_interval == 1
+    assert loaded.repeat_unit == "weeks"
+    assert loaded.repeat_from == "due"
+
+
+@pytest.mark.asyncio
+async def test_manager_load_list_merge_adopts_repeat_config_for_a_newly_matched_item():
+
+    adapter = FakeAdapter(items=[
+        TodoItem(id="1", title="Bins", completed=False, due_date="2026-01-05"),
+        TodoItem(id="2", title="Bins", completed=False, due_date="2026-01-05"),
+    ])
+    metadata_store = FakeMetadataStore({
+        "1": ItemPosition(parent_id=None, order=0),
+        "2": ItemPosition(parent_id=None, order=1),
+    })
+    manager = TodoManager(adapter=adapter, metadata_store=metadata_store)
+
+    await manager.set_repeat("todo.shopping", "1", 1, "weeks", "due")
+    await manager.save_list(entity_id="todo.shopping", name="template")
+
+    await manager.load_list(entity_id="todo.shopping", name="template", mode="merge")
+
+    repeats = await metadata_store.get_repeats("todo.shopping")
+    assert repeats.get("2") == {"interval": 1, "unit": "weeks", "from": "due"}
+
+
+@pytest.mark.asyncio
+async def test_manager_load_list_merge_does_not_overwrite_an_existing_repeat_config():
+
+    adapter = FakeAdapter(items=[
+        TodoItem(id="1", title="Bins", completed=False, due_date="2026-01-05"),
+        TodoItem(id="2", title="Bins", completed=False, due_date="2026-01-12"),
+    ])
+    metadata_store = FakeMetadataStore({
+        "1": ItemPosition(parent_id=None, order=0),
+        "2": ItemPosition(parent_id=None, order=1),
+    })
+    manager = TodoManager(adapter=adapter, metadata_store=metadata_store)
+
+    await manager.set_repeat("todo.shopping", "1", 1, "weeks", "due")
+    await manager.save_list(entity_id="todo.shopping", name="template")
+
+    await manager.set_repeat("todo.shopping", "2", 1, "months", "completion")
+
+    await manager.load_list(entity_id="todo.shopping", name="template", mode="merge")
+
+    repeats = await metadata_store.get_repeats("todo.shopping")
+    assert repeats.get("2") == {"interval": 1, "unit": "months", "from": "completion"}
+
+
+@pytest.mark.asyncio
 async def test_manager_load_list_full_merge_creates_true_duplicates_without_quantity():
 
     # Without any quantity involved, get_list()'s merge is deliberately
@@ -3144,3 +3217,249 @@ async def test_manager_transfer_item_same_entity_with_no_reference_id_raises():
             reference_id=None,
             placement="inside",
         )
+
+
+# --- Recurring items (manager_recurrence.py) --------------------------------
+
+
+@pytest.mark.asyncio
+async def test_manager_set_repeat_updates_and_clears():
+
+    adapter = FakeAdapter(items=[TodoItem(id="1", title="Bins", completed=False, due_date="2026-01-05")])
+    metadata_store = FakeMetadataStore({"1": ItemPosition(parent_id=None, order=0)})
+    manager = TodoManager(adapter=adapter, metadata_store=metadata_store)
+
+    await manager.set_repeat("todo.household", "1", 1, "weeks", "due")
+    todo_list = await manager.get_list("todo.household")
+    assert todo_list.items[0].repeat_interval == 1
+    assert todo_list.items[0].repeat_unit == "weeks"
+    assert todo_list.items[0].repeat_from == "due"
+
+    await manager.set_repeat("todo.household", "1", None)
+    todo_list_after = await manager.get_list("todo.household")
+    assert todo_list_after.items[0].repeat_interval is None
+    assert todo_list_after.items[0].repeat_unit is None
+    assert todo_list_after.items[0].repeat_from is None
+
+
+@pytest.mark.asyncio
+async def test_manager_set_repeat_requires_a_due_date():
+
+    adapter = FakeAdapter(items=[TodoItem(id="1", title="Bins", completed=False)])
+    manager = TodoManager(adapter=adapter, metadata_store=FakeMetadataStore())
+
+    with pytest.raises(RepeatRequiresDueDateError):
+        await manager.set_repeat("todo.household", "1", 1, "weeks", "due")
+
+
+@pytest.mark.asyncio
+async def test_manager_set_repeat_is_all_or_nothing():
+
+    adapter = FakeAdapter(items=[TodoItem(id="1", title="Bins", completed=False, due_date="2026-01-05")])
+    manager = TodoManager(adapter=adapter, metadata_store=FakeMetadataStore())
+
+    with pytest.raises(InvalidRepeatError):
+        await manager.set_repeat("todo.household", "1", 1, "weeks", None)
+
+    with pytest.raises(InvalidRepeatError):
+        await manager.set_repeat("todo.household", "1", 1, None, "due")
+
+
+@pytest.mark.asyncio
+async def test_manager_set_repeat_rejects_an_invalid_interval_unit_or_from():
+
+    adapter = FakeAdapter(items=[TodoItem(id="1", title="Bins", completed=False, due_date="2026-01-05")])
+    manager = TodoManager(adapter=adapter, metadata_store=FakeMetadataStore())
+
+    with pytest.raises(InvalidRepeatError):
+        await manager.set_repeat("todo.household", "1", 0, "weeks", "due")
+
+    with pytest.raises(InvalidRepeatError):
+        await manager.set_repeat("todo.household", "1", 1, "fortnights", "due")
+
+    with pytest.raises(InvalidRepeatError):
+        await manager.set_repeat("todo.household", "1", 1, "weeks", "whenever")
+
+
+@pytest.mark.asyncio
+async def test_manager_create_item_with_initial_repeat():
+
+    adapter = FakeAdapter(items=[])
+    manager = TodoManager(adapter=adapter, metadata_store=FakeMetadataStore())
+
+    await manager.create_item(
+        entity_id="todo.household", title="Bins", due_date="2026-01-05",
+        repeat_interval=2, repeat_unit="weeks", repeat_from="due",
+    )
+
+    todo_list = await manager.get_list("todo.household")
+    assert todo_list.items[0].repeat_interval == 2
+    assert todo_list.items[0].repeat_unit == "weeks"
+    assert todo_list.items[0].repeat_from == "due"
+
+
+@pytest.mark.asyncio
+async def test_manager_create_item_with_repeat_but_no_due_date_raises_without_creating_anything():
+
+    adapter = FakeAdapter(items=[])
+    manager = TodoManager(adapter=adapter, metadata_store=FakeMetadataStore())
+
+    with pytest.raises(RepeatRequiresDueDateError):
+        await manager.create_item(
+            entity_id="todo.household", title="Bins",
+            repeat_interval=2, repeat_unit="weeks", repeat_from="due",
+        )
+
+    todo_list = await manager.get_list("todo.household")
+    assert todo_list.items == []
+
+
+@pytest.mark.asyncio
+async def test_manager_completing_a_repeating_item_advances_its_due_date_and_uncompletes_it():
+
+    adapter = FakeAdapter(items=[TodoItem(id="1", title="Bins", completed=False, due_date="2026-01-05")])
+    metadata_store = FakeMetadataStore({"1": ItemPosition(parent_id=None, order=0)})
+    manager = TodoManager(
+        adapter=adapter, metadata_store=metadata_store, today_date_fn=lambda: date(2026, 1, 5),
+    )
+
+    await manager.set_repeat("todo.household", "1", 1, "weeks", "due")
+    await manager.set_completed("todo.household", "1", True)
+
+    todo_list = await manager.get_list("todo.household")
+    assert todo_list.items[0].completed is False
+    assert todo_list.items[0].due_date == "2026-01-12"
+
+
+@pytest.mark.asyncio
+async def test_manager_completing_a_repeating_item_preserves_its_time_of_day():
+
+    adapter = FakeAdapter(items=[
+        TodoItem(id="1", title="Water filter", completed=False, due_datetime="2026-01-05T08:00:00"),
+    ])
+    metadata_store = FakeMetadataStore({"1": ItemPosition(parent_id=None, order=0)})
+    manager = TodoManager(
+        adapter=adapter, metadata_store=metadata_store, today_date_fn=lambda: date(2026, 1, 5),
+    )
+
+    await manager.set_repeat("todo.household", "1", 1, "days", "due")
+    await manager.set_completed("todo.household", "1", True)
+
+    todo_list = await manager.get_list("todo.household")
+    assert todo_list.items[0].completed is False
+    assert todo_list.items[0].due_date is None
+    assert todo_list.items[0].due_datetime == "2026-01-06T08:00:00"
+
+
+@pytest.mark.asyncio
+async def test_manager_completing_a_non_repeating_item_stays_completed():
+
+    adapter = FakeAdapter(items=[TodoItem(id="1", title="Milk", completed=False, due_date="2026-01-05")])
+    metadata_store = FakeMetadataStore({"1": ItemPosition(parent_id=None, order=0)})
+    manager = TodoManager(
+        adapter=adapter, metadata_store=metadata_store, today_date_fn=lambda: date(2026, 1, 5),
+    )
+
+    await manager.set_completed("todo.household", "1", True)
+
+    todo_list = await manager.get_list("todo.household")
+    assert todo_list.items[0].completed is True
+    assert todo_list.items[0].due_date == "2026-01-05"
+
+
+@pytest.mark.asyncio
+async def test_manager_repeat_from_due_rolls_forward_past_today_if_cycles_were_missed():
+    # Missed two whole weekly cycles (01-08 and 01-15 both already
+    # passed) before finally completing it on 01-20 - the fixed
+    # schedule rolls all the way forward to the next one still ahead
+    # of today, rather than landing back in the past and re-triggering
+    # an overdue notice immediately.
+    adapter = FakeAdapter(items=[TodoItem(id="1", title="Bins", completed=False, due_date="2026-01-01")])
+    metadata_store = FakeMetadataStore({"1": ItemPosition(parent_id=None, order=0)})
+    manager = TodoManager(
+        adapter=adapter, metadata_store=metadata_store, today_date_fn=lambda: date(2026, 1, 20),
+    )
+
+    await manager.set_repeat("todo.household", "1", 1, "weeks", "due")
+    await manager.set_completed("todo.household", "1", True)
+
+    todo_list = await manager.get_list("todo.household")
+    assert todo_list.items[0].due_date == "2026-01-22"
+
+
+@pytest.mark.asyncio
+async def test_manager_repeat_from_completion_counts_from_today_not_the_stale_due_date():
+
+    adapter = FakeAdapter(items=[TodoItem(id="1", title="Water filter", completed=False, due_date="2026-01-01")])
+    metadata_store = FakeMetadataStore({"1": ItemPosition(parent_id=None, order=0)})
+    manager = TodoManager(
+        adapter=adapter, metadata_store=metadata_store, today_date_fn=lambda: date(2026, 1, 10),
+    )
+
+    await manager.set_repeat("todo.household", "1", 7, "days", "completion")
+    await manager.set_completed("todo.household", "1", True)
+
+    todo_list = await manager.get_list("todo.household")
+    assert todo_list.items[0].due_date == "2026-01-17"
+
+
+@pytest.mark.asyncio
+async def test_manager_repeat_months_uses_real_calendar_arithmetic():
+    # Jan 31 + 1 month lands on Feb 28 (2026 isn't a leap year), not a
+    # fixed 30-day approximation.
+    adapter = FakeAdapter(items=[TodoItem(id="1", title="Filter", completed=False, due_date="2026-01-31")])
+    metadata_store = FakeMetadataStore({"1": ItemPosition(parent_id=None, order=0)})
+    manager = TodoManager(
+        adapter=adapter, metadata_store=metadata_store, today_date_fn=lambda: date(2026, 1, 31),
+    )
+
+    await manager.set_repeat("todo.household", "1", 1, "months", "due")
+    await manager.set_completed("todo.household", "1", True)
+
+    todo_list = await manager.get_list("todo.household")
+    assert todo_list.items[0].due_date == "2026-02-28"
+
+
+@pytest.mark.asyncio
+async def test_manager_completing_a_repeating_item_fires_completed_then_uncompleted_events():
+
+    hass = _FakeEventHass()
+    adapter = FakeAdapter(items=[TodoItem(id="1", title="Bins", completed=False, due_date="2026-01-05")])
+    metadata_store = FakeMetadataStore({"1": ItemPosition(parent_id=None, order=0)})
+    manager = TodoManager(
+        adapter=adapter, metadata_store=metadata_store, hass=hass,
+        today_date_fn=lambda: date(2026, 1, 5),
+    )
+
+    await manager.set_repeat("todo.household", "1", 1, "weeks", "due")
+    hass.calls.clear()
+
+    await manager.set_completed("todo.household", "1", True)
+
+    actions = [data["action"] for _, data in hass.calls]
+    assert actions == ["completed", "uncompleted"]
+
+
+@pytest.mark.asyncio
+async def test_manager_completing_a_repeating_item_with_reposition_lands_it_as_still_incomplete():
+    # reposition=True must see the FINAL (post-recurrence) state - a
+    # repeat item should end up positioned as the still-incomplete item
+    # it actually is, never transiently sorted into the completed group.
+    adapter = FakeAdapter(items=[
+        TodoItem(id="1", title="Bins", completed=False, due_date="2026-01-05"),
+        TodoItem(id="2", title="Milk", completed=False),
+    ])
+    metadata_store = FakeMetadataStore({
+        "1": ItemPosition(parent_id=None, order=0),
+        "2": ItemPosition(parent_id=None, order=1),
+    })
+    manager = TodoManager(
+        adapter=adapter, metadata_store=metadata_store, today_date_fn=lambda: date(2026, 1, 5),
+    )
+
+    await manager.set_repeat("todo.household", "1", 1, "weeks", "due")
+    await manager.set_completed("todo.household", "1", True, reposition=True)
+
+    todo_list = await manager.get_list("todo.household")
+    bins = next(item for item in todo_list.items if item.id == "1")
+    assert bins.completed is False

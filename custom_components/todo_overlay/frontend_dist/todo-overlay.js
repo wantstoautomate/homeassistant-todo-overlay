@@ -735,7 +735,10 @@ async function createItem(hass, entityId, fields) {
     reference_id: fields.referenceId,
     placement: fields.placement,
     pin_type: fields.pinType,
-    weekday: fields.weekday
+    weekday: fields.weekday,
+    repeat_interval: fields.repeatInterval,
+    repeat_unit: fields.repeatUnit,
+    repeat_from: fields.repeatFrom
   });
   return result.id;
 }
@@ -788,6 +791,16 @@ async function setPinType(hass, entityId, itemId, pinType, weekday = void 0) {
     item_id: itemId,
     pin_type: pinType,
     weekday
+  });
+}
+async function setRepeat(hass, entityId, itemId, repeatInterval, repeatUnit = void 0, repeatFrom = void 0) {
+  await hass.connection.sendMessagePromise({
+    type: "todo_overlay/set_repeat",
+    entity_id: entityId,
+    item_id: itemId,
+    repeat_interval: repeatInterval,
+    repeat_unit: repeatUnit,
+    repeat_from: repeatFrom
   });
 }
 async function linkItem(hass, entityId, itemId, targetParentId) {
@@ -974,6 +987,20 @@ var CALENDAR_ICON = b2`
         <path d="M19,19H5V8H19M16,1V3H8V1H6V3H5C3.89,3 3,3.89 3,5V19A2,2 0 0,0 5,21H19A2,2 0 0,0 21,19V5C21,3.89 20.1,3 19,3H18V1M17,12H12V17H17V12Z"></path>
     </svg>
 `;
+var REPEAT_ICON = b2`
+    <svg viewBox="0 0 24 24">
+        <path d="M17,17H7V14L3,18L7,22V19H19V13H17M7,7H17V10L21,6L17,2V5H5V11H7V7Z"></path>
+    </svg>
+`;
+function wrapValue(current, delta, min, max) {
+  const span = max - min + 1;
+  return ((current - min + delta) % span + span) % span + min;
+}
+var REPEAT_PRESETS = {
+  daily: { interval: 1, unit: "days" },
+  weekly: { interval: 1, unit: "weeks" },
+  monthly: { interval: 1, unit: "months" }
+};
 var MONTH_NAMES = [
   "January",
   "February",
@@ -1007,7 +1034,10 @@ var EMPTY_FORM_VALUE = {
   dayWeekday: "",
   linked: false,
   linkTarget: "",
-  deleteProtected: false
+  deleteProtected: false,
+  repeatInterval: null,
+  repeatUnit: "",
+  repeatFrom: ""
 };
 function digitsOnly(raw, maxLen) {
   return raw.replace(/\D/g, "").slice(0, maxLen);
@@ -1134,7 +1164,7 @@ var TodoItemDialog = class extends i4 {
     );
   }
   save() {
-    if (this.triggerOnDueBlocked || this.dayPinMissingWeekday) {
+    if (this.triggerOnDueBlocked || this.dayPinMissingWeekday || this.repeatBlocked) {
       return;
     }
     this.dispatchEvent(
@@ -1271,6 +1301,91 @@ var TodoItemDialog = class extends i4 {
   setDueAmPm(period) {
     this.dueAmPm = period;
     this.syncDueTime();
+  }
+  // Hour wraps 12 -> 1 (never 0 - this is a 12-hour clock), minute
+  // wraps 59 -> 00 in whole 15-minute jumps - a real clock's own
+  // behavior, not a value that gets stuck at either end.
+  stepDueHour(delta) {
+    const current = Number(this.dueHour12) || 12;
+    this.updateDueHour12(String(wrapValue(current, delta, 1, 12)).padStart(2, "0"));
+  }
+  stepDueMinute(delta) {
+    const current = Number(this.dueMinute) || 0;
+    this.updateDueMinute(String(wrapValue(current, delta, 0, 59)).padStart(2, "0"));
+  }
+  // Which preset chip (if any) the current interval/unit matches -
+  // "custom" covers everything else, including an interval/unit
+  // combination no preset chip represents (e.g. every 2 weeks).
+  get repeatMode() {
+    const { repeatInterval, repeatUnit } = this.draftValue;
+    if (repeatInterval === null || repeatUnit === "") {
+      return "never";
+    }
+    for (const [mode, preset] of Object.entries(REPEAT_PRESETS)) {
+      if (repeatInterval === preset.interval && repeatUnit === preset.unit) {
+        return mode;
+      }
+    }
+    return "custom";
+  }
+  setRepeatMode(mode) {
+    if (mode === "never") {
+      this.draftValue = { ...this.draftValue, repeatInterval: null, repeatUnit: "", repeatFrom: "" };
+      return;
+    }
+    const repeatFrom = this.draftValue.repeatFrom || "due";
+    if (mode === "custom") {
+      this.draftValue = {
+        ...this.draftValue,
+        repeatInterval: this.draftValue.repeatInterval ?? 2,
+        repeatUnit: this.draftValue.repeatUnit || "days",
+        repeatFrom
+      };
+      return;
+    }
+    const preset = REPEAT_PRESETS[mode];
+    this.draftValue = { ...this.draftValue, repeatInterval: preset.interval, repeatUnit: preset.unit, repeatFrom };
+  }
+  setRepeatFrom(value) {
+    this.draftValue = { ...this.draftValue, repeatFrom: value };
+  }
+  setRepeatUnit(unit) {
+    this.draftValue = { ...this.draftValue, repeatUnit: unit };
+  }
+  onRepeatIntervalInput(raw) {
+    const digits = digitsOnly(raw, 3);
+    this.draftValue = { ...this.draftValue, repeatInterval: digits === "" ? null : Number(digits) };
+  }
+  stepRepeatInterval(delta) {
+    const current = this.draftValue.repeatInterval ?? 1;
+    const next = Math.min(365, Math.max(1, current + delta));
+    this.draftValue = { ...this.draftValue, repeatInterval: next };
+  }
+  // Same "block Save rather than round-trip an error" reasoning as
+  // triggerOnDueBlocked/dayPinMissingWeekday above - the backend
+  // enforces both of these too (see RepeatRequiresDueDateError/
+  // InvalidRepeatError).
+  get repeatBlocked() {
+    const { repeatInterval, repeatUnit, repeatFrom } = this.draftValue;
+    if (repeatInterval === null) {
+      return false;
+    }
+    return !this.draftValue.dueDate || repeatUnit === "" || repeatFrom === "" || repeatInterval < 1;
+  }
+  get repeatFromCaption() {
+    return this.draftValue.repeatFrom === "due" ? "Fixed schedule \u2014 the next due date always counts from the original one, so it never drifts even if this gets completed late. Right for something like bins day." : "Floating schedule \u2014 the next due date counts from whenever it's actually completed instead, so finishing late never compresses the next cycle. Right for something like a water filter.";
+  }
+  get repeatSummary() {
+    const { repeatInterval, repeatUnit, repeatFrom } = this.draftValue;
+    if (repeatInterval === null || repeatUnit === "" || repeatFrom === "") {
+      return "";
+    }
+    const whence = repeatFrom === "due" ? "from its own due date" : "from whenever it's checked off";
+    if (repeatInterval === 1) {
+      const singular = { days: "day", weeks: "week", months: "month" }[repeatUnit];
+      return `Repeats every ${singular}, counting ${whence}.`;
+    }
+    return `Repeats every ${repeatInterval} ${repeatUnit}, counting ${whence}.`;
   }
   // Enabling "trigger on due" without a due time is meaningless - the
   // backend enforces the same rule (see DueTimeRequiredError), but
@@ -1546,36 +1661,61 @@ var TodoItemDialog = class extends i4 {
                                             <div class="field">
                                                 <label id="due-time-label">Due time</label>
                                                 <div class="hm-row" aria-labelledby="due-time-label">
-                                                    <input
-                                                        class="segment hour"
-                                                        type="text"
-                                                        inputmode="numeric"
-                                                        maxlength="2"
-                                                        placeholder="HH"
-                                                        aria-label="Hour"
-                                                        .value=${this.dueHour12}
-                                                        @input=${(e7) => this.updateDueHour12(e7.target.value)}
-                                                    />
-                                                    <span class="segment-sep">:</span>
-                                                    <input
-                                                        class="segment minute"
-                                                        type="text"
-                                                        inputmode="numeric"
-                                                        maxlength="2"
-                                                        placeholder="MM"
-                                                        aria-label="Minute"
-                                                        .value=${this.dueMinute}
-                                                        @input=${(e7) => this.updateDueMinute(e7.target.value)}
-                                                    />
-                                                    <select
-                                                        class="ampm-select"
-                                                        aria-label="AM or PM"
-                                                        .value=${this.dueAmPm}
-                                                        @change=${(e7) => this.setDueAmPm(e7.target.value)}
-                                                    >
-                                                        <option value="AM">AM</option>
-                                                        <option value="PM">PM</option>
-                                                    </select>
+                                                    <div class="stepper">
+                                                        <button
+                                                            type="button"
+                                                            aria-label="Decrease hour"
+                                                            @click=${() => this.stepDueHour(-1)}
+                                                        >–</button>
+                                                        <input
+                                                            class="stepper-value"
+                                                            type="text"
+                                                            inputmode="numeric"
+                                                            maxlength="2"
+                                                            aria-label="Hour"
+                                                            .value=${this.dueHour12}
+                                                            @input=${(e7) => this.updateDueHour12(e7.target.value)}
+                                                        />
+                                                        <button
+                                                            type="button"
+                                                            aria-label="Increase hour"
+                                                            @click=${() => this.stepDueHour(1)}
+                                                        >+</button>
+                                                    </div>
+                                                    <span class="segment-sep stepper-colon">:</span>
+                                                    <div class="stepper">
+                                                        <button
+                                                            type="button"
+                                                            aria-label="Decrease minute"
+                                                            @click=${() => this.stepDueMinute(-15)}
+                                                        >–</button>
+                                                        <input
+                                                            class="stepper-value"
+                                                            type="text"
+                                                            inputmode="numeric"
+                                                            maxlength="2"
+                                                            aria-label="Minute"
+                                                            .value=${this.dueMinute}
+                                                            @input=${(e7) => this.updateDueMinute(e7.target.value)}
+                                                        />
+                                                        <button
+                                                            type="button"
+                                                            aria-label="Increase minute"
+                                                            @click=${() => this.stepDueMinute(15)}
+                                                        >+</button>
+                                                    </div>
+                                                    <div class="segmented" role="group" aria-label="AM or PM">
+                                                        <button
+                                                            type="button"
+                                                            class=${e6({ active: this.dueAmPm === "AM" })}
+                                                            @click=${() => this.setDueAmPm("AM")}
+                                                        >AM</button>
+                                                        <button
+                                                            type="button"
+                                                            class=${e6({ active: this.dueAmPm === "PM" })}
+                                                            @click=${() => this.setDueAmPm("PM")}
+                                                        >PM</button>
+                                                    </div>
                                                 </div>
                                             </div>
                                         ` : ""}
@@ -1597,6 +1737,107 @@ var TodoItemDialog = class extends i4 {
                                                     </div>
                                                 ` : ""}
                                     ` : ""}
+
+                            <div class="repeat-section">
+                                <div class="repeat-label-row">
+                                    ${REPEAT_ICON}
+                                    <label>Repeats</label>
+                                </div>
+
+                                <div class="chip-row" role="group" aria-label="Repeat interval">
+                                    <button
+                                        type="button"
+                                        class=${e6({ chip: true, active: this.repeatMode === "never" })}
+                                        @click=${() => this.setRepeatMode("never")}
+                                    >Doesn't repeat</button>
+                                    <button
+                                        type="button"
+                                        class=${e6({ chip: true, active: this.repeatMode === "daily" })}
+                                        @click=${() => this.setRepeatMode("daily")}
+                                    >Daily</button>
+                                    <button
+                                        type="button"
+                                        class=${e6({ chip: true, active: this.repeatMode === "weekly" })}
+                                        @click=${() => this.setRepeatMode("weekly")}
+                                    >Weekly</button>
+                                    <button
+                                        type="button"
+                                        class=${e6({ chip: true, active: this.repeatMode === "monthly" })}
+                                        @click=${() => this.setRepeatMode("monthly")}
+                                    >Monthly</button>
+                                    <button
+                                        type="button"
+                                        class=${e6({ chip: true, active: this.repeatMode === "custom" })}
+                                        @click=${() => this.setRepeatMode("custom")}
+                                    >Custom</button>
+                                </div>
+
+                                ${this.repeatMode === "custom" ? b2`
+                                            <div class="custom-interval-row">
+                                                <span>Every</span>
+                                                <div class="stepper">
+                                                    <button
+                                                        type="button"
+                                                        aria-label="Decrease repeat interval"
+                                                        @click=${() => this.stepRepeatInterval(-1)}
+                                                    >–</button>
+                                                    <input
+                                                        class="stepper-value interval"
+                                                        type="text"
+                                                        inputmode="numeric"
+                                                        maxlength="3"
+                                                        aria-label="Repeat interval"
+                                                        .value=${String(this.draftValue.repeatInterval ?? "")}
+                                                        @input=${(e7) => this.onRepeatIntervalInput(e7.target.value)}
+                                                    />
+                                                    <button
+                                                        type="button"
+                                                        aria-label="Increase repeat interval"
+                                                        @click=${() => this.stepRepeatInterval(1)}
+                                                    >+</button>
+                                                </div>
+                                                <select
+                                                    class="unit-select"
+                                                    aria-label="Repeat unit"
+                                                    .value=${this.draftValue.repeatUnit}
+                                                    @change=${(e7) => this.setRepeatUnit(e7.target.value)}
+                                                >
+                                                    <option value="days">days</option>
+                                                    <option value="weeks">weeks</option>
+                                                    <option value="months">months</option>
+                                                </select>
+                                            </div>
+                                        ` : ""}
+
+                                ${this.repeatMode !== "never" ? b2`
+                                            <div class="segmented" role="group" aria-label="Repeat from">
+                                                <button
+                                                    type="button"
+                                                    class=${e6({ active: this.draftValue.repeatFrom === "due" })}
+                                                    @click=${() => this.setRepeatFrom("due")}
+                                                >From due date</button>
+                                                <button
+                                                    type="button"
+                                                    class=${e6({ active: this.draftValue.repeatFrom === "completion" })}
+                                                    @click=${() => this.setRepeatFrom("completion")}
+                                                >From completion</button>
+                                            </div>
+                                            <p class="repeat-from-caption">${this.repeatFromCaption}</p>
+                                        ` : ""}
+
+                                ${this.repeatMode !== "never" && !this.repeatBlocked ? b2`
+                                            <div class="repeat-summary">
+                                                ${REPEAT_ICON}
+                                                <span>${this.repeatSummary}</span>
+                                            </div>
+                                        ` : ""}
+
+                                ${this.repeatMode !== "never" && !this.draftValue.dueDate ? b2`
+                                            <div class="field-hint">
+                                                Set a due date above to make this item repeat
+                                            </div>
+                                        ` : ""}
+                            </div>
                         ` : ""}
 
                 <div class="actions" slot="footer">
@@ -1623,7 +1864,7 @@ var TodoItemDialog = class extends i4 {
                                         ` : ""}
                                 <button
                                     @click=${this.save}
-                                    ?disabled=${this.triggerOnDueBlocked || this.dayPinMissingWeekday}
+                                    ?disabled=${this.triggerOnDueBlocked || this.dayPinMissingWeekday || this.repeatBlocked}
                                 >
                                     Save
                                 </button>
@@ -1761,17 +2002,195 @@ TodoItemDialog.styles = i`
             font-size: 16px;
         }
 
-        .ampm-select {
-            margin-inline-start: 4px;
-            font-family: inherit;
-            font-size: 14px;
-            font-weight: 500;
+        /* Stepper: a rounded pill with ± buttons flanking a
+           tap-to-type value - see wrapValue's own comment for why
+           the buttons wrap rather than clamp. Shared by the due-time
+           hour/minute fields and the repeat interval field below. */
+        .stepper {
+            display: flex;
+            align-items: center;
+            background: rgba(var(--rgb-primary-text-color, 0, 0, 0), 0.06);
+            border-radius: 100px;
+            padding: 4px;
+            gap: 2px;
+        }
+
+        .stepper button {
+            width: 30px;
+            height: 30px;
+            flex: none;
+            border-radius: 50%;
+            border: none;
+            background: transparent;
             color: var(--primary-text-color);
+            font-size: 16px;
+            line-height: 1;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+            font-family: inherit;
+            padding: 0;
+            text-transform: none;
+        }
+
+        .stepper button:hover {
+            background: rgba(var(--rgb-primary-text-color, 0, 0, 0), 0.1);
+        }
+
+        .stepper-value {
+            box-sizing: border-box;
+            width: 2.2em;
+            flex: none;
+            text-align: center;
+            font-size: 16px;
+            font-weight: 500;
+            font-variant-numeric: tabular-nums;
+            padding: 6px 0;
             background: none;
             border: none;
-            border-bottom: 1px solid var(--divider-color);
-            padding: 8px 2px;
             outline: none;
+            color: var(--primary-text-color);
+        }
+
+        .stepper-value.interval {
+            width: 2.6em;
+        }
+
+        .hm-row .stepper-colon {
+            color: var(--secondary-text-color);
+            font-size: 16px;
+            font-weight: 500;
+        }
+
+        .segmented {
+            display: inline-flex;
+            background: rgba(var(--rgb-primary-text-color, 0, 0, 0), 0.06);
+            border-radius: 100px;
+            padding: 3px;
+            gap: 2px;
+            margin-inline-start: 4px;
+        }
+
+        .segmented button {
+            border: none;
+            background: transparent;
+            font-family: inherit;
+            font-size: 12px;
+            font-weight: 500;
+            text-transform: none;
+            color: var(--secondary-text-color);
+            padding: 7px 14px;
+            border-radius: 100px;
+            cursor: pointer;
+        }
+
+        .segmented button.active {
+            background: var(--primary-color);
+            color: var(--text-primary-color, #fff);
+        }
+
+        .repeat-section {
+            border-top: 1px solid var(--divider-color);
+            padding-top: 16px;
+            margin-bottom: 16px;
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+            font-family: Roboto, "Noto Sans", sans-serif;
+        }
+
+        .repeat-label-row {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .repeat-label-row label {
+            font-size: 12px;
+            color: var(--secondary-text-color);
+        }
+
+        .repeat-label-row svg {
+            width: 15px;
+            height: 15px;
+            fill: var(--secondary-text-color);
+        }
+
+        .chip-row {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+        }
+
+        .chip {
+            border: 1px solid var(--divider-color);
+            background: none;
+            color: var(--primary-text-color);
+            font-family: inherit;
+            font-size: 13px;
+            font-weight: 500;
+            text-transform: none;
+            padding: 6px 14px;
+            border-radius: 100px;
+            cursor: pointer;
+        }
+
+        .chip:hover {
+            background: rgba(var(--rgb-primary-text-color, 0, 0, 0), 0.06);
+        }
+
+        .chip.active {
+            background: var(--primary-color);
+            border-color: var(--primary-color);
+            color: var(--text-primary-color, #fff);
+        }
+
+        .custom-interval-row {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            flex-wrap: wrap;
+            font-size: 14px;
+            color: var(--primary-text-color);
+        }
+
+        select.unit-select {
+            box-sizing: border-box;
+            font-family: inherit;
+            font-size: 14px;
+            color: var(--primary-text-color);
+            background: rgba(var(--rgb-primary-text-color, 0, 0, 0), 0.06);
+            border: none;
+            border-radius: 100px;
+            padding: 8px 14px;
+            outline: none;
+            cursor: pointer;
+        }
+
+        .repeat-from-caption {
+            font-size: 12px;
+            color: var(--secondary-text-color);
+            line-height: 1.5;
+            margin: 0;
+        }
+
+        .repeat-summary {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 13px;
+            color: var(--primary-color);
+            background: rgba(var(--rgb-primary-color, 3, 169, 244), 0.1);
+            border-radius: 10px;
+            padding: 8px 12px;
+        }
+
+        .repeat-summary svg {
+            width: 15px;
+            height: 15px;
+            flex: none;
+            fill: currentColor;
         }
 
         .calendar-toggle {
@@ -2736,6 +3155,9 @@ function groupSiblingsForDisplay(items, parentId, weekdayAnchor = "top") {
     delete_protected: false,
     weekday: null,
     day_label: null,
+    repeat_interval: null,
+    repeat_unit: null,
+    repeat_from: null,
     children: plain,
     synthetic: true
   };
@@ -2775,6 +3197,13 @@ var BELL_ICON = b2`
     <svg class="trigger-armed-icon" viewBox="0 0 24 24">
         <path
             d="M12,22C13.1,22 14,21.1 14,20H10C10,21.1 10.9,22 12,22M18,16V11C18,7.93 16.36,5.36 13.5,4.68V4C13.5,3.17 12.83,2.5 12,2.5C11.17,2.5 10.5,3.17 10.5,4V4.68C7.63,5.36 6,7.92 6,11V16L4,18V19H20V18L18,16Z"
+        ></path>
+    </svg>
+`;
+var REPEAT_ICON2 = b2`
+    <svg class="repeat-icon" viewBox="0 0 24 24">
+        <path
+            d="M17,17H7V14L3,18L7,22V19H19V13H17M7,7H17V10L21,6L17,2V5H5V11H7V7Z"
         ></path>
     </svg>
 `;
@@ -3472,6 +3901,7 @@ var TodoTreeItem = class extends i4 {
                                                                 >
                                                                     ${CLOCK_ICON}${due.label}
                                                                     ${this.item.trigger_on_due ? BELL_ICON : ""}
+                                                                    ${this.item.repeat_interval ? b2`<span title="Repeats">${REPEAT_ICON2}</span>` : ""}
                                                                 </span>
                                                             ` : ""}
                                                     ${this.item.tags.map((tag) => b2`<span class="tag-chip">${tag}</span>`)}
@@ -3961,6 +4391,16 @@ TodoTreeItem.styles = i`
         }
 
         .due-chip.overdue .trigger-armed-icon {
+            fill: currentColor;
+        }
+
+        .due-chip .repeat-icon {
+            width: 12px;
+            height: 12px;
+            fill: var(--secondary-text-color);
+        }
+
+        .due-chip.overdue .repeat-icon {
             fill: currentColor;
         }
 
@@ -5367,7 +5807,10 @@ var TodoOverlayList = class extends i4 {
       dayWeekday: item.weekday !== null ? String(item.weekday) : "",
       linked: item.linked,
       linkTarget: "",
-      deleteProtected: item.delete_protected
+      deleteProtected: item.delete_protected,
+      repeatInterval: item.repeat_interval,
+      repeatUnit: item.repeat_unit ?? "",
+      repeatFrom: item.repeat_from ?? ""
     };
   }
   async onDialogSave(e7) {
@@ -5385,6 +5828,9 @@ var TodoOverlayList = class extends i4 {
     const tags = value.tags.split(",").map((tag) => tag.trim()).filter((tag) => tag.length > 0);
     const pinType = value.pinType || void 0;
     const weekday = pinType === "day" ? Number(value.dayWeekday) : void 0;
+    const repeatInterval = value.repeatInterval ?? void 0;
+    const repeatUnit = value.repeatUnit || void 0;
+    const repeatFrom = value.repeatFrom || void 0;
     try {
       if (this.dialogMode === "edit" && this.dialogItem) {
         await updateItem(this.hass, this.entity, this.dialogItem.id, {
@@ -5398,7 +5844,8 @@ var TodoOverlayList = class extends i4 {
           setTags(this.hass, this.entity, this.dialogItem.id, tags),
           setTriggerOnDue(this.hass, this.entity, this.dialogItem.id, value.triggerOnDue),
           setPinType(this.hass, this.entity, this.dialogItem.id, pinType, weekday),
-          setDeleteProtected(this.hass, this.entity, this.dialogItem.id, value.deleteProtected)
+          setDeleteProtected(this.hass, this.entity, this.dialogItem.id, value.deleteProtected),
+          setRepeat(this.hass, this.entity, this.dialogItem.id, repeatInterval, repeatUnit, repeatFrom)
         ]);
         if (value.linked && !this.dialogItem.linked) {
           await linkItem(this.hass, this.entity, this.dialogItem.id, value.linkTarget || void 0);
@@ -5415,7 +5862,10 @@ var TodoOverlayList = class extends i4 {
           tags,
           triggerOnDue: value.triggerOnDue,
           pinType,
-          weekday
+          weekday,
+          repeatInterval,
+          repeatUnit,
+          repeatFrom
         });
       }
       await this.load();

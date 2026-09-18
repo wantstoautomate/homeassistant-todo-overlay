@@ -33,6 +33,10 @@ from .const import (
     ATTR_PERSIST_STATES,
     ATTR_PIN_TYPE,
     ATTR_QUANTITY,
+    ATTR_RECURRING,
+    ATTR_REPEAT_FROM,
+    ATTR_REPEAT_INTERVAL,
+    ATTR_REPEAT_UNIT,
     ATTR_TAG,
     ATTR_TAGS,
     ATTR_TAGS_MODE,
@@ -57,10 +61,11 @@ from .const import (
     SERVICE_SAVE_LIST,
     SERVICE_SET_PIN_TYPE,
     SERVICE_SET_QUANTITY,
+    SERVICE_SET_REPEAT,
     SERVICE_SET_TRIGGER_ON_DUE,
     SERVICE_UNLINK,
 )
-from .manager_types import PIN_TYPES
+from .manager_types import PIN_TYPES, REPEAT_FROM_VALUES, REPEAT_UNITS
 from .runtime_data import get_link_sync, get_manager, get_metadata_store
 
 SAVE_LIST_SCHEMA = vol.Schema(
@@ -119,6 +124,9 @@ CREATE_ITEM_SCHEMA = vol.Schema(
         vol.Optional(ATTR_TRIGGER_ON_DUE, default=False): bool,
         vol.Optional(ATTR_PIN_TYPE): vol.In(sorted(PIN_TYPES)),
         vol.Optional(ATTR_WEEKDAY): vol.All(int, vol.Range(min=0, max=6)),
+        vol.Optional(ATTR_REPEAT_INTERVAL): vol.All(int, vol.Range(min=1)),
+        vol.Optional(ATTR_REPEAT_UNIT): vol.In(sorted(REPEAT_UNITS)),
+        vol.Optional(ATTR_REPEAT_FROM): vol.In(sorted(REPEAT_FROM_VALUES)),
     }
 )
 
@@ -136,6 +144,16 @@ SET_PIN_TYPE_SCHEMA = vol.Schema(
         vol.Required(ATTR_ITEM): str,
         vol.Optional(ATTR_PIN_TYPE): vol.In(sorted(PIN_TYPES)),
         vol.Optional(ATTR_WEEKDAY): vol.All(int, vol.Range(min=0, max=6)),
+    }
+)
+
+SET_REPEAT_SCHEMA = vol.Schema(
+    {
+        vol.Required("entity_id"): cv.entity_id,
+        vol.Required(ATTR_ITEM): str,
+        vol.Optional(ATTR_REPEAT_INTERVAL): vol.All(int, vol.Range(min=1)),
+        vol.Optional(ATTR_REPEAT_UNIT): vol.In(sorted(REPEAT_UNITS)),
+        vol.Optional(ATTR_REPEAT_FROM): vol.In(sorted(REPEAT_FROM_VALUES)),
     }
 )
 
@@ -202,6 +220,7 @@ QUERY_ITEMS_SCHEMA = vol.Schema(
         vol.Optional(ATTR_LINKED): bool,
         vol.Optional(ATTR_TRIGGER_ON_DUE): bool,
         vol.Optional(ATTR_HAS_QUANTITY): bool,
+        vol.Optional(ATTR_RECURRING): bool,
         vol.Exclusive(ATTR_PARENT_ID, _QUERY_SCOPE_GROUP): str,
         vol.Exclusive(ATTR_PARENT_TITLE, _QUERY_SCOPE_GROUP): str,
         vol.Exclusive(ATTR_UNDER_ID, _QUERY_SCOPE_GROUP): str,
@@ -280,6 +299,9 @@ def async_register_services(hass: HomeAssistant) -> None:
             trigger_on_due=call.data[ATTR_TRIGGER_ON_DUE],
             pin_type=call.data.get(ATTR_PIN_TYPE),
             weekday=call.data.get(ATTR_WEEKDAY),
+            repeat_interval=call.data.get(ATTR_REPEAT_INTERVAL),
+            repeat_unit=call.data.get(ATTR_REPEAT_UNIT),
+            repeat_from=call.data.get(ATTR_REPEAT_FROM),
         )
 
     async def handle_set_quantity(call: ServiceCall) -> None:
@@ -299,6 +321,17 @@ def async_register_services(hass: HomeAssistant) -> None:
             item=call.data[ATTR_ITEM],
             pin_type=call.data.get(ATTR_PIN_TYPE),
             weekday=call.data.get(ATTR_WEEKDAY),
+        )
+
+    async def handle_set_repeat(call: ServiceCall) -> None:
+        manager = get_manager(hass)
+
+        await manager.set_repeat_by_item(
+            entity_id=call.data["entity_id"],
+            item=call.data[ATTR_ITEM],
+            interval=call.data.get(ATTR_REPEAT_INTERVAL),
+            unit=call.data.get(ATTR_REPEAT_UNIT),
+            repeat_from=call.data.get(ATTR_REPEAT_FROM),
         )
 
     async def handle_set_trigger_on_due(call: ServiceCall) -> None:
@@ -330,6 +363,7 @@ def async_register_services(hass: HomeAssistant) -> None:
             linked=call.data.get(ATTR_LINKED),
             trigger_on_due=call.data.get(ATTR_TRIGGER_ON_DUE),
             has_quantity=call.data.get(ATTR_HAS_QUANTITY),
+            recurring=call.data.get(ATTR_RECURRING),
             parent_id=call.data.get(ATTR_PARENT_ID),
             parent_title=call.data.get(ATTR_PARENT_TITLE),
             under_id=call.data.get(ATTR_UNDER_ID),
@@ -414,6 +448,9 @@ def async_register_services(hass: HomeAssistant) -> None:
     )
     hass.services.async_register(
         DOMAIN, SERVICE_SET_PIN_TYPE, handle_set_pin_type, schema=SET_PIN_TYPE_SCHEMA
+    )
+    hass.services.async_register(
+        DOMAIN, SERVICE_SET_REPEAT, handle_set_repeat, schema=SET_REPEAT_SCHEMA
     )
     hass.services.async_register(
         DOMAIN,
