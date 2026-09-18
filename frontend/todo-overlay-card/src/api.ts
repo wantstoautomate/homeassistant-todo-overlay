@@ -1,5 +1,5 @@
 import type { HassLike } from "./hass";
-import type { LoadMode, PinType, Placement, TodoList, WeekdayAnchor } from "./models";
+import type { LoadMode, PinType, Placement, RepeatFrom, RepeatUnit, TodoList, WeekdayAnchor } from "./models";
 
 export async function getList(
     hass: HassLike,
@@ -119,6 +119,11 @@ export interface CreateItemFields {
     // Only meaningful (and required by the backend) alongside pinType
     // === "day" - see setPinType's own weekday parameter.
     weekday?: number;
+    // All-or-nothing, and require dueDate or dueDatetime to also be
+    // given - see setRepeat's own parameters below.
+    repeatInterval?: number;
+    repeatUnit?: RepeatUnit;
+    repeatFrom?: RepeatFrom;
 }
 
 export async function createItem(
@@ -141,6 +146,9 @@ export async function createItem(
         placement: fields.placement,
         pin_type: fields.pinType,
         weekday: fields.weekday,
+        repeat_interval: fields.repeatInterval,
+        repeat_unit: fields.repeatUnit,
+        repeat_from: fields.repeatFrom,
     });
 
     return result.id;
@@ -249,6 +257,29 @@ export async function setPinType(
         item_id: itemId,
         pin_type: pinType,
         weekday,
+    });
+
+}
+
+// Sets (or clears, when repeatInterval is undefined) an item's
+// recurrence - all-or-nothing, and requires the item to already have a
+// due date or due date/time (see the backend's own set_repeat).
+export async function setRepeat(
+    hass: HassLike,
+    entityId: string,
+    itemId: string,
+    repeatInterval: number | undefined,
+    repeatUnit: RepeatUnit | undefined = undefined,
+    repeatFrom: RepeatFrom | undefined = undefined,
+): Promise<void> {
+
+    await hass.connection.sendMessagePromise<void>({
+        type: "todo_overlay/set_repeat",
+        entity_id: entityId,
+        item_id: itemId,
+        repeat_interval: repeatInterval,
+        repeat_unit: repeatUnit,
+        repeat_from: repeatFrom,
     });
 
 }

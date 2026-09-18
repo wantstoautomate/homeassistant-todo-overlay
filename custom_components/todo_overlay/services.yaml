@@ -162,6 +162,29 @@ create_item:
         number:
           min: 0
           max: 6
+    repeat_interval:
+      required: false
+      description: Make the item recurring - the number of repeat_unit steps between occurrences. Requires due_date or due_datetime, and repeat_unit/repeat_from to also be given.
+      selector:
+        number:
+          min: 1
+    repeat_unit:
+      required: false
+      description: Required alongside repeat_interval - what unit repeat_interval counts in.
+      selector:
+        select:
+          options:
+            - days
+            - weeks
+            - months
+    repeat_from:
+      required: false
+      description: Required alongside repeat_interval - "due" keeps a fixed schedule counted from the item's own previous due date (rolls forward past today if cycles were missed); "completion" counts from whenever it's actually completed instead, so finishing late never compresses the next cycle.
+      selector:
+        select:
+          options:
+            - due
+            - completion
 
 set_quantity:
   name: Set quantity
@@ -215,6 +238,45 @@ set_pin_type:
         number:
           min: 0
           max: 6
+
+set_repeat:
+  name: Set repeat
+  description: Set (or clear) a Todo Overlay item's recurrence. Completing a recurring item advances its due date by the configured interval instead of leaving it completed. Setting a repeat requires the item to already have a due date or due date/time.
+  fields:
+    entity_id:
+      required: true
+      selector:
+        entity:
+          domain: todo
+    item:
+      required: true
+      example: Bins
+      description: The item's id or title (same convention as todo.update_item).
+      selector:
+        text:
+    repeat_interval:
+      required: false
+      description: Omit (along with repeat_unit/repeat_from) to clear the repeat. The number of repeat_unit steps between occurrences.
+      selector:
+        number:
+          min: 1
+    repeat_unit:
+      required: false
+      description: Required alongside repeat_interval - what unit repeat_interval counts in.
+      selector:
+        select:
+          options:
+            - days
+            - weeks
+            - months
+    repeat_from:
+      required: false
+      description: Required alongside repeat_interval - "due" keeps a fixed schedule counted from the item's own previous due date (rolls forward past today if cycles were missed); "completion" counts from whenever it's actually completed instead, so finishing late never compresses the next cycle.
+      selector:
+        select:
+          options:
+            - due
+            - completion
 
 set_trigger_on_due:
   name: Set trigger on due
@@ -362,6 +424,11 @@ query_items:
     has_quantity:
       required: false
       description: Only items with (true) or without (false) a quantity set.
+      selector:
+        boolean:
+    recurring:
+      required: false
+      description: Only items with (true) or without (false) a repeat configured.
       selector:
         boolean:
     parent_id:

@@ -15,6 +15,7 @@ from .manager_due import DueTriggerMixin
 from .manager_items import ItemMixin
 from .manager_position import PositionMixin
 from .manager_query import QueryMixin
+from .manager_recurrence import RecurrenceMixin
 from .manager_rollover import DayRolloverMixin
 from .manager_snapshots import SnapshotMixin
 from .manager_tree import TreeMixin
@@ -44,15 +45,17 @@ class TodoManager(
     SnapshotMixin,
     DayRolloverMixin,
     QueryMixin,
+    RecurrenceMixin,
 ):
     """Main entry point for the Todo Overlay business logic.
 
     The actual behaviour is split across one mixin per responsibility
     (manager_tree.py, manager_items.py, manager_due.py,
     manager_position.py, manager_completion.py, manager_snapshots.py,
-    manager_rollover.py, manager_query.py) - this class just composes
-    them and owns the small pieces of shared state (locks, the optional
-    hass event bus, the due-schedule hook) every mixin's methods reach
+    manager_rollover.py, manager_query.py, manager_recurrence.py) -
+    this class just composes them and owns the small pieces of shared
+    state (locks, the optional hass event bus, the due-schedule hook)
+    every mixin's methods reach
     for via self.
     """
 

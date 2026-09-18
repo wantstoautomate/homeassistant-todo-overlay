@@ -73,7 +73,7 @@ class TreeMixin:
             items=build_tree(
                 items, positions, metadata.quantities, metadata.tags, metadata.trigger_on_due,
                 group_completed, metadata.pin_types, set(metadata.item_links), metadata.delete_protected,
-                metadata.weekdays, self._today_weekday_fn(), weekday_anchor,
+                metadata.weekdays, self._today_weekday_fn(), weekday_anchor, metadata.repeats,
             ),
         )
 
@@ -86,6 +86,7 @@ class TreeMixin:
             item_links=await self._metadata_store.get_item_links(entity_id),
             delete_protected=await self._metadata_store.get_delete_protected(entity_id),
             weekdays=await self._metadata_store.get_weekdays(entity_id),
+            repeats=await self._metadata_store.get_repeats(entity_id),
         )
 
     async def _reconcile_orphaned_metadata(
@@ -96,7 +97,7 @@ class TreeMixin:
         metadata: ListMetadata,
     ) -> tuple[list[TodoItem], dict[str, ItemPosition], ListMetadata]:
         """Drop stored positions/quantities/tags/trigger_on_due/pin_type/
-        item_link/delete_protected/weekday (and the scheduler's
+        item_link/delete_protected/weekday/repeat (and the scheduler's
         due_fired bookkeeping) for ids that no longer exist on the
         native list.
 
@@ -122,7 +123,7 @@ class TreeMixin:
 
         for source in (
             positions, metadata.quantities, metadata.tags, metadata.trigger_on_due, metadata.pin_types,
-            metadata.item_links, metadata.delete_protected, metadata.weekdays,
+            metadata.item_links, metadata.delete_protected, metadata.weekdays, metadata.repeats,
         ):
             orphaned_set.update(item_id for item_id in source if item_id not in live_ids)
 
@@ -139,6 +140,7 @@ class TreeMixin:
         await self._metadata_store.remove_pin_types(entity_id, orphaned)
         await self._metadata_store.remove_delete_protected_for_items(entity_id, orphaned)
         await self._metadata_store.remove_weekdays(entity_id, orphaned)
+        await self._metadata_store.remove_repeats_for_items(entity_id, orphaned)
 
         for item_id in orphaned:
             await self._metadata_store.remove_item_link(entity_id, item_id)
@@ -152,6 +154,7 @@ class TreeMixin:
             item_links={k: v for k, v in metadata.item_links.items() if k not in orphaned_set},
             delete_protected={i for i in metadata.delete_protected if i not in orphaned_set},
             weekdays={k: v for k, v in metadata.weekdays.items() if k not in orphaned_set},
+            repeats={k: v for k, v in metadata.repeats.items() if k not in orphaned_set},
         )
 
         return items, positions, metadata
@@ -186,6 +189,7 @@ class TreeMixin:
         item_links = metadata.item_links
         delete_protected = metadata.delete_protected
         weekdays = metadata.weekdays
+        repeats = metadata.repeats
 
         groups: dict[tuple[str | None, str], list[TodoItem]] = {}
 
@@ -220,6 +224,11 @@ class TreeMixin:
             # pin_type here purely for consistency, not because a real
             # mismatch is expected.
             combined_weekday = weekdays.get(survivor.id)
+            # Same "survivor wins, duplicate only fills a gap" rule -
+            # a compound value (interval/unit/from all travel together,
+            # see metadata_store.py's own REPEAT_KEY), but no different
+            # in kind from pin_type/weekday above.
+            combined_repeat = repeats.get(survivor.id)
             # Same "survivor wins, duplicate only fills a gap" rule as
             # pin_type above - but a link is a TWO-sided relationship
             # (see item_links.py), so adopting the duplicate's own link
@@ -253,6 +262,9 @@ class TreeMixin:
 
                 if combined_weekday is None:
                     combined_weekday = weekdays.get(duplicate.id)
+
+                if combined_repeat is None:
+                    combined_repeat = repeats.get(duplicate.id)
 
                 if combined_item_link is None:
                     combined_item_link = item_links.get(duplicate.id)
@@ -305,6 +317,10 @@ class TreeMixin:
                 await self._metadata_store.set_weekday(entity_id, survivor.id, combined_weekday)
                 weekdays[survivor.id] = combined_weekday
 
+            if combined_repeat is not None and repeats.get(survivor.id) != combined_repeat:
+                await self._metadata_store.set_repeat(entity_id, survivor.id, combined_repeat)
+                repeats[survivor.id] = combined_repeat
+
             if combined_item_link and item_links.get(survivor.id) != combined_item_link:
                 await self._metadata_store.set_item_link(
                     entity_id, survivor.id,
@@ -342,6 +358,7 @@ class TreeMixin:
         await self._metadata_store.remove_pin_types(entity_id, removed_ids)
         await self._metadata_store.remove_delete_protected_for_items(entity_id, removed_ids)
         await self._metadata_store.remove_weekdays(entity_id, removed_ids)
+        await self._metadata_store.remove_repeats_for_items(entity_id, removed_ids)
 
         for removed_id in removed_ids:
             await self._metadata_store.remove_item_link(entity_id, removed_id)
@@ -357,6 +374,7 @@ class TreeMixin:
             item_links={k: v for k, v in item_links.items() if k not in removed_id_set},
             delete_protected={i for i in delete_protected if i not in removed_id_set},
             weekdays={k: v for k, v in weekdays.items() if k not in removed_id_set},
+            repeats={k: v for k, v in repeats.items() if k not in removed_id_set},
         )
 
         return items, positions, metadata

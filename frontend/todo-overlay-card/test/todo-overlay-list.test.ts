@@ -2161,6 +2161,133 @@ describe("todo-overlay-list edit-dialog delete (diagnostic)", () => {
         });
     });
 
+    describe("repeats", () => {
+        async function openEditDialog(el: TodoOverlayList): Promise<Element> {
+            const treeItem = deepQueryAll(el.shadowRoot!, "todo-overlay-tree-item")[0];
+            treeItem.dispatchEvent(new CustomEvent("tree-pointer-down", {
+                detail: {id: "1"}, bubbles: true, composed: true,
+            }));
+            treeItem.dispatchEvent(new CustomEvent("tree-pointer-up", {
+                detail: {id: "1", pressDurationMs: 600, moved: false}, bubbles: true, composed: true,
+            }));
+            await el.updateComplete;
+
+            return el.shadowRoot!.querySelector("todo-overlay-item-dialog")!;
+        }
+
+        it("seeds the dialog's repeat fields from the item's own values", async () => {
+            const {el} = await renderList({
+                entity_id: ENTITY_ID,
+                items: [makeItem({
+                    id: "1", title: "Bins", due_date: "2026-01-05",
+                    repeat_interval: 1, repeat_unit: "weeks", repeat_from: "due",
+                })],
+            });
+
+            const dialog = await openEditDialog(el) as unknown as {
+                value: {repeatInterval: number | null; repeatUnit: string; repeatFrom: string};
+            };
+
+            expect(dialog.value.repeatInterval).toBe(1);
+            expect(dialog.value.repeatUnit).toBe("weeks");
+            expect(dialog.value.repeatFrom).toBe("due");
+        });
+
+        it("saving a repeat sends todo_overlay/set_repeat with the interval/unit/from", async () => {
+            const {el, hass} = await renderList({
+                entity_id: ENTITY_ID,
+                items: [makeItem({id: "1", title: "Bins", due_date: "2026-01-05"})],
+            });
+
+            const dialog = await openEditDialog(el);
+
+            dialog.dispatchEvent(new CustomEvent("dialog-save", {
+                detail: {
+                    title: "Bins", quantity: "", tags: "", description: "",
+                    dueDate: "2026-01-05", dueTime: "", triggerOnDue: false, pinType: "",
+                    linked: false, linkTarget: "", deleteProtected: false,
+                    repeatInterval: 1, repeatUnit: "weeks", repeatFrom: "due",
+                },
+                bubbles: true, composed: true,
+            }));
+            await flushAsync();
+
+            expect(hass.connection.sent).toContainEqual(expect.objectContaining({
+                type: "todo_overlay/set_repeat",
+                entity_id: ENTITY_ID,
+                item_id: "1",
+                repeat_interval: 1,
+                repeat_unit: "weeks",
+                repeat_from: "due",
+            }));
+        });
+
+        it("clearing a repeat sends todo_overlay/set_repeat with no interval/unit/from", async () => {
+            const {el, hass} = await renderList({
+                entity_id: ENTITY_ID,
+                items: [makeItem({
+                    id: "1", title: "Bins", due_date: "2026-01-05",
+                    repeat_interval: 1, repeat_unit: "weeks", repeat_from: "due",
+                })],
+            });
+
+            const dialog = await openEditDialog(el);
+
+            dialog.dispatchEvent(new CustomEvent("dialog-save", {
+                detail: {
+                    title: "Bins", quantity: "", tags: "", description: "",
+                    dueDate: "2026-01-05", dueTime: "", triggerOnDue: false, pinType: "",
+                    linked: false, linkTarget: "", deleteProtected: false,
+                    repeatInterval: null, repeatUnit: "", repeatFrom: "",
+                },
+                bubbles: true, composed: true,
+            }));
+            await flushAsync();
+
+            expect(hass.connection.sent).toContainEqual(expect.objectContaining({
+                type: "todo_overlay/set_repeat",
+                entity_id: ENTITY_ID,
+                item_id: "1",
+                repeat_interval: undefined,
+                repeat_unit: undefined,
+                repeat_from: undefined,
+            }));
+        });
+
+        it("creating an item with a repeat sends the repeat fields alongside create_item", async () => {
+            const {el, hass} = await renderList(
+                {entity_id: ENTITY_ID, items: []},
+                {showQuickAdd: false},
+            );
+
+            (el.shadowRoot?.querySelector("button[aria-label='Add item']") as HTMLElement).click();
+            await settle(el);
+
+            const dialog = el.shadowRoot?.querySelector("todo-overlay-item-dialog");
+            expect(dialog, "create dialog should be open").not.toBeNull();
+
+            dialog!.dispatchEvent(new CustomEvent("dialog-save", {
+                detail: {
+                    title: "Bins", quantity: "", tags: "", description: "",
+                    dueDate: "2026-01-05", dueTime: "", triggerOnDue: false, pinType: "",
+                    linked: false, linkTarget: "", deleteProtected: false,
+                    repeatInterval: 2, repeatUnit: "months", repeatFrom: "completion",
+                },
+                bubbles: true, composed: true,
+            }));
+            await flushAsync();
+
+            expect(hass.connection.sent).toContainEqual(expect.objectContaining({
+                type: "todo_overlay/create_item",
+                entity_id: ENTITY_ID,
+                title: "Bins",
+                repeat_interval: 2,
+                repeat_unit: "months",
+                repeat_from: "completion",
+            }));
+        });
+    });
+
     // quantity/tags/triggerOnDue/pinType all batch into one Promise.all
     // now (see onDialogSave's own comment) - but update_item has to
     // fully precede that batch, not join it: setTriggerOnDue's backend

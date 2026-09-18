@@ -20,12 +20,12 @@ Scope, deliberately:
   link_sync's own "synced" action (see _on_item_changed's own comment) -
   this module doesn't need to know Anna's instance exists at all.
 - Content + completion mirror bidirectionally (title, description, due
-  date/time, quantity, tags, delete_protected, completed - the same
-  field set link_sync.py's own _SYNCED_FIELDS already uses, reused
-  rather than re-invented). Position/hierarchy never mirrors - the two
-  lists' own structures are independent on purpose. pin_type never
-  mirrors either - it's presentational and list-specific, not part of
-  an item's own "content".
+  date/time, quantity, tags, delete_protected, repeat config, completed
+  - the same field set link_sync.py's own _SYNCED_FIELDS already uses,
+  reused rather than re-invented). Position/hierarchy never mirrors -
+  the two lists' own structures are independent on purpose. pin_type
+  never mirrors either - it's presentational and list-specific, not
+  part of an item's own "content".
 - Deleting either side deletes both (see _on_item_changed's own
   "removed" handling) - unlinking (the item dialog's own checkbox, off)
   only severs the pairing, leaving both items as independent, unlinked
@@ -145,6 +145,15 @@ class ItemLinkManager:
 
         if item_id in delete_protected:
             await self._manager.set_delete_protected(resolved_entity_id, new_item_id, True)
+
+        repeats = await self._metadata_store.get_repeats(entity_id)
+        source_repeat = repeats.get(item_id)
+
+        if source_repeat is not None:
+            await self._manager.set_repeat(
+                resolved_entity_id, new_item_id,
+                source_repeat["interval"], source_repeat["unit"], source_repeat["from"],
+            )
 
         if source_item.completed:
             await self._manager.set_completed(resolved_entity_id, new_item_id, True)
@@ -297,10 +306,14 @@ class ItemLinkManager:
         target_tags = await self._metadata_store.get_tags(target_entity_id)
         source_protected = await self._metadata_store.get_delete_protected(entity_id)
         target_protected = await self._metadata_store.get_delete_protected(target_entity_id)
+        source_repeats = await self._metadata_store.get_repeats(entity_id)
+        target_repeats = await self._metadata_store.get_repeats(target_entity_id)
 
         source_quantity = source_quantities.get(item_id)
         source_tag_list = source_tags.get(item_id, [])
         source_is_protected = item_id in source_protected
+        source_repeat = source_repeats.get(item_id)
+        target_repeat = target_repeats.get(target_item_id)
 
         content_changed = (
             source_item.title != target_item.title
@@ -327,6 +340,15 @@ class ItemLinkManager:
 
         if source_is_protected != (target_item_id in target_protected):
             await self._manager.set_delete_protected(target_entity_id, target_item_id, source_is_protected)
+
+        if source_repeat != target_repeat:
+            if source_repeat is None:
+                await self._manager.set_repeat(target_entity_id, target_item_id, None)
+            else:
+                await self._manager.set_repeat(
+                    target_entity_id, target_item_id,
+                    source_repeat["interval"], source_repeat["unit"], source_repeat["from"],
+                )
 
         if source_item.completed != target_item.completed:
             await self._manager.set_completed(target_entity_id, target_item_id, source_item.completed)

@@ -15,6 +15,7 @@ def build_tree(
     weekdays: dict[str, int] | None = None,
     today_weekday: int | None = None,
     weekday_anchor: WeekdayAnchor = "top",
+    repeats: dict[str, dict] | None = None,
 ) -> list[TodoItem]:
     """Build a hierarchy from a flat list of TodoItems.
 
@@ -62,6 +63,10 @@ def build_tree(
         item.delete_protected = item.id in (delete_protected_ids or set())
         item.weekday = (weekdays or {}).get(item.id)
         item.day_label = _day_label(item, today_weekday)
+        repeat = (repeats or {}).get(item.id)
+        item.repeat_interval = repeat["interval"] if repeat else None
+        item.repeat_unit = repeat["unit"] if repeat else None
+        item.repeat_from = repeat["from"] if repeat else None
 
     for item in items:
         position = positions.get(item.id)

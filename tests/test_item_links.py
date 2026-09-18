@@ -119,6 +119,20 @@ async def test_link_item_copies_delete_protected_at_creation_time():
 
 
 @pytest.mark.asyncio
+async def test_link_item_copies_repeat_config_at_creation_time():
+    manager, item_links, adapter, metadata_store = make_cross_entity(
+        [TodoItem(id="bins", title="Bins", completed=False, due_date="2026-01-05")],
+    )
+    await manager.set_repeat(SOURCE, "bins", 1, "weeks", "due")
+
+    new_id = await item_links.link_item(SOURCE, "bins", target_entity_id=TARGET)
+
+    assert (await metadata_store.get_repeats(TARGET)).get(new_id) == {
+        "interval": 1, "unit": "weeks", "from": "due",
+    }
+
+
+@pytest.mark.asyncio
 async def test_link_item_raises_for_an_unknown_source_item():
     manager, item_links, adapter, metadata_store = make_cross_entity([])
 
@@ -314,6 +328,27 @@ async def test_propagates_delete_protected_in_both_directions():
     await item_links.async_handle_item_changed(TARGET, new_id, "updated")
 
     assert "tent" not in await metadata_store.get_delete_protected(SOURCE)
+
+
+@pytest.mark.asyncio
+async def test_propagates_repeat_config_in_both_directions():
+    manager, item_links, adapter, metadata_store = make_cross_entity(
+        [TodoItem(id="bins", title="Bins", completed=False, due_date="2026-01-05")],
+    )
+    new_id = await item_links.link_item(SOURCE, "bins", target_entity_id=TARGET)
+
+    await manager.set_repeat(SOURCE, "bins", 1, "weeks", "due")
+    await item_links.async_handle_item_changed(SOURCE, "bins", "updated")
+
+    assert (await metadata_store.get_repeats(TARGET)).get(new_id) == {
+        "interval": 1, "unit": "weeks", "from": "due",
+    }
+
+    # And back the other way - clearing it too.
+    await manager.set_repeat(TARGET, new_id, None)
+    await item_links.async_handle_item_changed(TARGET, new_id, "updated")
+
+    assert (await metadata_store.get_repeats(SOURCE)).get("bins") is None
 
 
 @pytest.mark.asyncio

@@ -26,6 +26,16 @@ function triggerOnDueCheckbox(el: TodoItemDialog): HTMLElement & {checked?: bool
     return row.querySelector("ha-checkbox") as HTMLElement & {checked?: boolean};
 }
 
+function segment(el: TodoItemDialog, cls: string): HTMLInputElement {
+    return el.shadowRoot?.querySelector(`input.segment.${cls}`) as HTMLInputElement;
+}
+
+function setSegment(el: TodoItemDialog, cls: string, text: string): void {
+    const input = segment(el, cls);
+    input.value = text;
+    input.dispatchEvent(new Event("input", {bubbles: true}));
+}
+
 afterEach(() => {
     document.body.innerHTML = "";
 });
@@ -597,27 +607,41 @@ describe("todo-overlay-item-dialog", () => {
         // uneditable) failed to reliably give a day-month-year field. A
         // fixed set of plain digit segments sidesteps both.
 
-        function segment(el: TodoItemDialog, cls: string): HTMLInputElement {
-            return el.shadowRoot?.querySelector(`input.segment.${cls}`) as HTMLInputElement;
+        // Hour/minute are a stepper widget (see the CSS ".stepper"/
+        // ".stepper-value") rather than plain digit segments - found by
+        // aria-label, not a shared class, since both live inside the
+        // same .hm-row.
+        function timeStepperInput(el: TodoItemDialog, label: "Hour" | "Minute"): HTMLInputElement {
+            return el.shadowRoot?.querySelector(`.hm-row input[aria-label="${label}"]`) as HTMLInputElement;
         }
 
-        function setSegment(el: TodoItemDialog, cls: string, text: string): void {
-            const input = segment(el, cls);
+        function setTimeStepperInput(el: TodoItemDialog, label: "Hour" | "Minute", text: string): void {
+            const input = timeStepperInput(el, label);
             input.value = text;
             input.dispatchEvent(new Event("input", {bubbles: true}));
         }
 
-        function ampmSelect(el: TodoItemDialog): HTMLSelectElement {
-            return el.shadowRoot?.querySelector(".ampm-select") as HTMLSelectElement;
+        function stepperButton(el: TodoItemDialog, label: "Hour" | "Minute", dir: "Increase" | "Decrease"): HTMLButtonElement {
+            return el.shadowRoot?.querySelector(`.hm-row button[aria-label="${dir} ${label.toLowerCase()}"]`) as HTMLButtonElement;
+        }
+
+        function ampmToggle(el: TodoItemDialog): HTMLElement {
+            return el.shadowRoot?.querySelector('.hm-row .segmented[aria-label="AM or PM"]') as HTMLElement;
+        }
+
+        function ampmButton(el: TodoItemDialog, period: "AM" | "PM"): HTMLButtonElement {
+            return [...ampmToggle(el).querySelectorAll("button")].find(b => b.textContent?.trim() === period) as HTMLButtonElement;
+        }
+
+        function activeAmPm(el: TodoItemDialog): string | undefined {
+            return ampmToggle(el).querySelector("button.active")?.textContent?.trim();
         }
 
         function setAmPm(el: TodoItemDialog, period: "AM" | "PM"): void {
-            const select = ampmSelect(el);
-            select.value = period;
-            select.dispatchEvent(new Event("change", {bubbles: true}));
+            ampmButton(el, period).click();
         }
 
-        it("renders plain digit-segment inputs, never a native date/time input or ha-date-input/ha-time-input", async () => {
+        it("renders plain digit-segment date inputs and a stepper time widget, never a native date/time input or ha-date-input/ha-time-input", async () => {
             const el = await renderDialog({
                 fieldSupport: {description: false, dueDate: true, dueDateTime: true},
             });
@@ -626,12 +650,13 @@ describe("todo-overlay-item-dialog", () => {
             expect(el.shadowRoot?.querySelector("input[type='time']")).toBeNull();
             expect(el.shadowRoot?.querySelector("ha-date-input")).toBeNull();
             expect(el.shadowRoot?.querySelector("ha-time-input")).toBeNull();
+            expect(el.shadowRoot?.querySelector("select.ampm-select")).toBeNull();
 
             expect(segment(el, "day")).not.toBeNull();
             expect(segment(el, "month")).not.toBeNull();
             expect(segment(el, "year")).not.toBeNull();
-            expect(segment(el, "hour")).not.toBeNull();
-            expect(segment(el, "minute")).not.toBeNull();
+            expect(timeStepperInput(el, "Hour")).not.toBeNull();
+            expect(timeStepperInput(el, "Minute")).not.toBeNull();
         });
 
         it("lays segments out in day, then month, then year order - never month-first", async () => {
@@ -654,18 +679,17 @@ describe("todo-overlay-item-dialog", () => {
             expect(segment(el, "day").value).toBe("05");
             expect(segment(el, "month").value).toBe("03");
             expect(segment(el, "year").value).toBe("2026");
-            expect(segment(el, "hour").value).toBe("09");
-            expect(segment(el, "minute").value).toBe("07");
+            expect(timeStepperInput(el, "Hour").value).toBe("09");
+            expect(timeStepperInput(el, "Minute").value).toBe("07");
         });
 
-        it("renders the time as a 12-hour clock with an AM/PM selector, not 24-hour", async () => {
+        it("renders the time as a 12-hour clock with an AM/PM toggle, not 24-hour or a dropdown", async () => {
             const el = await renderDialog({
                 fieldSupport: {description: false, dueDate: true, dueDateTime: true},
             });
 
-            expect(ampmSelect(el)).not.toBeNull();
-            const options = [...ampmSelect(el).querySelectorAll("option")].map(o => o.value);
-            expect(options).toEqual(["AM", "PM"]);
+            const buttons = [...ampmToggle(el).querySelectorAll("button")].map(b => b.textContent?.trim());
+            expect(buttons).toEqual(["AM", "PM"]);
         });
 
         it("pre-fills an afternoon 24h dueTime (14:30) as 12h PM (02:30 PM)", async () => {
@@ -674,9 +698,9 @@ describe("todo-overlay-item-dialog", () => {
                 fieldSupport: {description: false, dueDate: true, dueDateTime: true},
             });
 
-            expect(segment(el, "hour").value).toBe("02");
-            expect(segment(el, "minute").value).toBe("30");
-            expect(ampmSelect(el).value).toBe("PM");
+            expect(timeStepperInput(el, "Hour").value).toBe("02");
+            expect(timeStepperInput(el, "Minute").value).toBe("30");
+            expect(activeAmPm(el)).toBe("PM");
         });
 
         it("pre-fills midnight (00:15) as 12 AM, and noon (12:00) as 12 PM", async () => {
@@ -684,15 +708,15 @@ describe("todo-overlay-item-dialog", () => {
                 value: {...EMPTY_FORM_VALUE, dueTime: "00:15"},
                 fieldSupport: {description: false, dueDate: true, dueDateTime: true},
             });
-            expect(segment(midnight, "hour").value).toBe("12");
-            expect(ampmSelect(midnight).value).toBe("AM");
+            expect(timeStepperInput(midnight, "Hour").value).toBe("12");
+            expect(activeAmPm(midnight)).toBe("AM");
 
             const noon = await renderDialog({
                 value: {...EMPTY_FORM_VALUE, dueTime: "12:00"},
                 fieldSupport: {description: false, dueDate: true, dueDateTime: true},
             });
-            expect(segment(noon, "hour").value).toBe("12");
-            expect(ampmSelect(noon).value).toBe("PM");
+            expect(timeStepperInput(noon, "Hour").value).toBe("12");
+            expect(activeAmPm(noon)).toBe("PM");
         });
 
         it("combines 12h + AM/PM back into 24h dueTime correctly (2:30 PM -> 14:30)", async () => {
@@ -701,8 +725,8 @@ describe("todo-overlay-item-dialog", () => {
                 fieldSupport: {description: false, dueDate: true, dueDateTime: true},
             });
 
-            setSegment(el, "hour", "2");
-            setSegment(el, "minute", "30");
+            setTimeStepperInput(el, "Hour", "2");
+            setTimeStepperInput(el, "Minute", "30");
             setAmPm(el, "PM");
 
             expect(el.value.dueTime).toBe("14:30");
@@ -714,13 +738,47 @@ describe("todo-overlay-item-dialog", () => {
                 fieldSupport: {description: false, dueDate: true, dueDateTime: true},
             });
 
-            setSegment(el, "hour", "12");
-            setSegment(el, "minute", "00");
+            setTimeStepperInput(el, "Hour", "12");
+            setTimeStepperInput(el, "Minute", "00");
             setAmPm(el, "AM");
             expect(el.value.dueTime).toBe("00:00");
 
             setAmPm(el, "PM");
             expect(el.value.dueTime).toBe("12:00");
+        });
+
+        it("the hour stepper's + button nudges by 1, wrapping 12 -> 1", async () => {
+            const el = await renderDialog({
+                value: {...EMPTY_FORM_VALUE, dueTime: "11:00"},
+                fieldSupport: {description: false, dueDate: true, dueDateTime: true},
+            });
+
+            stepperButton(el, "Hour", "Increase").click();
+            await el.updateComplete;
+            expect(timeStepperInput(el, "Hour").value).toBe("12");
+
+            stepperButton(el, "Hour", "Increase").click();
+            await el.updateComplete;
+            expect(timeStepperInput(el, "Hour").value).toBe("01");
+        });
+
+        it("the minute stepper's buttons nudge by 15, wrapping 59 -> 00 and 00 -> 45", async () => {
+            const el = await renderDialog({
+                value: {...EMPTY_FORM_VALUE, dueTime: "09:50"},
+                fieldSupport: {description: false, dueDate: true, dueDateTime: true},
+            });
+
+            stepperButton(el, "Minute", "Increase").click();
+            await el.updateComplete;
+            expect(timeStepperInput(el, "Minute").value).toBe("05");
+
+            stepperButton(el, "Minute", "Decrease").click();
+            await el.updateComplete;
+            expect(timeStepperInput(el, "Minute").value).toBe("50");
+
+            stepperButton(el, "Minute", "Decrease").click();
+            await el.updateComplete;
+            expect(timeStepperInput(el, "Minute").value).toBe("35");
         });
 
         it("only sets dueDate once day, month, AND year are all filled in", async () => {
@@ -745,10 +803,10 @@ describe("todo-overlay-item-dialog", () => {
                 fieldSupport: {description: false, dueDate: true, dueDateTime: true},
             });
 
-            setSegment(el, "hour", "9");
+            setTimeStepperInput(el, "Hour", "9");
             expect(el.value.dueTime).toBe("");
 
-            setSegment(el, "minute", "5");
+            setTimeStepperInput(el, "Minute", "5");
             expect(el.value.dueTime).toBe("09:05");
         });
 
@@ -781,6 +839,166 @@ describe("todo-overlay-item-dialog", () => {
         });
     });
 
+    describe("repeats", () => {
+        function chip(el: TodoItemDialog, label: string): HTMLButtonElement {
+            return [...(el.shadowRoot?.querySelectorAll(".chip") ?? [])]
+                .find(b => b.textContent?.trim() === label) as HTMLButtonElement;
+        }
+
+        function fromToggle(el: TodoItemDialog): HTMLElement {
+            return el.shadowRoot?.querySelector('.segmented[aria-label="Repeat from"]') as HTMLElement;
+        }
+
+        function fromButton(el: TodoItemDialog, label: "From due date" | "From completion"): HTMLButtonElement {
+            return [...fromToggle(el).querySelectorAll("button")].find(b => b.textContent?.trim() === label) as HTMLButtonElement;
+        }
+
+        function activeFrom(el: TodoItemDialog): string | undefined {
+            return fromToggle(el).querySelector("button.active")?.textContent?.trim();
+        }
+
+        function intervalInput(el: TodoItemDialog): HTMLInputElement {
+            return el.shadowRoot?.querySelector(".stepper-value.interval") as HTMLInputElement;
+        }
+
+        function unitSelect(el: TodoItemDialog): HTMLSelectElement {
+            return el.shadowRoot?.querySelector(".unit-select") as HTMLSelectElement;
+        }
+
+        function withDueDate(overrides: Partial<TodoItemFormValue> = {}): TodoItemFormValue {
+            return {...EMPTY_FORM_VALUE, dueDate: "2026-01-05", ...overrides};
+        }
+
+        const fieldSupport = {description: false, dueDate: true, dueDateTime: true};
+
+        it("defaults to \"Doesn't repeat\" with no due date needed to show the chips", async () => {
+            const el = await renderDialog({value: EMPTY_FORM_VALUE, fieldSupport});
+
+            expect(chip(el, "Doesn't repeat").classList.contains("active")).toBe(true);
+            expect(fromToggle(el)).toBeNull();
+        });
+
+        it("clicking Daily/Weekly/Monthly sets interval=1 with the matching unit, defaulting from to \"due\"", async () => {
+            const el = await renderDialog({value: withDueDate(), fieldSupport});
+
+            chip(el, "Weekly").click();
+            await el.updateComplete;
+
+            expect(el.value.repeatInterval).toBe(1);
+            expect(el.value.repeatUnit).toBe("weeks");
+            expect(el.value.repeatFrom).toBe("due");
+            expect(activeFrom(el)).toBe("From due date");
+        });
+
+        it("clicking Custom reveals an interval stepper and unit select, defaulting to 2 days (never 1 - that's Daily)", async () => {
+            const el = await renderDialog({value: withDueDate(), fieldSupport});
+
+            chip(el, "Custom").click();
+            await el.updateComplete;
+
+            expect(el.value.repeatInterval).toBe(2);
+            expect(el.value.repeatUnit).toBe("days");
+            expect(intervalInput(el)).not.toBeNull();
+            expect(unitSelect(el).value).toBe("days");
+        });
+
+        it("typing a custom interval and changing the unit updates the value", async () => {
+            const el = await renderDialog({value: withDueDate({repeatInterval: 2, repeatUnit: "days", repeatFrom: "due"}), fieldSupport});
+
+            const input = intervalInput(el);
+            input.value = "30";
+            input.dispatchEvent(new Event("input", {bubbles: true}));
+            await el.updateComplete;
+
+            unitSelect(el).value = "weeks";
+            unitSelect(el).dispatchEvent(new Event("change", {bubbles: true}));
+            await el.updateComplete;
+
+            expect(el.value.repeatInterval).toBe(30);
+            expect(el.value.repeatUnit).toBe("weeks");
+        });
+
+        it("the interval stepper's buttons nudge by 1, clamped to [1, 365]", async () => {
+            const el = await renderDialog({value: withDueDate({repeatInterval: 2, repeatUnit: "days", repeatFrom: "due"}), fieldSupport});
+
+            const decrease = el.shadowRoot?.querySelector('button[aria-label="Decrease repeat interval"]') as HTMLButtonElement;
+            const increase = el.shadowRoot?.querySelector('button[aria-label="Increase repeat interval"]') as HTMLButtonElement;
+
+            decrease.click();
+            decrease.click();
+            await el.updateComplete;
+            expect(el.value.repeatInterval).toBe(1);
+
+            increase.click();
+            increase.click();
+            await el.updateComplete;
+            expect(el.value.repeatInterval).toBe(3);
+        });
+
+        it("clicking \"Doesn't repeat\" clears interval, unit, and from together", async () => {
+            const el = await renderDialog({
+                value: withDueDate({repeatInterval: 2, repeatUnit: "weeks", repeatFrom: "completion"}),
+                fieldSupport,
+            });
+
+            chip(el, "Doesn't repeat").click();
+            await el.updateComplete;
+
+            expect(el.value.repeatInterval).toBeNull();
+            expect(el.value.repeatUnit).toBe("");
+            expect(el.value.repeatFrom).toBe("");
+        });
+
+        it("toggling repeat-from between due and completion updates the value and the caption", async () => {
+            const el = await renderDialog({value: withDueDate({repeatInterval: 1, repeatUnit: "weeks", repeatFrom: "due"}), fieldSupport});
+
+            fromButton(el, "From completion").click();
+            await el.updateComplete;
+
+            expect(el.value.repeatFrom).toBe("completion");
+            expect(el.shadowRoot?.querySelector(".repeat-from-caption")?.textContent).toContain("Floating schedule");
+
+            fromButton(el, "From due date").click();
+            await el.updateComplete;
+
+            expect(el.value.repeatFrom).toBe("due");
+            expect(el.shadowRoot?.querySelector(".repeat-from-caption")?.textContent).toContain("Fixed schedule");
+        });
+
+        it("shows a hint and disables Save when a repeat is set but there is no due date yet", async () => {
+            const el = await renderDialog({
+                value: {...EMPTY_FORM_VALUE, repeatInterval: 1, repeatUnit: "weeks", repeatFrom: "due"},
+                fieldSupport,
+            });
+
+            expect(el.shadowRoot?.querySelector(".field-hint")?.textContent).toContain("Set a due date above");
+            expect(saveButton(el).disabled).toBe(true);
+        });
+
+        it("re-enables Save once a due date is filled in for a pending repeat", async () => {
+            const el = await renderDialog({
+                value: {...EMPTY_FORM_VALUE, repeatInterval: 1, repeatUnit: "weeks", repeatFrom: "due"},
+                fieldSupport,
+            });
+            expect(saveButton(el).disabled).toBe(true);
+
+            setSegment(el, "day", "05");
+            setSegment(el, "month", "01");
+            setSegment(el, "year", "2026");
+            await el.updateComplete;
+
+            expect(saveButton(el).disabled).toBe(false);
+        });
+
+        it("shows a summary line naming the interval and schedule type", async () => {
+            const el = await renderDialog({value: withDueDate({repeatInterval: 1, repeatUnit: "weeks", repeatFrom: "due"}), fieldSupport});
+
+            const summary = el.shadowRoot?.querySelector(".repeat-summary")?.textContent;
+            expect(summary).toContain("Repeats every week");
+            expect(summary).toContain("from its own due date");
+        });
+    });
+
     describe("calendar date-picker panel", () => {
         function calendarToggle(el: TodoItemDialog): HTMLButtonElement {
             return el.shadowRoot?.querySelector(".calendar-toggle") as HTMLButtonElement;
@@ -796,10 +1014,6 @@ describe("todo-overlay-item-dialog", () => {
 
         function dayButton(el: TodoItemDialog, day: number): HTMLButtonElement {
             return dayButtons(el).find(b => b.textContent?.trim() === String(day))!;
-        }
-
-        function segment(el: TodoItemDialog, cls: string): HTMLInputElement {
-            return el.shadowRoot?.querySelector(`input.segment.${cls}`) as HTMLInputElement;
         }
 
         it("is closed by default, and toggles open/closed via the calendar button", async () => {

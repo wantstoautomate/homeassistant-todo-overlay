@@ -40,10 +40,30 @@ export interface TodoItem {
     // computed display overlay from the backend, recomputed fresh on
     // every load; never sent back on save.
     day_label: string | null;
+    // Recurrence - all three null unless this item repeats (see the
+    // backend's own manager_recurrence.py). Completing a repeating item
+    // advances due_date/due_datetime by repeat_interval repeat_units
+    // instead of leaving it completed - all-or-nothing, and only
+    // meaningful alongside a due_date or due_datetime.
+    repeat_interval: number | null;
+    repeat_unit: RepeatUnit | null;
+    repeat_from: RepeatFrom | null;
     children: TodoItem[];
 }
 
 export type PinType = "category" | "person" | "day";
+
+export type RepeatUnit = "days" | "weeks" | "months";
+
+// "due" is a fixed schedule: always counts from the item's own previous
+// due date, rolling forward past today if several cycles were missed
+// entirely, so it never drifts even if completed late - right for
+// something like bins day. "completion" is a floating schedule: counts
+// from whenever it's actually completed instead, so finishing late
+// never compresses the next cycle - right for something like a water
+// filter. See the backend's own manager_recurrence.py module docstring
+// for the full mechanics.
+export type RepeatFrom = "due" | "completion";
 
 // Which side of its siblings a level's "day" pins (see PinType) block
 // together at - a per-card display preference, like group_completed,

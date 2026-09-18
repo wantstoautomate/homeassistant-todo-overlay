@@ -26,6 +26,7 @@ from .const import (
     WS_TYPE_SET_DELETE_PROTECTED,
     WS_TYPE_SET_PIN_TYPE,
     WS_TYPE_SET_QUANTITY,
+    WS_TYPE_SET_REPEAT,
     WS_TYPE_SET_TAGS,
     WS_TYPE_SET_TRIGGER_ON_DUE,
     WS_TYPE_TRANSFER_ITEM,
@@ -38,11 +39,14 @@ from .errors import (
     EntityNotFoundError,
     InvalidPinTypeError,
     ItemDeleteProtectedError,
+    InvalidRepeatError,
     ItemLinkTargetNotFoundError,
     ItemNotFoundError,
+    RepeatRequiresDueDateError,
     SnapshotNotFoundError,
     WeekdayRequiredError,
 )
+from .manager_types import REPEAT_FROM_VALUES, REPEAT_UNITS
 from .runtime_data import get_item_links, get_manager, get_metadata_store
 
 # Every TodoManager method that validates its input (a missing item,
@@ -63,6 +67,8 @@ _ERROR_CODES: dict[type[Exception], str] = {
     ItemLinkTargetNotFoundError: "item_link_target_not_found",
     ItemDeleteProtectedError: "item_delete_protected",
     WeekdayRequiredError: "weekday_required",
+    RepeatRequiresDueDateError: "repeat_requires_due_date",
+    InvalidRepeatError: "invalid_repeat",
 }
 
 WebSocketHandler = Callable[
@@ -427,6 +433,9 @@ async def websocket_delete_saved_list(
         vol.Optional("placement"): vol.In(["before", "after", "inside"]),
         vol.Optional("pin_type"): vol.In(["category", "person", "day"]),
         vol.Optional("weekday"): vol.All(int, vol.Range(min=0, max=6)),
+        vol.Optional("repeat_interval"): vol.All(int, vol.Range(min=1)),
+        vol.Optional("repeat_unit"): vol.In(sorted(REPEAT_UNITS)),
+        vol.Optional("repeat_from"): vol.In(sorted(REPEAT_FROM_VALUES)),
     }
 )
 @websocket_api.async_response
@@ -458,6 +467,9 @@ async def websocket_create_item(
         placement=msg.get("placement"),
         pin_type=msg.get("pin_type"),
         weekday=msg.get("weekday"),
+        repeat_interval=msg.get("repeat_interval"),
+        repeat_unit=msg.get("repeat_unit"),
+        repeat_from=msg.get("repeat_from"),
     )
 
     connection.send_result(msg["id"], {"id": item_id})
@@ -578,6 +590,39 @@ async def websocket_set_pin_type(
         item_id=msg["item_id"],
         pin_type=msg.get("pin_type"),
         weekday=msg.get("weekday"),
+    )
+
+    connection.send_result(msg["id"])
+
+
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): WS_TYPE_SET_REPEAT,
+        vol.Required("entity_id"): cv.entity_id,
+        vol.Required("item_id"): str,
+        vol.Optional("repeat_interval"): vol.All(int, vol.Range(min=1)),
+        vol.Optional("repeat_unit"): vol.In(sorted(REPEAT_UNITS)),
+        vol.Optional("repeat_from"): vol.In(sorted(REPEAT_FROM_VALUES)),
+    }
+)
+@websocket_api.async_response
+@_handle_manager_errors
+async def websocket_set_repeat(
+    hass: HomeAssistant,
+    connection: websocket_api.ActiveConnection,
+    msg,
+) -> None:
+    """Set (or clear, if repeat_interval is omitted) an item's
+    recurrence - see TodoManager.set_repeat's own docstring."""
+
+    manager = get_manager(hass)
+
+    await manager.set_repeat(
+        entity_id=msg["entity_id"],
+        item_id=msg["item_id"],
+        interval=msg.get("repeat_interval"),
+        unit=msg.get("repeat_unit"),
+        repeat_from=msg.get("repeat_from"),
     )
 
     connection.send_result(msg["id"])
@@ -802,6 +847,7 @@ def async_register_websocket(hass: HomeAssistant) -> None:
         websocket_delete_item,
         websocket_set_quantity,
         websocket_set_pin_type,
+        websocket_set_repeat,
         websocket_link_item,
         websocket_unlink_item,
         websocket_set_tags,

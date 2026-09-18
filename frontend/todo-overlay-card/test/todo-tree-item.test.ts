@@ -1072,6 +1072,16 @@ describe("todo-overlay-tree-item", () => {
         expect(unarmed.shadowRoot?.querySelector(".due-chip .trigger-armed-icon")).toBeNull();
     });
 
+    it("shows a repeat icon on the due chip only for a recurring item", async () => {
+        const recurring = await renderItem(makeItem({
+            due_date: "2026-01-01", repeat_interval: 1, repeat_unit: "weeks", repeat_from: "due",
+        }));
+        expect(recurring.shadowRoot?.querySelector(".due-chip .repeat-icon")).not.toBeNull();
+
+        const plain = await renderItem(makeItem({due_date: "2026-01-01"}));
+        expect(plain.shadowRoot?.querySelector(".due-chip .repeat-icon")).toBeNull();
+    });
+
     it("renders the quantity chip when set", async () => {
         const el = await renderItem(makeItem({quantity: "150g"}));
 

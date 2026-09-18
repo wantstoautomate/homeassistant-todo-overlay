@@ -74,6 +74,17 @@ class CompletionMixin:
                     "completed" if completed else "uncompleted",
                 )
 
+            if completed:
+                # Recurring items (see manager_recurrence.py) don't stay
+                # completed - each one that just transitioned here has
+                # its due date advanced and is un-completed again right
+                # away, mutating the SAME item_lookup entries reposition
+                # (below) reads, so a repeat item ends up positioned as
+                # the still-incomplete item it actually is, not
+                # transiently sorted into the completed group first.
+                for target_id in list(touched_ids):
+                    await self._maybe_advance_recurrence(entity_id, target_id, item_lookup)
+
             if reposition:
                 # Every completed flag that's going to change already has
                 # by this point - what's left is purely repositioning

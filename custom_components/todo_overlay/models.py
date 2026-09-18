@@ -66,6 +66,17 @@ class TodoItem:
     # computed display overlay, recomputed fresh on every read from
     # weekday above and the current date; nothing here is ever stored.
     day_label: str | None = None
+    # Only meaningful alongside a real due_date/due_datetime - see
+    # manager_recurrence.py's own module docstring for what these three
+    # actually drive (completing the item advances its due date and
+    # un-completes it, instead of just staying done) and
+    # errors.RepeatRequiresDueDateError for why they can't exist without
+    # a due date to advance from. None on any of the three means
+    # "doesn't repeat" - all three are always set or cleared together,
+    # never independently (see manager_items.py's own set_repeat).
+    repeat_interval: int | None = None
+    repeat_unit: str | None = None
+    repeat_from: str | None = None
     children: list["TodoItem"] = field(default_factory=list)
 
     def to_dict(self) -> dict:
@@ -84,6 +95,9 @@ class TodoItem:
             "delete_protected": self.delete_protected,
             "weekday": self.weekday,
             "day_label": self.day_label,
+            "repeat_interval": self.repeat_interval,
+            "repeat_unit": self.repeat_unit,
+            "repeat_from": self.repeat_from,
             "children": [child.to_dict() for child in self.children],
         }
 
@@ -109,6 +123,9 @@ class ListMetadata:
     item_links: dict[str, dict[str, str]]
     delete_protected: set[str]
     weekdays: dict[str, int]
+    # {item_id: {"interval": int, "unit": str, "from": str}} - see
+    # TodoItem's own repeat_interval/repeat_unit/repeat_from.
+    repeats: dict[str, dict]
 
 
 @dataclass(slots=True)

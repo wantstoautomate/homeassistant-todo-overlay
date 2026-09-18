@@ -89,6 +89,12 @@ DELETE_PROTECTED_KEY = "_delete_protected"
 # list, not one per item), so it's read/written directly rather than
 # through the generic per-item helpers below.
 LAST_ROLLOVER_DATE_KEY = "_last_rollover_date"
+# {item_id: {"interval": int, "unit": str, "from": str}} - see
+# manager_recurrence.py. A dict value (like ITEM_LINKS_KEY), not a
+# scalar, since the three sub-fields always travel together - stored
+# as ONE key rather than three so they can never end up set for
+# different items than each other.
+REPEAT_KEY = "_repeat"
 
 
 class _TodoOverlayStore(Store):
@@ -300,6 +306,7 @@ class MetadataStore:
         self._cache.get(DELETE_PROTECTED_KEY, {}).pop(entity_id, None)
         self._cache.get(WEEKDAY_KEY, {}).pop(entity_id, None)
         self._cache.get(LAST_ROLLOVER_DATE_KEY, {}).pop(entity_id, None)
+        self._cache.get(REPEAT_KEY, {}).pop(entity_id, None)
 
         self._save()
 
@@ -324,7 +331,7 @@ class MetadataStore:
         for key in (
             QUANTITIES_KEY, TAGS_KEY, PIN_TYPE_KEY, TRIGGER_ON_DUE_KEY, DUE_FIRED_KEY,
             LINKS_KEY, LINK_ITEM_STATE_KEY, ITEM_LINKS_KEY, DELETE_PROTECTED_KEY, WEEKDAY_KEY,
-            LAST_ROLLOVER_DATE_KEY,
+            LAST_ROLLOVER_DATE_KEY, REPEAT_KEY,
         ):
             bucket = self._cache.get(key, {})
 
@@ -421,6 +428,28 @@ class MetadataStore:
         after a clear-completed removal."""
 
         await self._remove_item_keys(WEEKDAY_KEY, entity_id, item_ids)
+
+    async def get_repeats(self, entity_id: str) -> dict[str, dict]:
+        return await self._get_item_map(REPEAT_KEY, entity_id)
+
+    async def set_repeat(
+        self,
+        entity_id: str,
+        item_id: str,
+        repeat: dict | None,
+    ) -> None:
+        """Set (or clear, if repeat is None) an item's recurrence -
+        {"interval": int, "unit": str, "from": str} - see
+        manager_recurrence.py. All three sub-fields travel together as
+        one value; there's no way to set just one of them."""
+
+        await self._set_item_value(REPEAT_KEY, entity_id, item_id, repeat)
+
+    async def remove_repeats_for_items(self, entity_id: str, item_ids: list[str]) -> None:
+        """Drop stored recurrence for items that no longer exist, e.g.
+        after a clear-completed removal."""
+
+        await self._remove_item_keys(REPEAT_KEY, entity_id, item_ids)
 
     async def get_item_link(
         self,

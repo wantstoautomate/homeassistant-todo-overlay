@@ -605,6 +605,82 @@ async def test_websocket_set_pin_type_day_without_weekday_sends_weekday_required
 
 
 @pytest.mark.asyncio
+async def test_websocket_set_repeat_success():
+    manager = make_manager(items=[TodoItem(id="1", title="Bins", completed=False, due_date="2026-01-05")])
+
+    connection = await call_handler(
+        websocket.websocket_set_repeat, manager,
+        {
+            "entity_id": ENTITY_ID, "item_id": "1",
+            "repeat_interval": 1, "repeat_unit": "weeks", "repeat_from": "due",
+        },
+    )
+
+    assert connection.results == [(1, None)]
+
+    metadata_store: FakeMetadataStore = manager._metadata_store
+    assert metadata_store._repeats["1"] == {"interval": 1, "unit": "weeks", "from": "due"}
+
+
+@pytest.mark.asyncio
+async def test_websocket_set_repeat_can_clear_by_omitting_the_field():
+    manager = make_manager(items=[TodoItem(id="1", title="Bins", completed=False, due_date="2026-01-05")])
+
+    await call_handler(
+        websocket.websocket_set_repeat, manager,
+        {
+            "entity_id": ENTITY_ID, "item_id": "1",
+            "repeat_interval": 1, "repeat_unit": "weeks", "repeat_from": "due",
+        },
+    )
+    connection = await call_handler(
+        websocket.websocket_set_repeat, manager,
+        {"entity_id": ENTITY_ID, "item_id": "1"},
+    )
+
+    assert connection.results == [(1, None)]
+
+    metadata_store: FakeMetadataStore = manager._metadata_store
+    assert "1" not in metadata_store._repeats
+
+
+@pytest.mark.asyncio
+async def test_websocket_set_repeat_without_a_due_date_sends_repeat_requires_due_date_error():
+    manager = make_manager(items=[TodoItem(id="1", title="Bins", completed=False)])
+
+    connection = await call_handler(
+        websocket.websocket_set_repeat, manager,
+        {
+            "entity_id": ENTITY_ID, "item_id": "1",
+            "repeat_interval": 1, "repeat_unit": "weeks", "repeat_from": "due",
+        },
+    )
+
+    assert connection.results == []
+    msg_id, code, message = connection.errors[0]
+    assert code == "repeat_requires_due_date"
+
+
+@pytest.mark.asyncio
+async def test_websocket_create_item_with_repeat():
+    manager = make_manager(items=[])
+
+    connection = await call_handler(
+        websocket.websocket_create_item, manager,
+        {
+            "entity_id": ENTITY_ID, "title": "Bins", "due_date": "2026-01-05",
+            "repeat_interval": 1, "repeat_unit": "weeks", "repeat_from": "due",
+        },
+    )
+
+    assert len(connection.results) == 1
+    new_id = connection.results[0][1]["id"]
+
+    metadata_store: FakeMetadataStore = manager._metadata_store
+    assert metadata_store._repeats[new_id] == {"interval": 1, "unit": "weeks", "from": "due"}
+
+
+@pytest.mark.asyncio
 async def test_websocket_get_list_passes_weekday_anchor_through():
     manager = make_manager(items=[
         TodoItem(id="thu", title="Thursday", completed=False),
@@ -806,6 +882,7 @@ def test_async_register_websocket_registers_every_handler():
         "todo_overlay/delete_item",
         "todo_overlay/set_quantity",
         "todo_overlay/set_pin_type",
+        "todo_overlay/set_repeat",
         "todo_overlay/link_item",
         "todo_overlay/unlink_item",
         "todo_overlay/set_tags",

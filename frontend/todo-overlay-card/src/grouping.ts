@@ -107,6 +107,9 @@ export function groupSiblingsForDisplay(
         delete_protected: false,
         weekday: null,
         day_label: null,
+        repeat_interval: null,
+        repeat_unit: null,
+        repeat_from: null,
         children: plain,
         synthetic: true,
     };

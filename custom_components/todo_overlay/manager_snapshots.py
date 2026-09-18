@@ -180,6 +180,9 @@ class SnapshotMixin:
             # "day" but no weekday at all, since _create_snapshot_nodes
             # only ever had pin_type to work with.
             "weekday": item.weekday,
+            "repeat_interval": item.repeat_interval,
+            "repeat_unit": item.repeat_unit,
+            "repeat_from": item.repeat_from,
             "linked": item.linked,
             "completed": item.completed if persist_states else False,
             "children": [
@@ -298,6 +301,29 @@ class SnapshotMixin:
 
                         if incoming_pin_type == "day" and node.get("weekday") is not None:
                             await self._metadata_store.set_weekday(entity_id, target_id, node["weekday"])
+
+                # Same "existing wins, incoming only fills a gap" rule as
+                # pin_type/weekday above, plus its own precondition: the
+                # matched item needs an actual due date/time already (or
+                # this write would be orphaned metadata manager_
+                # recurrence.py can never advance from).
+                incoming_repeat_interval = node.get("repeat_interval")
+
+                if incoming_repeat_interval is not None:
+                    existing_repeats = await self._metadata_store.get_repeats(entity_id)
+
+                    if target_id not in existing_repeats:
+                        existing_item = item_by_id.get(target_id)
+
+                        if existing_item is not None and (existing_item.due_date or existing_item.due_datetime):
+                            await self._metadata_store.set_repeat(
+                                entity_id, target_id,
+                                {
+                                    "interval": incoming_repeat_interval,
+                                    "unit": node.get("repeat_unit"),
+                                    "from": node.get("repeat_from"),
+                                },
+                            )
             else:
                 target_id = await self._adapter.add_item(
                     entity_id,
@@ -324,6 +350,26 @@ class SnapshotMixin:
 
                     if node["pin_type"] == "day" and node.get("weekday") is not None:
                         await self._metadata_store.set_weekday(entity_id, target_id, node["weekday"])
+
+                if node.get("repeat_interval") is not None:
+                    # Re-check due_datetime/due_date actually landed -
+                    # same "the target entity might not support it"
+                    # degrade-gracefully precedent as trigger_on_due
+                    # below.
+                    created_items = await self._adapter.get_items(entity_id)
+                    created_item = next(
+                        (c for c in created_items if c.id == target_id), None,
+                    )
+
+                    if created_item is not None and (created_item.due_date or created_item.due_datetime):
+                        await self._metadata_store.set_repeat(
+                            entity_id, target_id,
+                            {
+                                "interval": node["repeat_interval"],
+                                "unit": node.get("repeat_unit"),
+                                "from": node.get("repeat_from"),
+                            },
+                        )
 
                 if node.get("completed"):
                     await self._adapter.set_completed(entity_id, target_id, True)
