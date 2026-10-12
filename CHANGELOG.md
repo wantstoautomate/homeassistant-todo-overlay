@@ -3,6 +3,10 @@
 All notable changes to this project are documented here. Versions follow the
 integration's `manifest.json`/card's `package.json` (kept in lockstep).
 
+## 2.0.1
+
+**Fixed: the time arrows now behave like a clock.** Hours, minutes and AM/PM used to wrap independently, so 11 AM stepped up to "12 AM" and 11:45 stepped up to 11:00. Now the arrows move the whole time: minutes carry into the hour (10:45 → 11:00), and AM/PM flips crossing noon or midnight (11 AM → 12 PM, 11:45 PM → 12:00 AM). Going up from 12 AM gives 1 AM.
+
 ## 2.0.0
 
 **New: a redesigned item dialog.** The add/edit dialog has been rebuilt around grouped sections - When, Details and Options - instead of one long column of mixed controls. Inspired by `scheduler-card`'s editor.
