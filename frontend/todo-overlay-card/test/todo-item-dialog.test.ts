@@ -408,20 +408,77 @@ describe("todo-overlay-item-dialog", () => {
             expect(timeInput(el, "Minute").value).toBe("45");
         });
 
-        it("hour arrows step 1 and wrap 12 -> 1; minute arrows step 15 and wrap", async () => {
-            const el = await renderDialog({value: {...EMPTY_FORM_VALUE, title: "x", dueDate: "2026-10-16", dueTime: "11:50"}});
+        async function step(el: TodoItemDialog, label: string, times = 1): Promise<void> {
+            for (let i = 0; i < times; i++) {
+                await click(el, q(el, `button[aria-label="${label}"]`));
+            }
+        }
+
+        async function openAt(dueTime: string): Promise<TodoItemDialog> {
+            const el = await renderDialog({value: {...EMPTY_FORM_VALUE, title: "x", dueDate: "2026-10-16", dueTime}});
             await openTime(el);
+            return el;
+        }
 
-            await click(el, q(el, 'button[aria-label="Increase hour"]'));
-            expect(timeInput(el, "Hour").value).toBe("12");
-            await click(el, q(el, 'button[aria-label="Increase hour"]'));
-            expect(timeInput(el, "Hour").value).toBe("01");
+        it("the hour arrows flip AM/PM crossing noon: 11 AM -> 12 PM -> 1 PM, and back", async () => {
+            const el = await openAt("11:00");
 
-            await click(el, q(el, 'button[aria-label="Increase minute"]'));
-            expect(timeInput(el, "Minute").value).toBe("05");
-            await click(el, q(el, 'button[aria-label="Decrease minute"]'));
-            await click(el, q(el, 'button[aria-label="Decrease minute"]'));
-            expect(timeInput(el, "Minute").value).toBe("35");
+            await step(el, "Increase hour");
+            expect([timeInput(el, "Hour").value, activeAmPm(el), el.value.dueTime]).toEqual(["12", "PM", "12:00"]);
+
+            await step(el, "Increase hour");
+            expect([timeInput(el, "Hour").value, activeAmPm(el), el.value.dueTime]).toEqual(["01", "PM", "13:00"]);
+
+            await step(el, "Decrease hour", 2);
+            expect([timeInput(el, "Hour").value, activeAmPm(el), el.value.dueTime]).toEqual(["11", "AM", "11:00"]);
+        });
+
+        it("the hour arrows flip AM/PM crossing midnight: 11 PM -> 12 AM, and 12 AM back to 11 PM", async () => {
+            const el = await openAt("23:00");
+
+            await step(el, "Increase hour");
+            expect([timeInput(el, "Hour").value, activeAmPm(el), el.value.dueTime]).toEqual(["12", "AM", "00:00"]);
+
+            await step(el, "Decrease hour");
+            expect([timeInput(el, "Hour").value, activeAmPm(el), el.value.dueTime]).toEqual(["11", "PM", "23:00"]);
+        });
+
+        it("12 AM steps up to 1 AM - still morning, no flip", async () => {
+            const el = await openAt("00:00");
+
+            await step(el, "Increase hour");
+
+            expect([timeInput(el, "Hour").value, activeAmPm(el), el.value.dueTime]).toEqual(["01", "AM", "01:00"]);
+        });
+
+        it("the minute arrows step 15 and carry into the hour", async () => {
+            const el = await openAt("10:45");
+
+            await step(el, "Increase minute");
+            expect([timeInput(el, "Hour").value, timeInput(el, "Minute").value, el.value.dueTime]).toEqual(["11", "00", "11:00"]);
+
+            await step(el, "Decrease minute");
+            expect([timeInput(el, "Hour").value, timeInput(el, "Minute").value, el.value.dueTime]).toEqual(["10", "45", "10:45"]);
+        });
+
+        it("the minute arrows flip AM/PM too: 11:45 AM -> 12:00 PM, and 12:00 AM back to 11:45 PM", async () => {
+            const noon = await openAt("11:45");
+            await step(noon, "Increase minute");
+            expect([timeInput(noon, "Hour").value, timeInput(noon, "Minute").value, activeAmPm(noon), noon.value.dueTime])
+                .toEqual(["12", "00", "PM", "12:00"]);
+
+            const midnight = await openAt("00:00");
+            await step(midnight, "Decrease minute");
+            expect([timeInput(midnight, "Hour").value, timeInput(midnight, "Minute").value, activeAmPm(midnight), midnight.value.dueTime])
+                .toEqual(["11", "45", "PM", "23:45"]);
+        });
+
+        it("an off-quarter typed minute carries correctly (9:50 + 15 -> 10:05)", async () => {
+            const el = await openAt("09:50");
+
+            await step(el, "Increase minute");
+
+            expect(el.value.dueTime).toBe("10:05");
         });
 
         it("Remove time clears the time and turns the automation trigger back off", async () => {

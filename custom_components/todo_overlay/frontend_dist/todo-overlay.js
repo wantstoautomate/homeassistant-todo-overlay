@@ -1291,13 +1291,19 @@ var TodoItemDialog = class extends i4 {
     this.dueMinute = digitsOnly(raw, 2);
     this.syncDueTime();
   }
-  stepDueHour(delta) {
-    const current = Number(this.dueHour12) || 12;
-    this.updateDueHour12(String(wrapValue(current, delta, 1, 12)).padStart(2, "0"));
-  }
-  stepDueMinute(delta) {
-    const current = Number(this.dueMinute) || 0;
-    this.updateDueMinute(String(wrapValue(current, delta, 0, 59)).padStart(2, "0"));
+  // Arrows move the whole time like a real clock: minutes carry into the
+  // hour, and AM/PM flips crossing noon or midnight (11 AM -> 12 PM,
+  // 11:45 PM -> 12:00 AM), rather than each part wrapping on its own.
+  stepDueTime(deltaMinutes) {
+    const hour12 = Number(this.dueHour12) || 12;
+    const minute = Number(this.dueMinute) || 0;
+    const hour24 = hour12 % 12 + (this.dueAmPm === "PM" ? 12 : 0);
+    const total = wrapValue(hour24 * 60 + minute + deltaMinutes, 0, 0, 24 * 60 - 1);
+    const nextHour24 = Math.floor(total / 60);
+    this.dueHour12 = String(nextHour24 % 12 || 12).padStart(2, "0");
+    this.dueMinute = String(total % 60).padStart(2, "0");
+    this.dueAmPm = nextHour24 >= 12 ? "PM" : "AM";
+    this.syncDueTime();
   }
   setDueAmPm(period) {
     this.dueAmPm = period;
@@ -1664,7 +1670,7 @@ var TodoItemDialog = class extends i4 {
             <div class="panel">
                 <div class="time-row">
                     <div class="spin">
-                        <button type="button" aria-label="Increase hour" @click=${() => this.stepDueHour(1)}>${icon(I_UP)}</button>
+                        <button type="button" aria-label="Increase hour" @click=${() => this.stepDueTime(60)}>${icon(I_UP)}</button>
                         <input
                             type="text"
                             inputmode="numeric"
@@ -1673,11 +1679,11 @@ var TodoItemDialog = class extends i4 {
                             .value=${this.dueHour12}
                             @input=${(e7) => this.updateDueHour12(e7.target.value)}
                         />
-                        <button type="button" aria-label="Decrease hour" @click=${() => this.stepDueHour(-1)}>${icon(I_DOWN)}</button>
+                        <button type="button" aria-label="Decrease hour" @click=${() => this.stepDueTime(-60)}>${icon(I_DOWN)}</button>
                     </div>
                     <span class="time-colon" aria-hidden="true">:</span>
                     <div class="spin">
-                        <button type="button" aria-label="Increase minute" @click=${() => this.stepDueMinute(15)}>${icon(I_UP)}</button>
+                        <button type="button" aria-label="Increase minute" @click=${() => this.stepDueTime(15)}>${icon(I_UP)}</button>
                         <input
                             type="text"
                             inputmode="numeric"
@@ -1686,7 +1692,7 @@ var TodoItemDialog = class extends i4 {
                             .value=${this.dueMinute}
                             @input=${(e7) => this.updateDueMinute(e7.target.value)}
                         />
-                        <button type="button" aria-label="Decrease minute" @click=${() => this.stepDueMinute(-15)}>${icon(I_DOWN)}</button>
+                        <button type="button" aria-label="Decrease minute" @click=${() => this.stepDueTime(-15)}>${icon(I_DOWN)}</button>
                     </div>
                     <div class="ampm" role="group" aria-label="AM or PM">
                         <button
