@@ -135,6 +135,12 @@ class FakeAdapter:
         due_date: str | None = None,
         due_datetime: str | None = None,
     ) -> None:
+        # Mirrors HA's own todo.update_item, which raises
+        # ServiceValidationError ("Unable to find to-do list item") for an
+        # unknown uid rather than silently no-opping.
+        if not any(item.id == item_id for item in self._items):
+            raise ValueError(f"Unable to find to-do list item: {item_id}")
+
         for item in self._items:
             if item.id == item_id:
                 if title is not None:

@@ -1389,6 +1389,69 @@ async def test_a_failing_incoming_item_message_is_logged_not_left_untracked(capl
     )
 
 
+def _snapshot_item(title: str, updated_at: str = "2026-01-01T00:00:00+00:00") -> dict:
+    return {
+        "updated_at": updated_at,
+        "deleted": False,
+        "fields": {"title": title, "completed": False, "description": None,
+                    "due_date": None, "due_datetime": None, "quantity": None, "tags": []},
+    }
+
+
+@pytest.mark.asyncio
+async def test_incoming_update_for_a_locally_deleted_item_recreates_it_instead_of_crashing():
+    # Live-reproduced: "Unable to find to-do list item" from a snapshot.
+    # A local delete only tombstones the sync_id (the native mapping
+    # survives), and a delete via HA's own todo UI bypasses this
+    # integration entirely - either way a newer upsert from the peer
+    # found a mapping pointing at a uid the native entity no longer has.
+    hass, adapter, store, manager, transport, sync = make_sync_manager(items=[])
+    await sync.async_setup()
+    await store.set_link(ENTITY_ID, LINK_ID)
+    await sync.async_start_link(ENTITY_ID)
+    await store.set_native_sync_mapping(ENTITY_ID, "gone-uid", "sync-1")
+
+    transport.deliver(f"todo_overlay/link/{LINK_ID}/snapshot/some-other-instance", {
+        "origin": "some-other-instance",
+        "items": {"sync-1": _snapshot_item("Bread")},
+    })
+    await _flush(hass)
+
+    items = await adapter.get_items(ENTITY_ID)
+    assert [item.title for item in items] == ["Bread"]
+
+    link = await store.get_link(ENTITY_ID)
+    assert link["sync_to_native"]["sync-1"] == items[0].id
+    assert "gone-uid" not in link["native_to_sync"]
+
+
+@pytest.mark.asyncio
+async def test_one_failing_snapshot_item_does_not_drop_the_rest_of_the_snapshot(caplog):
+    hass, adapter, store, manager, transport, sync = make_sync_manager(items=[])
+    await sync.async_setup()
+    await store.set_link(ENTITY_ID, LINK_ID)
+    await sync.async_start_link(ENTITY_ID)
+
+    real_apply = sync._apply_incoming_content
+
+    async def _fail_first(entity_id, sync_id, **kwargs):
+        if sync_id == "sync-bad":
+            raise RuntimeError("boom")
+        return await real_apply(entity_id, sync_id, **kwargs)
+
+    sync._apply_incoming_content = _fail_first
+
+    with caplog.at_level("ERROR"):
+        transport.deliver(f"todo_overlay/link/{LINK_ID}/snapshot/some-other-instance", {
+            "origin": "some-other-instance",
+            "items": {"sync-bad": _snapshot_item("Bad"), "sync-good": _snapshot_item("Milk")},
+        })
+        await _flush(hass)
+
+    assert [item.title for item in await adapter.get_items(ENTITY_ID)] == ["Milk"]
+    assert any("Failed to apply snapshot item sync-bad" in record.message for record in caplog.records)
+
+
 @pytest.mark.asyncio
 async def test_a_failing_incoming_snapshot_message_is_logged_not_left_untracked(caplog):
     hass, adapter, store, manager, transport, sync = make_sync_manager(items=[])
@@ -1417,6 +1480,6 @@ async def test_a_failing_incoming_snapshot_message_is_logged_not_left_untracked(
         await _flush(hass)
 
     assert any(
-        "Failed to apply an incoming linked-list snapshot" in record.message
+        "Failed to apply snapshot item sync-1" in record.message
         for record in caplog.records
     )
