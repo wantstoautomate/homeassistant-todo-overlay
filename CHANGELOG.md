@@ -3,6 +3,14 @@
 All notable changes to this project are documented here. Versions follow the
 integration's `manifest.json`/card's `package.json` (kept in lockstep).
 
+## 1.7.7
+
+**Fixed: a linked list could fail to sync with "Unable to find to-do list item".** Each linked item keeps a pairing to its local copy, and that pairing outlived the local item whenever it was deleted - including via Home Assistant's own to-do UI, which bypasses this integration entirely. If the other side then sent a newer version of that item, the update was aimed at an item that no longer existed. The stale pairing is now dropped and the item recreated, following the same newest-change-wins rule as every other synced change.
+
+**Fixed: one failing item silently dropped the rest of a linked-list sync.** A single bad item used to abort the whole batch, skipping every item after it until the next sync. Each item's failure is now logged on its own and the rest still apply.
+
+**Fixed: Home Assistant's validation check started rejecting this integration's `paho-mqtt` requirement** (no code change on our side - Home Assistant now disallows pinning an exact version of a package it ships itself). Now `paho-mqtt>=2.1.0`, so it follows Home Assistant's own version.
+
 ## 1.7.6
 
 **New: recurring items.** An item can now be set to repeat - completing it advances its due date by the configured interval instead of leaving it checked off, and un-completes it. Set via the item dialog's new "Repeats" section (preset chips for Daily/Weekly/Monthly, or Custom for any interval in days/weeks/months) or `todo_overlay.set_repeat`/`create_item`'s new `repeat_interval`/`repeat_unit`/`repeat_from` fields. `repeat_from` picks what the next occurrence counts from: `"due"` is a fixed schedule (always counts from the item's own previous due date, rolling forward past today if several cycles were missed entirely, so it never drifts even if completed late - right for something like bins day); `"completion"` is a floating schedule (counts from whenever it's actually completed instead, so finishing late never compresses the next cycle - right for something like a water filter). Monthly recurrence uses real calendar-month arithmetic (Jan 31 + 1 month lands on Feb 28/29, not a fixed day count). A recurring item's due chip now shows a small repeat icon so it's visible on the row itself, not just in the dialog. Repeat config is mirrored across linked items (both same-instance item links and cross-instance MQTT-synced lists) and preserved through save/load list templates. `query_items` gained a `recurring` filter and `repeat_interval`/`repeat_unit`/`repeat_from` fields on every result.

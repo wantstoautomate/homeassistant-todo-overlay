@@ -589,13 +589,24 @@ class LinkSyncManager:
 
         for sync_id, item_state in items.items():
             deleted = bool(item_state.get("deleted"))
-            native_uid = await self._apply_incoming_content(
-                entity_id, sync_id,
-                updated_at=item_state.get("updated_at", ""),
-                deleted=deleted,
-                fields=item_state.get("fields"),
-                position=item_state.get("position"),
-            )
+
+            # One item failing must not abort the rest of the snapshot -
+            # previously a single bad item silently dropped every item
+            # after it, leaving the two sides out of sync until the next
+            # snapshot happened to iterate in a luckier order.
+            try:
+                native_uid = await self._apply_incoming_content(
+                    entity_id, sync_id,
+                    updated_at=item_state.get("updated_at", ""),
+                    deleted=deleted,
+                    fields=item_state.get("fields"),
+                    position=item_state.get("position"),
+                )
+            except Exception:  # noqa: BLE001 - logged with context, then the next item proceeds
+                _LOGGER.exception(
+                    "Failed to apply snapshot item %s for %s - continuing with the rest", sync_id, entity_id,
+                )
+                continue
 
             if native_uid is not None and not deleted:
                 resolved[sync_id] = native_uid
@@ -676,6 +687,18 @@ class LinkSyncManager:
         if fields is None:
             _LOGGER.warning("Ignoring link message with invalid/missing item fields for %s", entity_id)
             return None
+
+        if native_uid is not None and not any(
+            item.id == native_uid for item in await self._adapter.get_items(entity_id)
+        ):
+            # The mapping outlives the item it points at: a local delete
+            # only tombstones the sync_id (see _publish_delete), and a
+            # delete via HA's own todo UI bypasses this integration
+            # entirely. This message already won last-write-wins against
+            # whatever we last recorded, so recreate rather than update a
+            # uid the native entity no longer has.
+            await self._metadata_store.remove_native_sync_mapping(entity_id, sync_id=sync_id)
+            native_uid = None
 
         if native_uid is None:
             # Deliberately self._adapter.add_item(), not
