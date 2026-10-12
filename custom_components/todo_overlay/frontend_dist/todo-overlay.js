@@ -981,26 +981,84 @@ function sortTree(items, sortBy, sortOrder) {
   return sorted.map((item) => ({ ...item, children: sortTree(item.children, sortBy, sortOrder) }));
 }
 
-// src/components/todo-item-dialog.ts
-var CALENDAR_ICON = b2`
-    <svg viewBox="0 0 24 24">
-        <path d="M19,19H5V8H19M16,1V3H8V1H6V3H5C3.89,3 3,3.89 3,5V19A2,2 0 0,0 5,21H19A2,2 0 0,0 21,19V5C21,3.89 20.1,3 19,3H18V1M17,12H12V17H17V12Z"></path>
-    </svg>
-`;
-var REPEAT_ICON = b2`
-    <svg viewBox="0 0 24 24">
-        <path d="M17,17H7V14L3,18L7,22V19H19V13H17M7,7H17V10L21,6L17,2V5H5V11H7V7Z"></path>
-    </svg>
-`;
-function wrapValue(current, delta, min, max) {
-  const span = max - min + 1;
-  return ((current - min + delta) % span + span) % span + min;
+// src/recurrence.ts
+function pad(n6) {
+  return String(n6).padStart(2, "0");
 }
-var REPEAT_PRESETS = {
-  daily: { interval: 1, unit: "days" },
-  weekly: { interval: 1, unit: "weeks" },
-  monthly: { interval: 1, unit: "months" }
-};
+function parseIsoDate(value) {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
+  return match ? new Date(Number(match[1]), Number(match[2]) - 1, Number(match[3])) : null;
+}
+function toIsoDate(date) {
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+}
+function startOfDay(date) {
+  return new Date(date.getFullYear(), date.getMonth(), date.getDate());
+}
+function addDays(date, days) {
+  return new Date(date.getFullYear(), date.getMonth(), date.getDate() + days);
+}
+function addMonths(date, months) {
+  const first = new Date(date.getFullYear(), date.getMonth() + months, 1);
+  const lastDay = new Date(first.getFullYear(), first.getMonth() + 1, 0).getDate();
+  return new Date(first.getFullYear(), first.getMonth(), Math.min(date.getDate(), lastDay));
+}
+function advance(date, interval, unit) {
+  if (unit === "months") {
+    return addMonths(date, interval);
+  }
+  return addDays(date, unit === "weeks" ? interval * 7 : interval);
+}
+function nextOccurrence(due, interval, unit, from, today) {
+  const base = startOfDay(today);
+  if (from === "completion") {
+    return advance(base, interval, unit);
+  }
+  let next = advance(due, interval, unit);
+  while (next <= base) {
+    next = advance(next, interval, unit);
+  }
+  return next;
+}
+function formatShortDate(date, today) {
+  const base = startOfDay(today);
+  const diffDays = Math.round((startOfDay(date).getTime() - base.getTime()) / 864e5);
+  if (diffDays === 0) {
+    return "Today";
+  }
+  if (diffDays === 1) {
+    return "Tomorrow";
+  }
+  if (diffDays === -1) {
+    return "Yesterday";
+  }
+  return date.toLocaleDateString(void 0, {
+    weekday: "short",
+    day: "numeric",
+    month: "short",
+    year: date.getFullYear() !== base.getFullYear() ? "numeric" : void 0
+  });
+}
+
+// src/components/todo-item-dialog.ts
+var I_CAL = w`<rect x="3.5" y="5" width="17" height="15" rx="2"></rect><path d="M3.5 9.5h17M8 3v4M16 3v4"></path>`;
+var I_CLOCK = w`<circle cx="12" cy="12" r="8.5"></circle><path d="M12 7.5V12l3 2"></path>`;
+var I_REPEAT = w`<path d="M4 11V9a3 3 0 0 1 3-3h12M16 3l3 3-3 3M20 13v2a3 3 0 0 1-3 3H5M8 21l-3-3 3-3"></path>`;
+var I_BELL = w`<path d="M6 16v-5a6 6 0 1 1 12 0v5l1.5 2h-15z"></path><path d="M10 20.5a2 2 0 0 0 4 0"></path>`;
+var I_CHEV_R = w`<path d="M9 6l6 6-6 6"></path>`;
+var I_CHEV_L = w`<path d="M15 6l-6 6 6 6"></path>`;
+var I_UP = w`<path d="M6 15l6-6 6 6"></path>`;
+var I_DOWN = w`<path d="M6 9l6 6 6-6"></path>`;
+var I_X = w`<path d="M7 7l10 10M17 7L7 17"></path>`;
+var I_PLUS = w`<path d="M12 5v14M5 12h14"></path>`;
+var I_MINUS = w`<path d="M6 12h12"></path>`;
+var I_SLIDERS = w`<path d="M4 7h10M18 7h2M4 17h4M12 17h8"></path><circle cx="16" cy="7" r="2"></circle><circle cx="10" cy="17" r="2"></circle>`;
+var I_LINK = w`<path d="M10 14a4 4 0 0 0 5.66 0l3-3a4 4 0 0 0-5.66-5.66l-1 1M14 10a4 4 0 0 0-5.66 0l-3 3a4 4 0 0 0 5.66 5.66l1-1"></path>`;
+var I_SHIELD = w`<path d="M12 3l7 3v6c0 4.5-3 7.5-7 9-4-1.5-7-4.5-7-9V6z"></path>`;
+var I_CHECK = w`<circle cx="12" cy="12" r="8.5"></circle><path d="M8 12.5l2.5 2.5 5.5-6"></path>`;
+function icon(body, extraClass = "") {
+  return b2`<svg class="ic ${extraClass}" viewBox="0 0 24 24" aria-hidden="true">${body}</svg>`;
+}
 var MONTH_NAMES = [
   "January",
   "February",
@@ -1015,12 +1073,29 @@ var MONTH_NAMES = [
   "November",
   "December"
 ];
-var WEEKDAY_LABELS = ["S", "M", "T", "W", "T", "F", "S"];
-function daysInMonth(year, month0) {
-  return new Date(year, month0 + 1, 0).getDate();
+var CALENDAR_WEEKDAY_LABELS = ["M", "T", "W", "T", "F", "S", "S"];
+var REPEAT_PRESETS = {
+  daily: { interval: 1, unit: "days" },
+  weekly: { interval: 1, unit: "weeks" },
+  monthly: { interval: 1, unit: "months" }
+};
+var REPEAT_MODES = [
+  ["never", "Never"],
+  ["daily", "Daily"],
+  ["weekly", "Weekly"],
+  ["monthly", "Monthly"],
+  ["custom", "Custom"]
+];
+var SINGULAR_UNIT = { days: "day", weeks: "week", months: "month" };
+function wrapValue(current, delta, min, max) {
+  const span = max - min + 1;
+  return ((current - min + delta) % span + span) % span + min;
 }
-function firstWeekdayOfMonth(year, month0) {
-  return new Date(year, month0, 1).getDay();
+function digitsOnly(raw, maxLen) {
+  return raw.replace(/\D/g, "").slice(0, maxLen);
+}
+function parseTags(raw) {
+  return raw.split(",").map((tag) => tag.trim()).filter((tag) => tag.length > 0);
 }
 var EMPTY_FORM_VALUE = {
   title: "",
@@ -1039,15 +1114,12 @@ var EMPTY_FORM_VALUE = {
   repeatUnit: "",
   repeatFrom: ""
 };
-function digitsOnly(raw, maxLen) {
-  return raw.replace(/\D/g, "").slice(0, maxLen);
-}
 var TodoItemDialog = class extends i4 {
   constructor() {
     super(...arguments);
-    this.heading = "Item";
+    this.heading = "Edit";
     // What the parent last handed in - read ONLY by willUpdate() to seed
-    // draftValue exactly once (see below). Never read anywhere else.
+    // draftValue exactly once.
     this._seedValue = EMPTY_FORM_VALUE;
     this.draftValue = EMPTY_FORM_VALUE;
     this.fieldSupport = {
@@ -1061,24 +1133,20 @@ var TodoItemDialog = class extends i4 {
     this.completed = false;
     this.confirmDelete = true;
     this.confirmingDelete = false;
-    this.dueDay = "";
-    this.dueMonth = "";
-    this.dueYear = "";
+    this.openRow = null;
+    this.optionsOpen = false;
+    this.calendarYear = 0;
+    this.calendarMonth = 0;
     this.dueHour12 = "";
     this.dueMinute = "";
     this.dueAmPm = "AM";
-    this.dateTimePartsInitialized = false;
-    // Captured once, at the same moment draftValue itself is seeded
-    // (see willUpdate) - NOT read live off _seedValue, which keeps
-    // getting reassigned on every parent re-render regardless of
-    // whether this dialog has actually consumed it yet (see
-    // _seedValue's own comment). isCreatingANewLink needs the ORIGINAL
-    // value this dialog session opened with, not whatever the parent
-    // happens to think right now.
+    this.tagDraft = "";
+    this.intervalDraft = null;
+    this.repeatCustom = false;
+    this.seeded = false;
+    // Captured when the dialog opens: the destination field only makes sense
+    // while creating a new link, not for an item that was already linked.
     this.originallyLinked = false;
-    this.datePickerOpen = false;
-    this.datePickerViewYear = 0;
-    this.datePickerViewMonth = 0;
   }
   set value(newValue) {
     this._seedValue = newValue;
@@ -1086,94 +1154,54 @@ var TodoItemDialog = class extends i4 {
   get value() {
     return this.draftValue;
   }
-  openDatePicker() {
-    const now = /* @__PURE__ */ new Date();
-    this.datePickerViewYear = this.dueYear.length === 4 ? Number(this.dueYear) : now.getFullYear();
-    this.datePickerViewMonth = this.dueMonth ? Number(this.dueMonth) - 1 : now.getMonth();
-    this.datePickerOpen = true;
-  }
-  toggleDatePicker() {
-    if (this.datePickerOpen) {
-      this.datePickerOpen = false;
-    } else {
-      this.openDatePicker();
-    }
-  }
-  shiftDatePickerMonth(delta) {
-    let month = this.datePickerViewMonth + delta;
-    let year = this.datePickerViewYear;
-    if (month < 0) {
-      month = 11;
-      year -= 1;
-    } else if (month > 11) {
-      month = 0;
-      year += 1;
-    }
-    this.datePickerViewMonth = month;
-    this.datePickerViewYear = year;
-  }
-  pickDate(day) {
-    this.dueDay = String(day).padStart(2, "0");
-    this.dueMonth = String(this.datePickerViewMonth + 1).padStart(2, "0");
-    this.dueYear = String(this.datePickerViewYear);
-    this.syncDueDate();
-    this.datePickerOpen = false;
-  }
   willUpdate(changed) {
-    if (!changed.has("value") || this.dateTimePartsInitialized) {
+    if (!changed.has("value") || this.seeded) {
       return;
     }
-    this.dateTimePartsInitialized = true;
+    this.seeded = true;
     this.draftValue = this._seedValue;
     this.originallyLinked = this._seedValue.linked;
-    const [year, month, day] = this._seedValue.dueDate ? this._seedValue.dueDate.split("-") : ["", "", ""];
-    this.dueYear = year ?? "";
-    this.dueMonth = month ?? "";
-    this.dueDay = day ?? "";
     const [hour24Str, minute] = this._seedValue.dueTime ? this._seedValue.dueTime.split(":") : ["", ""];
     this.dueMinute = minute ?? "";
     if (hour24Str) {
       const hour24 = Number(hour24Str);
-      const hour12 = hour24 % 12 || 12;
-      this.dueHour12 = String(hour12).padStart(2, "0");
+      this.dueHour12 = String(hour24 % 12 || 12).padStart(2, "0");
       this.dueAmPm = hour24 >= 12 ? "PM" : "AM";
     } else {
       this.dueHour12 = "";
       this.dueAmPm = "AM";
     }
+    this.showCalendarMonthOf(parseIsoDate(this._seedValue.dueDate) ?? /* @__PURE__ */ new Date());
+    this.repeatCustom = this.repeatMode === "custom";
   }
-  // Belt-and-suspenders alongside each <option>'s own ?selected
-  // binding in render() - a <select>'s selection state has real
-  // engine-specific quirks around exactly when a dynamically-mapped
-  // list of <option> children ends up reflected in the parent
-  // <select>'s own .value once rendering settles (confirmed live,
-  // not assumed: happy-dom's own handling of this specific pattern
-  // left the wrong option selected in this project's own test suite,
-  // despite each <option>'s ?selected binding being individually
-  // correct). Forcing it here, after every update, costs nothing when
-  // it's already right and guarantees it never drifts either way.
-  updated() {
-    const select = this.renderRoot.querySelector("#todo-item-day-weekday");
-    if (select && select.value !== this.draftValue.dayWeekday) {
-      select.value = this.draftValue.dayWeekday;
-    }
+  get today() {
+    return startOfDay(/* @__PURE__ */ new Date());
+  }
+  get isDayPin() {
+    return this.draftValue.pinType === "day";
+  }
+  get showDue() {
+    return this.fieldSupport.dueDate || this.fieldSupport.dueDateTime;
+  }
+  get hasDate() {
+    return this.draftValue.dueDate !== "";
+  }
+  get hasTime() {
+    return this.draftValue.dueTime !== "";
+  }
+  patch(changes) {
+    this.draftValue = { ...this.draftValue, ...changes };
   }
   close() {
-    this.dispatchEvent(
-      new CustomEvent("dialog-close", { bubbles: true, composed: true })
-    );
+    this.dispatchEvent(new CustomEvent("dialog-close", { bubbles: true, composed: true }));
   }
   save() {
-    if (this.triggerOnDueBlocked || this.dayPinMissingWeekday || this.repeatBlocked) {
+    if (this.saveBlocked) {
       return;
     }
     this.dispatchEvent(
       new CustomEvent("dialog-save", {
-        // effectiveTitle, not the possibly-stale raw title - a
-        // "day" pin's title is always its weekday's own name
-        // (see effectiveTitle's own comment); this keeps that
-        // true even before its own setPinType call runs, not
-        // just after.
+        // effectiveTitle: a "day" pin's title is always its weekday's name.
         detail: { ...this.draftValue, title: this.effectiveTitle },
         bubbles: true,
         composed: true
@@ -1185,110 +1213,75 @@ var TodoItemDialog = class extends i4 {
       this.confirmingDelete = true;
       return;
     }
-    this.dispatchEvent(
-      new CustomEvent("dialog-delete", { bubbles: true, composed: true })
-    );
-  }
-  cancelDelete() {
-    this.confirmingDelete = false;
+    this.dispatchEvent(new CustomEvent("dialog-delete", { bubbles: true, composed: true }));
   }
   confirmDeleteNow() {
     this.confirmingDelete = false;
-    this.dispatchEvent(
-      new CustomEvent("dialog-delete", { bubbles: true, composed: true })
-    );
+    this.dispatchEvent(new CustomEvent("dialog-delete", { bubbles: true, composed: true }));
   }
-  // Bound to "change", not "click" - ha-checkbox wraps a native
-  // <input type="checkbox"> inside an internal <label>, and a single
-  // physical click on it fires TWO bubbling "click" events (the
-  // label's own, plus the browser's automatic forwarded click to the
-  // input it labels - standard native label/control behavior). A
-  // click-driven toggle (this.value.triggerOnDue = !this.value.
-  // triggerOnDue) silently cancelled itself out on every real click:
-  // on, then immediately back off, net no-op - confirmed live via a
-  // real (not synthetic) click, the actual bug behind "the toggle
-  // doesn't work" that a directly-dispatched synthetic click event
-  // never reproduced, since it bypasses the internal label entirely.
-  // "change" fires exactly once per genuine state transition
-  // regardless of how many internal clicks produced it, so both
-  // toggles below read the checkbox's own resulting .checked state
-  // rather than blindly flipping a local boolean.
   toggleComplete() {
-    this.dispatchEvent(
-      new CustomEvent("dialog-toggle-complete", { bubbles: true, composed: true })
-    );
+    this.dispatchEvent(new CustomEvent("dialog-toggle-complete", { bubbles: true, composed: true }));
   }
-  onTriggerOnDueChanged(e7) {
-    const checked = e7.target.checked;
-    this.draftValue = { ...this.draftValue, triggerOnDue: checked };
-  }
-  onLinkedChanged(e7) {
-    const checked = e7.target.checked;
-    this.draftValue = { ...this.draftValue, linked: checked };
-  }
-  onDeleteProtectedChanged(e7) {
-    const checked = e7.target.checked;
-    this.draftValue = { ...this.draftValue, deleteProtected: checked };
-  }
-  // True only while this dialog session is creating a brand new link -
-  // the override control (see render()) only makes sense THEN, not
-  // for an item that was already linked when the dialog opened (this
-  // component has no "move an existing link" action - see
-  // item_links.py's own link_item, which only ever creates).
-  get isCreatingANewLink() {
-    return this.draftValue.linked && !this.originallyLinked;
-  }
-  // A "day" pin's title is always its weekday's own plain name (see
-  // the backend's own set_pin_type docstring) - the title input
-  // itself is disabled in that case (see render()), showing this
-  // computed preview instead of whatever raw title happens to be
-  // stored, so what's on screen always matches what saving will
-  // actually produce. "" (no weekday picked yet) shows a blank
-  // field rather than a stale leftover title.
   get effectiveTitle() {
-    if (this.draftValue.pinType !== "day") {
+    if (!this.isDayPin) {
       return this.draftValue.title;
     }
     const index = Number(this.draftValue.dayWeekday);
     return this.draftValue.dayWeekday !== "" && index >= 0 && index < WEEKDAY_NAMES.length ? WEEKDAY_NAMES[index] : "";
   }
-  updateField(field, fieldValue) {
-    this.draftValue = { ...this.draftValue, [field]: fieldValue };
-  }
-  // Combines the three segments into "YYYY-MM-DD" only once all three
-  // are actually present - a day and month with no year yet (etc.)
-  // isn't a real date, so dueDate stays empty (matching what a native
-  // date input's .value does while incomplete) rather than guessing.
-  syncDueDate() {
-    if (this.dueDay && this.dueMonth && this.dueYear.length === 4) {
-      this.updateField(
-        "dueDate",
-        `${this.dueYear}-${this.dueMonth.padStart(2, "0")}-${this.dueDay.padStart(2, "0")}`
-      );
-    } else {
-      this.updateField("dueDate", "");
+  // --- When: row accordion -----------------------------------------------
+  toggleRow(row) {
+    if (this.openRow === row) {
+      this.openRow = null;
+      return;
     }
+    if (row === "date") {
+      this.showCalendarMonthOf(parseIsoDate(this.draftValue.dueDate) ?? this.today);
+    }
+    if (row === "time" && !this.hasTime) {
+      this.dueHour12 = "09";
+      this.dueMinute = "00";
+      this.dueAmPm = "AM";
+      this.syncDueTime();
+    }
+    this.openRow = row;
   }
+  // --- Due date ------------------------------------------------------------
+  showCalendarMonthOf(date) {
+    this.calendarYear = date.getFullYear();
+    this.calendarMonth = date.getMonth();
+  }
+  shiftCalendarMonth(delta) {
+    this.showCalendarMonthOf(new Date(this.calendarYear, this.calendarMonth + delta, 1));
+  }
+  pickDate(date) {
+    this.patch({ dueDate: toIsoDate(date) });
+    this.openRow = null;
+  }
+  // Time, repeat and the automation trigger all depend on a date, so they go with it.
+  clearDate() {
+    this.dueHour12 = "";
+    this.dueMinute = "";
+    this.dueAmPm = "AM";
+    this.patch({
+      dueDate: "",
+      dueTime: "",
+      triggerOnDue: false,
+      repeatInterval: null,
+      repeatUnit: "",
+      repeatFrom: ""
+    });
+    this.openRow = null;
+  }
+  // --- Due time ------------------------------------------------------------
   syncDueTime() {
     if (this.dueHour12 && this.dueMinute) {
       const hour12 = Number(this.dueHour12) % 12;
       const hour24 = this.dueAmPm === "PM" ? hour12 + 12 : hour12;
-      this.updateField("dueTime", `${String(hour24).padStart(2, "0")}:${this.dueMinute.padStart(2, "0")}`);
+      this.patch({ dueTime: `${String(hour24).padStart(2, "0")}:${this.dueMinute.padStart(2, "0")}` });
     } else {
-      this.updateField("dueTime", "");
+      this.patch({ dueTime: "" });
     }
-  }
-  updateDueDay(raw) {
-    this.dueDay = digitsOnly(raw, 2);
-    this.syncDueDate();
-  }
-  updateDueMonth(raw) {
-    this.dueMonth = digitsOnly(raw, 2);
-    this.syncDueDate();
-  }
-  updateDueYear(raw) {
-    this.dueYear = digitsOnly(raw, 4);
-    this.syncDueDate();
   }
   updateDueHour12(raw) {
     this.dueHour12 = digitsOnly(raw, 2);
@@ -1298,13 +1291,6 @@ var TodoItemDialog = class extends i4 {
     this.dueMinute = digitsOnly(raw, 2);
     this.syncDueTime();
   }
-  setDueAmPm(period) {
-    this.dueAmPm = period;
-    this.syncDueTime();
-  }
-  // Hour wraps 12 -> 1 (never 0 - this is a 12-hour clock), minute
-  // wraps 59 -> 00 in whole 15-minute jumps - a real clock's own
-  // behavior, not a value that gets stuck at either end.
   stepDueHour(delta) {
     const current = Number(this.dueHour12) || 12;
     this.updateDueHour12(String(wrapValue(current, delta, 1, 12)).padStart(2, "0"));
@@ -1313,13 +1299,31 @@ var TodoItemDialog = class extends i4 {
     const current = Number(this.dueMinute) || 0;
     this.updateDueMinute(String(wrapValue(current, delta, 0, 59)).padStart(2, "0"));
   }
-  // Which preset chip (if any) the current interval/unit matches -
-  // "custom" covers everything else, including an interval/unit
-  // combination no preset chip represents (e.g. every 2 weeks).
+  setDueAmPm(period) {
+    this.dueAmPm = period;
+    this.syncDueTime();
+  }
+  removeTime() {
+    this.dueHour12 = "";
+    this.dueMinute = "";
+    this.dueAmPm = "AM";
+    this.patch({ dueTime: "", triggerOnDue: false });
+    this.openRow = null;
+  }
+  get timeLabel() {
+    if (!this.hasTime) {
+      return "";
+    }
+    return `${Number(this.dueHour12)}:${this.dueMinute.padStart(2, "0")} ${this.dueAmPm}`;
+  }
+  // --- Repeats -------------------------------------------------------------
   get repeatMode() {
     const { repeatInterval, repeatUnit } = this.draftValue;
     if (repeatInterval === null || repeatUnit === "") {
       return "never";
+    }
+    if (this.repeatCustom) {
+      return "custom";
     }
     for (const [mode, preset] of Object.entries(REPEAT_PRESETS)) {
       if (repeatInterval === preset.interval && repeatUnit === preset.unit) {
@@ -1329,988 +1333,1404 @@ var TodoItemDialog = class extends i4 {
     return "custom";
   }
   setRepeatMode(mode) {
+    this.repeatCustom = mode === "custom";
     if (mode === "never") {
-      this.draftValue = { ...this.draftValue, repeatInterval: null, repeatUnit: "", repeatFrom: "" };
+      this.patch({ repeatInterval: null, repeatUnit: "", repeatFrom: "" });
       return;
     }
     const repeatFrom = this.draftValue.repeatFrom || "due";
     if (mode === "custom") {
-      this.draftValue = {
-        ...this.draftValue,
-        repeatInterval: this.draftValue.repeatInterval ?? 2,
+      this.patch({
+        repeatInterval: this.repeatMode === "never" ? 2 : this.draftValue.repeatInterval === 1 ? 2 : this.draftValue.repeatInterval,
         repeatUnit: this.draftValue.repeatUnit || "days",
         repeatFrom
-      };
+      });
       return;
     }
     const preset = REPEAT_PRESETS[mode];
-    this.draftValue = { ...this.draftValue, repeatInterval: preset.interval, repeatUnit: preset.unit, repeatFrom };
+    this.patch({ repeatInterval: preset.interval, repeatUnit: preset.unit, repeatFrom });
   }
-  setRepeatFrom(value) {
-    this.draftValue = { ...this.draftValue, repeatFrom: value };
-  }
-  setRepeatUnit(unit) {
-    this.draftValue = { ...this.draftValue, repeatUnit: unit };
-  }
+  // Typed text is held separately until it's a valid number - committing
+  // "" straight to repeatInterval would read as "doesn't repeat" and
+  // collapse the Custom row mid-edit.
   onRepeatIntervalInput(raw) {
     const digits = digitsOnly(raw, 3);
-    this.draftValue = { ...this.draftValue, repeatInterval: digits === "" ? null : Number(digits) };
+    this.intervalDraft = digits;
+    if (Number(digits) >= 1) {
+      this.patch({ repeatInterval: Math.min(365, Number(digits)) });
+    }
   }
   stepRepeatInterval(delta) {
     const current = this.draftValue.repeatInterval ?? 1;
-    const next = Math.min(365, Math.max(1, current + delta));
-    this.draftValue = { ...this.draftValue, repeatInterval: next };
+    this.intervalDraft = null;
+    this.patch({ repeatInterval: Math.min(365, Math.max(1, current + delta)) });
   }
-  // Same "block Save rather than round-trip an error" reasoning as
-  // triggerOnDueBlocked/dayPinMissingWeekday above - the backend
-  // enforces both of these too (see RepeatRequiresDueDateError/
-  // InvalidRepeatError).
+  get repeatLabel() {
+    const { repeatInterval, repeatUnit } = this.draftValue;
+    switch (this.repeatMode) {
+      case "never":
+        return "Never";
+      case "custom":
+        return repeatUnit === "" ? "Custom" : `Every ${repeatInterval} ${repeatInterval === 1 ? SINGULAR_UNIT[repeatUnit] : repeatUnit}`;
+      default:
+        return REPEAT_MODES.find(([mode]) => mode === this.repeatMode)[1];
+    }
+  }
+  // What ticking it off today would produce under each repeat_from choice.
+  get nextOccurrences() {
+    const due = parseIsoDate(this.draftValue.dueDate);
+    const { repeatInterval, repeatUnit } = this.draftValue;
+    if (!due || repeatInterval === null || repeatInterval < 1 || repeatUnit === "") {
+      return null;
+    }
+    const today = this.today;
+    return {
+      due: nextOccurrence(due, repeatInterval, repeatUnit, "due", today),
+      completion: nextOccurrence(due, repeatInterval, repeatUnit, "completion", today)
+    };
+  }
+  // --- Automation ----------------------------------------------------------
+  onTriggerOnDueChanged(e7) {
+    this.patch({ triggerOnDue: e7.target.checked });
+  }
+  get automationHint() {
+    if (!this.hasDate) {
+      return "Needs a due date and time";
+    }
+    if (!this.hasTime) {
+      return "Needs a due time";
+    }
+    if (this.repeatMode !== "never") {
+      return `Fires at ${this.timeLabel} each time it comes due`;
+    }
+    return `Fires ${formatShortDate(parseIsoDate(this.draftValue.dueDate), this.today)}, ${this.timeLabel}`;
+  }
+  // --- Tags ----------------------------------------------------------------
+  get tagList() {
+    return parseTags(this.draftValue.tags);
+  }
+  commitTagDraft() {
+    const additions = parseTags(this.tagDraft).filter((tag) => !this.tagList.includes(tag));
+    if (additions.length > 0) {
+      this.patch({ tags: [...this.tagList, ...additions].join(", ") });
+    }
+    this.tagDraft = "";
+  }
+  onTagKeydown(e7) {
+    if (e7.key === "Enter" || e7.key === ",") {
+      e7.preventDefault();
+      this.commitTagDraft();
+    } else if (e7.key === "Backspace" && this.tagDraft === "" && this.tagList.length > 0) {
+      this.removeTag(this.tagList[this.tagList.length - 1]);
+    }
+  }
+  removeTag(tag) {
+    this.patch({ tags: this.tagList.filter((existing) => existing !== tag).join(", ") });
+  }
+  // --- Save gating ---------------------------------------------------------
+  get triggerOnDueBlocked() {
+    return this.draftValue.triggerOnDue && !(this.hasDate && this.hasTime);
+  }
+  get dayPinMissingWeekday() {
+    return this.isDayPin && this.draftValue.dayWeekday === "";
+  }
   get repeatBlocked() {
     const { repeatInterval, repeatUnit, repeatFrom } = this.draftValue;
     if (repeatInterval === null) {
       return false;
     }
-    return !this.draftValue.dueDate || repeatUnit === "" || repeatFrom === "" || repeatInterval < 1;
+    return !this.hasDate || repeatUnit === "" || repeatFrom === "" || repeatInterval < 1;
   }
-  get repeatFromCaption() {
-    return this.draftValue.repeatFrom === "due" ? "Fixed schedule \u2014 the next due date always counts from the original one, so it never drifts even if this gets completed late. Right for something like bins day." : "Floating schedule \u2014 the next due date counts from whenever it's actually completed instead, so finishing late never compresses the next cycle. Right for something like a water filter.";
+  get titleMissing() {
+    return !this.isDayPin && this.draftValue.title.trim() === "";
   }
-  get repeatSummary() {
-    const { repeatInterval, repeatUnit, repeatFrom } = this.draftValue;
-    if (repeatInterval === null || repeatUnit === "" || repeatFrom === "") {
-      return "";
-    }
-    const whence = repeatFrom === "due" ? "from its own due date" : "from whenever it's checked off";
-    if (repeatInterval === 1) {
-      const singular = { days: "day", weeks: "week", months: "month" }[repeatUnit];
-      return `Repeats every ${singular}, counting ${whence}.`;
-    }
-    return `Repeats every ${repeatInterval} ${repeatUnit}, counting ${whence}.`;
+  get saveBlocked() {
+    return this.triggerOnDueBlocked || this.dayPinMissingWeekday || this.repeatBlocked || this.titleMissing;
   }
-  // Enabling "trigger on due" without a due time is meaningless - the
-  // backend enforces the same rule (see DueTimeRequiredError), but
-  // blocking Save here gives immediate feedback instead of a
-  // round-trip error.
-  get triggerOnDueBlocked() {
-    return this.draftValue.triggerOnDue && !(this.draftValue.dueDate && this.draftValue.dueTime);
-  }
-  // Same "block Save rather than round-trip an error" reasoning as
-  // triggerOnDueBlocked above - the backend enforces this too (see
-  // WeekdayRequiredError).
-  get dayPinMissingWeekday() {
-    return this.draftValue.pinType === "day" && this.draftValue.dayWeekday === "";
-  }
-  // Rendered inline, full-width, right below .due-row - not as an
-  // absolutely-positioned floating popup. ha-dialog's own content area
-  // is externally defined and out of this component's control; an
-  // absolutely-positioned child risks being silently clipped by
-  // whatever overflow behavior that container happens to have. Pushing
-  // the rest of the dialog down instead has no such risk, at the minor
-  // cost of the dialog growing taller while the panel is open - the
-  // same tradeoff the quick-add "Details…" panel elsewhere in this
-  // card already makes.
-  renderDatePickerPanel() {
-    const year = this.datePickerViewYear;
-    const month = this.datePickerViewMonth;
-    const leadingBlanks = firstWeekdayOfMonth(year, month);
-    const totalDays = daysInMonth(year, month);
-    const selectedDay = Number(this.dueDay) || void 0;
-    const selectedMonth = this.dueMonth ? Number(this.dueMonth) - 1 : void 0;
-    const selectedYear = this.dueYear.length === 4 ? Number(this.dueYear) : void 0;
-    return b2`
-            <div class="date-picker-panel">
-                <div class="date-picker-header">
-                    <button
-                        type="button"
-                        class="date-picker-nav"
-                        aria-label="Previous month"
-                        @click=${() => this.shiftDatePickerMonth(-1)}
-                    >‹</button>
-                    <span>${MONTH_NAMES[month]} ${year}</span>
-                    <button
-                        type="button"
-                        class="date-picker-nav"
-                        aria-label="Next month"
-                        @click=${() => this.shiftDatePickerMonth(1)}
-                    >›</button>
+  // --- Render --------------------------------------------------------------
+  renderTitleArea() {
+    if (this.isDayPin) {
+      return b2`
+                <div class="field">
+                    <label for="todo-item-title">Title</label>
+                    <input id="todo-item-title" type="text" .value=${this.effectiveTitle} placeholder="Pick a day below" disabled />
                 </div>
-                <div class="date-picker-grid">
-                    ${WEEKDAY_LABELS.map((label) => b2`<span class="date-picker-weekday">${label}</span>`)}
-                    ${Array.from({ length: leadingBlanks }, () => b2`<span></span>`)}
-                    ${Array.from({ length: totalDays }, (_2, i8) => {
-      const day = i8 + 1;
-      const isSelected = day === selectedDay && month === selectedMonth && year === selectedYear;
+                <div class="pills" role="group" aria-label="Day of week" style="margin-top: 10px">
+                    ${WEEKDAY_NAMES.map((name, index) => {
+        const selected = this.draftValue.dayWeekday === String(index);
+        return b2`
+                            <button
+                                type="button"
+                                class=${e6({ pill: true, small: true, on: selected })}
+                                aria-pressed=${selected ? "true" : "false"}
+                                aria-label=${name}
+                                @click=${() => this.patch({ dayWeekday: String(index) })}
+                            >${name.slice(0, 3)}</button>
+                        `;
+      })}
+                </div>
+            `;
+    }
+    const pinType = this.draftValue.pinType;
+    const titleLabel = pinType === "category" ? "Category name" : pinType === "person" ? "Name" : "Title";
+    return b2`
+            <div class="title-row">
+                <div class="field title">
+                    <label for="todo-item-title">${titleLabel}</label>
+                    <input
+                        id="todo-item-title"
+                        type="text"
+                        .value=${this.draftValue.title}
+                        @input=${(e7) => this.patch({ title: e7.target.value })}
+                    />
+                </div>
+                ${pinType === "" ? b2`
+                            <div class="field quantity">
+                                <label for="todo-item-quantity">Quantity</label>
+                                <input
+                                    id="todo-item-quantity"
+                                    type="text"
+                                    placeholder="e.g. 2"
+                                    .value=${this.draftValue.quantity}
+                                    @input=${(e7) => this.patch({ quantity: e7.target.value })}
+                                />
+                            </div>
+                        ` : A}
+            </div>
+            ${this.showCompleteToggle ? b2`
+                        <div class="group" style="margin-top: 12px">
+                            <label class="row">
+                                ${icon(I_CHECK)}
+                                <span class="lbl">Completed</span>
+                                <input
+                                    id="todo-item-completed"
+                                    type="checkbox"
+                                    class="switch"
+                                    .checked=${this.completed}
+                                    @change=${this.toggleComplete}
+                                />
+                            </label>
+                        </div>
+                    ` : A}
+        `;
+  }
+  renderWhenArea() {
+    if (this.isDayPin) {
+      return b2`
+                <h3 class="sec">When</h3>
+                <div class="day-card">
+                    ${icon(I_REPEAT)}
+                    <span>Day pins schedule themselves. On its day it moves to the top and reads <b>Today</b>, the day
+                    before <b>Tomorrow</b>. Anything left unticked under it moves to <b>Overdue</b> the next morning.</span>
+                </div>
+            `;
+    }
+    const due = parseIsoDate(this.draftValue.dueDate);
+    const overdue = due !== null && due < this.today;
+    return b2`
+            <h3 class="sec">When</h3>
+            <div class="group">
+                <button
+                    type="button"
+                    id="todo-item-due-date-row"
+                    class=${e6({ row: true, open: this.openRow === "date" })}
+                    aria-expanded=${this.openRow === "date" ? "true" : "false"}
+                    @click=${() => this.toggleRow("date")}
+                >
+                    ${icon(I_CAL)}
+                    <span class="lbl">Due date</span>
+                    <span class=${e6({ val: true, late: overdue })}>
+                        ${due ? `${formatShortDate(due, this.today)}${overdue ? " \xB7 overdue" : ""}` : "None"}
+                    </span>
+                    ${icon(I_CHEV_R, "chev")}
+                </button>
+                ${this.openRow === "date" ? this.renderDatePanel(due) : A}
+
+                ${this.fieldSupport.dueDateTime ? b2`
+                            <button
+                                type="button"
+                                id="todo-item-due-time-row"
+                                class=${e6({ row: true, open: this.openRow === "time" })}
+                                ?disabled=${!this.hasDate}
+                                aria-expanded=${this.openRow === "time" ? "true" : "false"}
+                                @click=${() => this.toggleRow("time")}
+                            >
+                                ${icon(I_CLOCK)}
+                                <span class="lbl">Time${this.hasDate ? A : b2`<span class="sub">Set a date first</span>`}</span>
+                                <span class="val">${this.hasDate ? this.hasTime ? this.timeLabel : "Any time" : ""}</span>
+                                ${icon(I_CHEV_R, "chev")}
+                            </button>
+                            ${this.openRow === "time" ? this.renderTimePanel() : A}
+                        ` : A}
+
+                <button
+                    type="button"
+                    id="todo-item-repeat-row"
+                    class=${e6({ row: true, open: this.openRow === "repeat" })}
+                    ?disabled=${!this.hasDate}
+                    aria-expanded=${this.openRow === "repeat" ? "true" : "false"}
+                    @click=${() => this.toggleRow("repeat")}
+                >
+                    ${icon(I_REPEAT)}
+                    <span class="lbl">Repeats${this.hasDate ? A : b2`<span class="sub">Set a date first</span>`}</span>
+                    <span class="val">${this.hasDate ? this.repeatLabel : ""}</span>
+                    ${icon(I_CHEV_R, "chev")}
+                </button>
+                ${this.openRow === "repeat" ? this.renderRepeatPanel() : A}
+
+                ${this.fieldSupport.dueDateTime ? b2`
+                            <label class=${e6({ row: true, off: !this.hasTime })}>
+                                ${icon(I_BELL)}
+                                <span class="lbl">
+                                    Run automation when due
+                                    <span class="sub">${this.automationHint}</span>
+                                </span>
+                                <input
+                                    id="todo-item-trigger-on-due"
+                                    type="checkbox"
+                                    class="switch"
+                                    .checked=${this.draftValue.triggerOnDue && this.hasTime}
+                                    ?disabled=${!this.hasTime}
+                                    @change=${this.onTriggerOnDueChanged}
+                                />
+                            </label>
+                        ` : A}
+            </div>
+        `;
+  }
+  renderDatePanel(selected) {
+    const year = this.calendarYear;
+    const month = this.calendarMonth;
+    const leadingBlanks = (new Date(year, month, 1).getDay() + 6) % 7;
+    const totalDays = new Date(year, month + 1, 0).getDate();
+    const today = this.today;
+    const quickPicks = [
+      ["Today", today],
+      ["Tomorrow", addDays(today, 1)],
+      ["Next week", addDays(today, 7)]
+    ];
+    return b2`
+            <div class="panel date-panel">
+                <div class="pills">
+                    ${quickPicks.map(([label, date]) => b2`
+                        <button
+                            type="button"
+                            class=${e6({ pill: true, on: selected !== null && toIsoDate(selected) === toIsoDate(date) })}
+                            @click=${() => this.pickDate(date)}
+                        >${label}</button>
+                    `)}
+                </div>
+                <div>
+                    <div class="cal-head">
+                        <button type="button" class="iconbtn" aria-label="Previous month" @click=${() => this.shiftCalendarMonth(-1)}>
+                            ${icon(I_CHEV_L)}
+                        </button>
+                        <span>${MONTH_NAMES[month]} ${year}</span>
+                        <button type="button" class="iconbtn" aria-label="Next month" @click=${() => this.shiftCalendarMonth(1)}>
+                            ${icon(I_CHEV_R)}
+                        </button>
+                    </div>
+                    <div class="cal-grid">
+                        ${CALENDAR_WEEKDAY_LABELS.map((label) => b2`<span class="cal-dow" aria-hidden="true">${label}</span>`)}
+                        ${Array.from({ length: leadingBlanks }, () => b2`<span></span>`)}
+                        ${Array.from({ length: totalDays }, (_2, i8) => {
+      const date = new Date(year, month, i8 + 1);
       return b2`
                                 <button
                                     type="button"
-                                    class=${e6({ "date-picker-day": true, selected: isSelected })}
-                                    @click=${() => this.pickDate(day)}
-                                >${day}</button>
+                                    class=${e6({
+        "cal-day": true,
+        past: date < today,
+        today: toIsoDate(date) === toIsoDate(today),
+        selected: selected !== null && toIsoDate(date) === toIsoDate(selected)
+      })}
+                                    aria-label=${date.toDateString()}
+                                    @click=${() => this.pickDate(date)}
+                                >${i8 + 1}</button>
                             `;
     })}
+                    </div>
+                </div>
+                ${this.hasDate ? b2`
+                            <div class="panel-foot" style="justify-content: flex-end">
+                                <button type="button" class="text-btn small" @click=${this.clearDate}>Clear date</button>
+                            </div>
+                        ` : A}
+            </div>
+        `;
+  }
+  renderTimePanel() {
+    return b2`
+            <div class="panel">
+                <div class="time-row">
+                    <div class="spin">
+                        <button type="button" aria-label="Increase hour" @click=${() => this.stepDueHour(1)}>${icon(I_UP)}</button>
+                        <input
+                            type="text"
+                            inputmode="numeric"
+                            maxlength="2"
+                            aria-label="Hour"
+                            .value=${this.dueHour12}
+                            @input=${(e7) => this.updateDueHour12(e7.target.value)}
+                        />
+                        <button type="button" aria-label="Decrease hour" @click=${() => this.stepDueHour(-1)}>${icon(I_DOWN)}</button>
+                    </div>
+                    <span class="time-colon" aria-hidden="true">:</span>
+                    <div class="spin">
+                        <button type="button" aria-label="Increase minute" @click=${() => this.stepDueMinute(15)}>${icon(I_UP)}</button>
+                        <input
+                            type="text"
+                            inputmode="numeric"
+                            maxlength="2"
+                            aria-label="Minute"
+                            .value=${this.dueMinute}
+                            @input=${(e7) => this.updateDueMinute(e7.target.value)}
+                        />
+                        <button type="button" aria-label="Decrease minute" @click=${() => this.stepDueMinute(-15)}>${icon(I_DOWN)}</button>
+                    </div>
+                    <div class="ampm" role="group" aria-label="AM or PM">
+                        <button
+                            type="button"
+                            class=${e6({ on: this.dueAmPm === "AM" })}
+                            aria-pressed=${this.dueAmPm === "AM" ? "true" : "false"}
+                            @click=${() => this.setDueAmPm("AM")}
+                        >AM</button>
+                        <button
+                            type="button"
+                            class=${e6({ on: this.dueAmPm === "PM" })}
+                            aria-pressed=${this.dueAmPm === "PM" ? "true" : "false"}
+                            @click=${() => this.setDueAmPm("PM")}
+                        >PM</button>
+                    </div>
+                </div>
+                <div class="panel-foot">
+                    <span>Arrows step 15 min · tap a number to type</span>
+                    <button type="button" class="text-btn small" @click=${this.removeTime}>Remove time</button>
                 </div>
             </div>
         `;
   }
-  render() {
-    const showDue = this.fieldSupport.dueDate || this.fieldSupport.dueDateTime;
+  renderRepeatPanel() {
+    const mode = this.repeatMode;
+    const next = this.nextOccurrences;
+    const today = this.today;
     return b2`
-            <ha-dialog open .heading=${this.heading} @closed=${this.close}>
-                <div class="title-row">
-                    <div class="field title">
-                        <label for="todo-item-title">Title</label>
-                        <input
-                            id="todo-item-title"
-                            type="text"
-                            .value=${this.effectiveTitle}
-                            ?disabled=${this.draftValue.pinType === "day"}
-                            title=${this.draftValue.pinType === "day" ? "Set by the weekday picked below" : ""}
-                            @input=${(e7) => this.updateField("title", e7.target.value)}
-                        />
-                    </div>
-
-                    <div class="field quantity">
-                        <label for="todo-item-quantity">Quantity</label>
-                        <input
-                            id="todo-item-quantity"
-                            type="text"
-                            placeholder="e.g. 150g"
-                            .value=${this.draftValue.quantity}
-                            @input=${(e7) => this.updateField("quantity", e7.target.value)}
-                        />
-                    </div>
+            <div class="panel">
+                <div class="seg" role="group" aria-label="Repeat">
+                    ${REPEAT_MODES.map(([value, label]) => b2`
+                        <button
+                            type="button"
+                            class=${e6({ on: mode === value })}
+                            aria-pressed=${mode === value ? "true" : "false"}
+                            @click=${() => this.setRepeatMode(value)}
+                        >${label}</button>
+                    `)}
                 </div>
 
-                ${this.showCompleteToggle ? b2`
-                            <div class="complete-toggle">
-                                <ha-checkbox
-                                    .checked=${this.completed}
-                                    @change=${this.toggleComplete}
-                                ></ha-checkbox>
-                                <span>${this.completed ? "Completed" : "Mark complete"}</span>
+                ${mode === "custom" ? b2`
+                            <div class="custom-interval-row">
+                                <span>Every</span>
+                                <div class="stepper">
+                                    <button type="button" aria-label="Decrease repeat interval" @click=${() => this.stepRepeatInterval(-1)}>
+                                        ${icon(I_MINUS)}
+                                    </button>
+                                    <input
+                                        class="interval"
+                                        type="text"
+                                        inputmode="numeric"
+                                        maxlength="3"
+                                        aria-label="Repeat interval"
+                                        .value=${this.intervalDraft ?? String(this.draftValue.repeatInterval ?? "")}
+                                        @input=${(e7) => this.onRepeatIntervalInput(e7.target.value)}
+                                        @blur=${() => {
+      this.intervalDraft = null;
+    }}
+                                    />
+                                    <button type="button" aria-label="Increase repeat interval" @click=${() => this.stepRepeatInterval(1)}>
+                                        ${icon(I_PLUS)}
+                                    </button>
+                                </div>
+                                <span class="selwrap">
+                                    <select
+                                        class="unit-select"
+                                        aria-label="Repeat unit"
+                                        .value=${this.draftValue.repeatUnit}
+                                        @change=${(e7) => this.patch({ repeatUnit: e7.target.value })}
+                                    >
+                                        <option value="days">days</option>
+                                        <option value="weeks">weeks</option>
+                                        <option value="months">months</option>
+                                    </select>
+                                    ${icon(I_DOWN)}
+                                </span>
                             </div>
-                        ` : ""}
+                        ` : A}
 
+                ${next ? b2`
+                            <span class="next-label">Tick it off today and the next one is due</span>
+                            <div class="next-options" role="group" aria-label="Next one counts from">
+                                <button
+                                    type="button"
+                                    class=${e6({ "next-option": true, on: this.draftValue.repeatFrom === "due" })}
+                                    aria-pressed=${this.draftValue.repeatFrom === "due" ? "true" : "false"}
+                                    data-from="due"
+                                    @click=${() => this.patch({ repeatFrom: "due" })}
+                                >
+                                    <span class="kind">On its schedule</span>
+                                    <span class="date">${formatShortDate(next.due, today)}</span>
+                                    <span class="why">Counts from the due date. Missed ones are skipped.</span>
+                                </button>
+                                <button
+                                    type="button"
+                                    class=${e6({ "next-option": true, on: this.draftValue.repeatFrom === "completion" })}
+                                    aria-pressed=${this.draftValue.repeatFrom === "completion" ? "true" : "false"}
+                                    data-from="completion"
+                                    @click=${() => this.patch({ repeatFrom: "completion" })}
+                                >
+                                    <span class="kind">After I finish</span>
+                                    <span class="date">${formatShortDate(next.completion, today)}</span>
+                                    <span class="why">Counts from the day it's ticked off.</span>
+                                </button>
+                            </div>
+                        ` : A}
+            </div>
+        `;
+  }
+  renderDetailsArea() {
+    return b2`
+            <h3 class="sec">Details</h3>
+            <div class="details">
                 ${this.fieldSupport.description ? b2`
                             <div class="field">
                                 <label for="todo-item-description">Description</label>
                                 <textarea
                                     id="todo-item-description"
+                                    rows="2"
+                                    placeholder="Add notes"
                                     .value=${this.draftValue.description}
-                                    @input=${(e7) => this.updateField(
-      "description",
-      e7.target.value
-    )}
+                                    @input=${(e7) => this.patch({ description: e7.target.value })}
                                 ></textarea>
                             </div>
-                        ` : ""}
-
-                <div class="field">
-                    <label for="todo-item-tags">Tags</label>
+                        ` : A}
+                <div class="chips" role="group" aria-label="Tags">
+                    ${this.tagList.map((tag) => b2`
+                        <span class="chip">
+                            ${tag}
+                            <button type="button" aria-label="Remove tag ${tag}" @click=${() => this.removeTag(tag)}>${icon(I_X)}</button>
+                        </span>
+                    `)}
                     <input
                         id="todo-item-tags"
+                        class="tag-input"
                         type="text"
-                        placeholder="e.g. urgent, weekend"
-                        .value=${this.draftValue.tags}
-                        @input=${(e7) => this.updateField("tags", e7.target.value)}
+                        aria-label="Add tag"
+                        placeholder="+ Add tag"
+                        .value=${this.tagDraft}
+                        @input=${(e7) => {
+      this.tagDraft = e7.target.value;
+    }}
+                        @keydown=${this.onTagKeydown}
+                        @blur=${this.commitTagDraft}
                     />
                 </div>
-
-                <div class="field">
-                    <label for="todo-item-pin-type">Show as</label>
-                    <select
-                        id="todo-item-pin-type"
-                        class="pin-type-select"
-                        .value=${this.draftValue.pinType}
-                        @change=${(e7) => this.updateField("pinType", e7.target.value)}
-                    >
-                        <option value="">Normal item</option>
-                        <option value="category">Category (e.g. "Groceries")</option>
-                        <option value="person">Person (e.g. "Brodie")</option>
-                        <option value="day">Day of week</option>
-                    </select>
-                    ${this.draftValue.pinType === "day" ? b2`
-                                <select
-                                    id="todo-item-day-weekday"
-                                    class="day-weekday-select"
-                                    @change=${(e7) => this.updateField("dayWeekday", e7.target.value)}
-                                >
-                                    <option value="" disabled ?selected=${this.draftValue.dayWeekday === ""}>
-                                        Which day?
-                                    </option>
-                                    ${WEEKDAY_NAMES.map(
-      (name, index) => b2`
-                                            <option
-                                                value=${index}
-                                                ?selected=${this.draftValue.dayWeekday === String(index)}
-                                            >${name}</option>
-                                        `
-    )}
-                                </select>
-                                <div class="field-hint pin-type-hint">
-                                    Always shown as a section header. Titled with the day's own name, and
-                                    reads "Today"/"Tomorrow" when it's due - both update automatically, so
-                                    there's nothing to maintain once it's set.
-                                </div>
-                            ` : this.draftValue.pinType ? b2`
-                                    <div class="field-hint pin-type-hint">
-                                        Always shown as a section header, even with nothing under it yet.
-                                    </div>
-                                ` : ""}
-                </div>
-
-                ${!this.entityIsLinked || this.draftValue.linked ? b2`
-                            <div class="field">
-                                <div class="complete-toggle">
-                                    <ha-checkbox
-                                        id="todo-item-linked"
-                                        .checked=${this.draftValue.linked}
-                                        @change=${this.onLinkedChanged}
-                                    ></ha-checkbox>
-                                    <span>Link to shared list</span>
-                                </div>
-                                ${this.isCreatingANewLink ? b2`
+            </div>
+        `;
+  }
+  renderOptionsArea() {
+    const showLink = !this.entityIsLinked || this.draftValue.linked;
+    const summary = [
+      this.draftValue.linked ? "Linked" : null,
+      this.draftValue.deleteProtected ? "Protected" : null
+    ].filter(Boolean).join(" \xB7 ") || "Off";
+    return b2`
+            <h3 class="sec">Options</h3>
+            <div class="group">
+                <button
+                    type="button"
+                    id="todo-item-options-row"
+                    class="row summary"
+                    aria-expanded=${this.optionsOpen ? "true" : "false"}
+                    @click=${() => {
+      this.optionsOpen = !this.optionsOpen;
+    }}
+                >
+                    ${icon(I_SLIDERS)}
+                    <span class="lbl">Sharing &amp; safety</span>
+                    <span class="val">${summary}</span>
+                    ${icon(I_CHEV_R, this.optionsOpen ? "chev down" : "chev")}
+                </button>
+                ${this.optionsOpen ? b2`
+                            ${showLink ? b2`
+                                        <label class="row">
+                                            ${icon(I_LINK)}
+                                            <span class="lbl">
+                                                Link to shared list
+                                                <span class="sub">${this.draftValue.linked && this.originallyLinked ? "Turning this off only unlinks - the item stays" : "Keeps a synced copy on your shared list"}</span>
+                                            </span>
                                             <input
-                                                id="todo-item-link-target"
-                                                type="text"
-                                                class="link-target-input"
-                                                placeholder="Destination (optional) - e.g. Brodie"
-                                                .value=${this.draftValue.linkTarget}
-                                                @input=${(e7) => this.updateField("linkTarget", e7.target.value)}
+                                                id="todo-item-linked"
+                                                type="checkbox"
+                                                class="switch"
+                                                .checked=${this.draftValue.linked}
+                                                @change=${(e7) => this.patch({ linked: e7.target.checked })}
                                             />
-                                            <div class="field-hint">
-                                                Creates a copy on your configured shared list, kept in sync both ways -
-                                                completing, editing, or deleting either one affects both. Leave blank
-                                                to use the default destination.
-                                            </div>
-                                        ` : this.draftValue.linked ? b2`
-                                                <div class="field-hint">
-                                                    Linked - unticking this only unlinks it, the item itself is
-                                                    untouched.
-                                                </div>
-                                            ` : ""}
-                            </div>
-                        ` : ""}
+                                        </label>
+                                        ${this.draftValue.linked && !this.originallyLinked ? b2`
+                                                    <div class="panel">
+                                                        <div class="field">
+                                                            <label for="todo-item-link-target">Put it under (optional)</label>
+                                                            <input
+                                                                id="todo-item-link-target"
+                                                                type="text"
+                                                                placeholder="e.g. Brodie"
+                                                                .value=${this.draftValue.linkTarget}
+                                                                @input=${(e7) => this.patch({ linkTarget: e7.target.value })}
+                                                            />
+                                                        </div>
+                                                    </div>
+                                                ` : A}
+                                    ` : A}
+                            <label class="row">
+                                ${icon(I_SHIELD)}
+                                <span class="lbl">
+                                    Prevent deletion
+                                    <span class="sub">Blocks delete, swipe and clear</span>
+                                </span>
+                                <input
+                                    id="todo-item-delete-protected"
+                                    type="checkbox"
+                                    class="switch"
+                                    .checked=${this.draftValue.deleteProtected}
+                                    @change=${(e7) => this.patch({ deleteProtected: e7.target.checked })}
+                                />
+                            </label>
+                        ` : A}
+            </div>
+        `;
+  }
+  renderFooter() {
+    if (this.confirmingDelete) {
+      return b2`
+                <div class="confirm-delete">
+                    <span>Delete this item?</span>
+                    <button type="button" class="text-btn" @click=${() => {
+        this.confirmingDelete = false;
+      }}>Cancel</button>
+                    <button type="button" class="text-btn destructive" @click=${this.confirmDeleteNow}>Delete</button>
+                </div>
+            `;
+    }
+    return b2`
+            ${this.showDelete ? b2`
+                        <button
+                            type="button"
+                            class="text-btn destructive"
+                            ?disabled=${this.draftValue.deleteProtected}
+                            title=${this.draftValue.deleteProtected ? "Turn off Prevent deletion to delete this item" : ""}
+                            @click=${this.requestDelete}
+                        >Delete</button>
+                    ` : A}
+            <span class="spacer"></span>
+            <button type="button" class="text-btn" @click=${this.close}>Cancel</button>
+            <button type="button" class="filled-btn" ?disabled=${this.saveBlocked} @click=${this.save}>Save</button>
+        `;
+  }
+  render() {
+    const twoColumns = this.showDue || this.isDayPin;
+    return b2`
+            <ha-dialog
+                open
+                class=${e6({ wide: twoColumns })}
+                .accessibleLabel=${`${this.heading} item`}
+                @closed=${this.close}
+            >
+                <span slot="headerTitle" class="dialog-title">
+                    <span>${this.heading}</span>
+                    <label class="typesel">
+                        <span class="visually-hidden">Show as</span>
+                        <select
+                            id="todo-item-pin-type"
+                            .value=${this.draftValue.pinType}
+                            @change=${(e7) => this.patch({ pinType: e7.target.value })}
+                        >
+                            <option value="">Item</option>
+                            <option value="category">Category</option>
+                            <option value="person">Person</option>
+                            <option value="day">Day of week</option>
+                        </select>
+                        ${icon(I_DOWN)}
+                    </label>
+                </span>
 
-                <div class="field">
-                    <div class="complete-toggle">
-                        <ha-checkbox
-                            id="todo-item-delete-protected"
-                            .checked=${this.draftValue.deleteProtected}
-                            @change=${this.onDeleteProtectedChanged}
-                        ></ha-checkbox>
-                        <span>Prevent deletion</span>
+                <div class="layout">
+                    <div class=${e6({ cols: true, two: twoColumns })}>
+                        <div class="area-item">${this.renderTitleArea()}</div>
+                        ${this.showDue || this.isDayPin ? b2`<div class="area-when">${this.renderWhenArea()}</div>` : A}
+                        <div class="area-details">${this.renderDetailsArea()}</div>
+                        <div class="area-options">${this.renderOptionsArea()}</div>
                     </div>
-                    ${this.draftValue.deleteProtected ? b2`
-                                <div class="field-hint">
-                                    Blocks the delete button, swipe-to-delete, and clear completed/all -
-                                    untick to allow deleting it again.
-                                </div>
-                            ` : ""}
                 </div>
 
-                ${showDue ? b2`
-                            <div class="due-row">
-                                <div class="field">
-                                    <label id="due-date-label">Due date</label>
-                                    <div class="dmy-row" aria-labelledby="due-date-label">
-                                        <input
-                                            class="segment day"
-                                            type="text"
-                                            inputmode="numeric"
-                                            maxlength="2"
-                                            placeholder="DD"
-                                            aria-label="Day"
-                                            .value=${this.dueDay}
-                                            @input=${(e7) => this.updateDueDay(e7.target.value)}
-                                        />
-                                        <span class="segment-sep">/</span>
-                                        <input
-                                            class="segment month"
-                                            type="text"
-                                            inputmode="numeric"
-                                            maxlength="2"
-                                            placeholder="MM"
-                                            aria-label="Month"
-                                            .value=${this.dueMonth}
-                                            @input=${(e7) => this.updateDueMonth(e7.target.value)}
-                                        />
-                                        <span class="segment-sep">/</span>
-                                        <input
-                                            class="segment year"
-                                            type="text"
-                                            inputmode="numeric"
-                                            maxlength="4"
-                                            placeholder="YYYY"
-                                            aria-label="Year"
-                                            .value=${this.dueYear}
-                                            @input=${(e7) => this.updateDueYear(e7.target.value)}
-                                        />
-                                        <button
-                                            type="button"
-                                            class="calendar-toggle"
-                                            aria-label=${this.datePickerOpen ? "Close date picker" : "Open date picker"}
-                                            @click=${this.toggleDatePicker}
-                                        >
-                                            ${CALENDAR_ICON}
-                                        </button>
-                                    </div>
-                                </div>
-
-                                ${this.fieldSupport.dueDateTime ? b2`
-                                            <div class="field">
-                                                <label id="due-time-label">Due time</label>
-                                                <div class="hm-row" aria-labelledby="due-time-label">
-                                                    <div class="stepper">
-                                                        <button
-                                                            type="button"
-                                                            aria-label="Decrease hour"
-                                                            @click=${() => this.stepDueHour(-1)}
-                                                        >–</button>
-                                                        <input
-                                                            class="stepper-value"
-                                                            type="text"
-                                                            inputmode="numeric"
-                                                            maxlength="2"
-                                                            aria-label="Hour"
-                                                            .value=${this.dueHour12}
-                                                            @input=${(e7) => this.updateDueHour12(e7.target.value)}
-                                                        />
-                                                        <button
-                                                            type="button"
-                                                            aria-label="Increase hour"
-                                                            @click=${() => this.stepDueHour(1)}
-                                                        >+</button>
-                                                    </div>
-                                                    <span class="segment-sep stepper-colon">:</span>
-                                                    <div class="stepper">
-                                                        <button
-                                                            type="button"
-                                                            aria-label="Decrease minute"
-                                                            @click=${() => this.stepDueMinute(-15)}
-                                                        >–</button>
-                                                        <input
-                                                            class="stepper-value"
-                                                            type="text"
-                                                            inputmode="numeric"
-                                                            maxlength="2"
-                                                            aria-label="Minute"
-                                                            .value=${this.dueMinute}
-                                                            @input=${(e7) => this.updateDueMinute(e7.target.value)}
-                                                        />
-                                                        <button
-                                                            type="button"
-                                                            aria-label="Increase minute"
-                                                            @click=${() => this.stepDueMinute(15)}
-                                                        >+</button>
-                                                    </div>
-                                                    <div class="segmented" role="group" aria-label="AM or PM">
-                                                        <button
-                                                            type="button"
-                                                            class=${e6({ active: this.dueAmPm === "AM" })}
-                                                            @click=${() => this.setDueAmPm("AM")}
-                                                        >AM</button>
-                                                        <button
-                                                            type="button"
-                                                            class=${e6({ active: this.dueAmPm === "PM" })}
-                                                            @click=${() => this.setDueAmPm("PM")}
-                                                        >PM</button>
-                                                    </div>
-                                                </div>
-                                            </div>
-                                        ` : ""}
-                            </div>
-
-                            ${this.datePickerOpen ? this.renderDatePickerPanel() : ""}
-
-                            ${this.fieldSupport.dueDateTime ? b2`
-                                        <div class="complete-toggle">
-                                            <ha-checkbox
-                                                .checked=${this.draftValue.triggerOnDue}
-                                                @change=${this.onTriggerOnDueChanged}
-                                            ></ha-checkbox>
-                                            <span>Trigger automation when due</span>
-                                        </div>
-                                        ${this.triggerOnDueBlocked ? b2`
-                                                    <div class="field-hint">
-                                                        Requires a due time to enable
-                                                    </div>
-                                                ` : ""}
-                                    ` : ""}
-
-                            <div class="repeat-section">
-                                <div class="repeat-label-row">
-                                    ${REPEAT_ICON}
-                                    <label>Repeats</label>
-                                </div>
-
-                                <div class="chip-row" role="group" aria-label="Repeat interval">
-                                    <button
-                                        type="button"
-                                        class=${e6({ chip: true, active: this.repeatMode === "never" })}
-                                        @click=${() => this.setRepeatMode("never")}
-                                    >Doesn't repeat</button>
-                                    <button
-                                        type="button"
-                                        class=${e6({ chip: true, active: this.repeatMode === "daily" })}
-                                        @click=${() => this.setRepeatMode("daily")}
-                                    >Daily</button>
-                                    <button
-                                        type="button"
-                                        class=${e6({ chip: true, active: this.repeatMode === "weekly" })}
-                                        @click=${() => this.setRepeatMode("weekly")}
-                                    >Weekly</button>
-                                    <button
-                                        type="button"
-                                        class=${e6({ chip: true, active: this.repeatMode === "monthly" })}
-                                        @click=${() => this.setRepeatMode("monthly")}
-                                    >Monthly</button>
-                                    <button
-                                        type="button"
-                                        class=${e6({ chip: true, active: this.repeatMode === "custom" })}
-                                        @click=${() => this.setRepeatMode("custom")}
-                                    >Custom</button>
-                                </div>
-
-                                ${this.repeatMode === "custom" ? b2`
-                                            <div class="custom-interval-row">
-                                                <span>Every</span>
-                                                <div class="stepper">
-                                                    <button
-                                                        type="button"
-                                                        aria-label="Decrease repeat interval"
-                                                        @click=${() => this.stepRepeatInterval(-1)}
-                                                    >–</button>
-                                                    <input
-                                                        class="stepper-value interval"
-                                                        type="text"
-                                                        inputmode="numeric"
-                                                        maxlength="3"
-                                                        aria-label="Repeat interval"
-                                                        .value=${String(this.draftValue.repeatInterval ?? "")}
-                                                        @input=${(e7) => this.onRepeatIntervalInput(e7.target.value)}
-                                                    />
-                                                    <button
-                                                        type="button"
-                                                        aria-label="Increase repeat interval"
-                                                        @click=${() => this.stepRepeatInterval(1)}
-                                                    >+</button>
-                                                </div>
-                                                <select
-                                                    class="unit-select"
-                                                    aria-label="Repeat unit"
-                                                    .value=${this.draftValue.repeatUnit}
-                                                    @change=${(e7) => this.setRepeatUnit(e7.target.value)}
-                                                >
-                                                    <option value="days">days</option>
-                                                    <option value="weeks">weeks</option>
-                                                    <option value="months">months</option>
-                                                </select>
-                                            </div>
-                                        ` : ""}
-
-                                ${this.repeatMode !== "never" ? b2`
-                                            <div class="segmented" role="group" aria-label="Repeat from">
-                                                <button
-                                                    type="button"
-                                                    class=${e6({ active: this.draftValue.repeatFrom === "due" })}
-                                                    @click=${() => this.setRepeatFrom("due")}
-                                                >From due date</button>
-                                                <button
-                                                    type="button"
-                                                    class=${e6({ active: this.draftValue.repeatFrom === "completion" })}
-                                                    @click=${() => this.setRepeatFrom("completion")}
-                                                >From completion</button>
-                                            </div>
-                                            <p class="repeat-from-caption">${this.repeatFromCaption}</p>
-                                        ` : ""}
-
-                                ${this.repeatMode !== "never" && !this.repeatBlocked ? b2`
-                                            <div class="repeat-summary">
-                                                ${REPEAT_ICON}
-                                                <span>${this.repeatSummary}</span>
-                                            </div>
-                                        ` : ""}
-
-                                ${this.repeatMode !== "never" && !this.draftValue.dueDate ? b2`
-                                            <div class="field-hint">
-                                                Set a due date above to make this item repeat
-                                            </div>
-                                        ` : ""}
-                            </div>
-                        ` : ""}
-
-                <div class="actions" slot="footer">
-                    ${this.confirmingDelete ? b2`
-                                <div class="confirm-delete">
-                                    <span>Delete this item?</span>
-                                    <button @click=${this.cancelDelete}>
-                                        Cancel
-                                    </button>
-                                    <button class="destructive" @click=${this.confirmDeleteNow}>
-                                        Delete
-                                    </button>
-                                </div>
-                            ` : b2`
-                                ${this.showDelete ? b2`
-                                            <button
-                                                class="destructive"
-                                                ?disabled=${this.draftValue.deleteProtected}
-                                                title=${this.draftValue.deleteProtected ? 'Untick "Prevent deletion" above to delete this item' : ""}
-                                                @click=${this.requestDelete}
-                                            >
-                                                Delete
-                                            </button>
-                                        ` : ""}
-                                <button
-                                    @click=${this.save}
-                                    ?disabled=${this.triggerOnDueBlocked || this.dayPinMissingWeekday || this.repeatBlocked}
-                                >
-                                    Save
-                                </button>
-                            `}
-                </div>
+                <div class="actions" slot="footer">${this.renderFooter()}</div>
             </ha-dialog>
         `;
   }
 };
 TodoItemDialog.styles = i`
-        .field {
-            display: flex;
-            flex-direction: column;
-            gap: 4px;
-            margin-bottom: 16px;
+        :host {
+            --tov-fill: rgba(var(--rgb-primary-text-color, 0, 0, 0), 0.05);
+            --tov-fill-strong: rgba(var(--rgb-primary-text-color, 0, 0, 0), 0.09);
+            --tov-hover: rgba(var(--rgb-primary-text-color, 0, 0, 0), 0.06);
+            --tov-accent-wash: rgba(var(--rgb-primary-color, 3, 169, 244), 0.14);
+            --tov-on-accent: var(--text-primary-color, #fff);
+            --tov-muted: var(--secondary-text-color);
             font-family: Roboto, "Noto Sans", sans-serif;
         }
 
-        .due-row {
-            display: flex;
-            flex-wrap: wrap;
-            gap: 16px;
+        /* Widened only when there's a second column to fill - see .cols. */
+        ha-dialog.wide {
+            --ha-dialog-width-md: 760px;
         }
 
-        .due-row .field {
-            flex: 1;
-            min-width: 140px;
+        .ic {
+            width: 20px;
+            height: 20px;
+            fill: none;
+            stroke: currentColor;
+            stroke-width: 1.8;
+            stroke-linecap: round;
+            stroke-linejoin: round;
+            flex: none;
+        }
+
+        .dialog-title {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            min-width: 0;
+        }
+
+        .typesel {
+            position: relative;
+            display: inline-flex;
+            align-items: center;
+        }
+
+        .typesel select {
+            appearance: none;
+            font-family: inherit;
+            font-size: 14px;
+            font-weight: 500;
+            color: var(--primary-text-color);
+            background: var(--tov-fill);
+            border: 1px solid var(--divider-color);
+            border-radius: 16px;
+            padding: 5px 28px 5px 12px;
+            cursor: pointer;
+        }
+
+        .typesel .ic {
+            position: absolute;
+            right: 8px;
+            width: 16px;
+            height: 16px;
+            pointer-events: none;
+            color: var(--tov-muted);
+        }
+
+        .visually-hidden {
+            position: absolute;
+            width: 1px;
+            height: 1px;
+            overflow: hidden;
+            clip: rect(0 0 0 0);
+            white-space: nowrap;
+        }
+
+        /* Two columns once the dialog itself is wide enough, driven by its
+           own width rather than the viewport, so a narrow phone or a split
+           screen always gets the single stacked column. */
+        .layout {
+            container-type: inline-size;
+        }
+
+        .cols {
+            display: flex;
+            flex-direction: column;
+        }
+
+        @container (min-width: 600px) {
+            /* The trailing 1fr row soaks up When's extra height, so the
+               left column stays packed instead of spreading out. */
+            .cols.two {
+                display: grid;
+                grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+                grid-template-rows: auto auto auto 1fr;
+                column-gap: 24px;
+                align-items: start;
+            }
+
+            .cols.two .area-item { grid-column: 1; grid-row: 1; }
+            .cols.two .area-details { grid-column: 1; grid-row: 2; }
+            .cols.two .area-options { grid-column: 1; grid-row: 3; }
+            .cols.two .area-when { grid-column: 2; grid-row: 1 / span 4; }
+            .cols.two .area-when > .sec:first-child { margin-top: 0; }
+        }
+
+        .sec {
+            font-size: 12px;
+            font-weight: 700;
+            letter-spacing: 0.08em;
+            text-transform: uppercase;
+            color: var(--tov-muted);
+            margin: 20px 0 8px;
+        }
+
+        .field {
+            background: var(--tov-fill);
+            border-radius: 6px 6px 0 0;
+            border-bottom: 1px solid var(--divider-color);
+            padding: 7px 12px;
+            display: flex;
+            flex-direction: column;
+            gap: 2px;
+            min-width: 0;
+        }
+
+        .field:focus-within {
+            border-bottom: 2px solid var(--primary-color);
+            padding-bottom: 6px;
+        }
+
+        .field label {
+            font-size: 12px;
+            color: var(--tov-muted);
+        }
+
+        .field input,
+        .field textarea {
+            all: unset;
+            box-sizing: border-box;
+            width: 100%;
+            font-family: inherit;
+            font-size: 16px;
+            line-height: 22px;
+            color: var(--primary-text-color);
+        }
+
+        .field textarea {
+            min-height: 44px;
+            white-space: pre-wrap;
+        }
+
+        .field input:disabled {
+            color: var(--primary-text-color);
+            opacity: 0.8;
         }
 
         .title-row {
             display: flex;
-            gap: 16px;
+            gap: 12px;
         }
 
         .title-row .field.title {
-            flex: 2;
-            min-width: 0;
+            flex: 1;
         }
 
         .title-row .field.quantity {
-            flex: 1;
-            min-width: 90px;
+            width: 100px;
+            flex: none;
         }
 
-        .complete-toggle {
+        .group {
+            background: var(--tov-fill);
+            border-radius: 14px;
+            overflow: hidden;
+        }
+
+        .row {
+            all: unset;
+            box-sizing: border-box;
+            width: 100%;
             display: flex;
             align-items: center;
-            gap: 8px;
-            margin-bottom: 16px;
-            font-family: Roboto, "Noto Sans", sans-serif;
-            font-size: 14px;
+            gap: 14px;
+            min-height: 52px;
+            padding: 8px 14px 8px 16px;
+            border-top: 1px solid var(--divider-color);
+            cursor: pointer;
             color: var(--primary-text-color);
         }
 
-        .complete-toggle ha-checkbox {
-            margin-inline-start: -12px;
+        .group > :first-child {
+            border-top: 0;
         }
 
-        label {
+        .row:hover:not(:disabled):not(.off) {
+            background: var(--tov-hover);
+        }
+
+        .row .lbl {
+            flex: 1;
+            min-width: 0;
+            display: flex;
+            flex-direction: column;
+            font-size: 15px;
+        }
+
+        .row .sub {
             font-size: 12px;
-            color: var(--secondary-text-color);
-        }
-
-        input,
-        textarea {
-            box-sizing: border-box;
-            width: 100%;
-            font-family: inherit;
-            font-size: 16px;
-            color: var(--primary-text-color);
-            background: none;
-            border: none;
-            border-bottom: 1px solid var(--divider-color);
-            padding: 8px 0;
-            outline: none;
-            color-scheme: light dark;
-        }
-
-        input:focus,
-        textarea:focus {
-            border-bottom: 2px solid var(--primary-color);
-            padding-bottom: 7px;
-        }
-
-        select.pin-type-select {
-            box-sizing: border-box;
-            width: 100%;
-            font-family: inherit;
-            font-size: 16px;
-            color: var(--primary-text-color);
-            background: none;
-            border: none;
-            border-bottom: 1px solid var(--divider-color);
-            padding: 8px 0;
-            outline: none;
-        }
-
-        select.pin-type-select:focus {
-            border-bottom: 2px solid var(--primary-color);
-            padding-bottom: 7px;
-        }
-
-        .field-hint.pin-type-hint {
+            color: var(--tov-muted);
             margin-top: 2px;
         }
 
-        /* Day/month/year and hour/minute, always in that fixed order
-           regardless of browser or OS locale - see the .dueDay field's
-           own doc comment for why this isn't a single native
-           <input type="date">/<input type="time"> or ha-date-input/
-           ha-time-input. */
-        .dmy-row,
-        .hm-row {
-            display: flex;
-            align-items: baseline;
-            gap: 4px;
+        .row .val {
+            font-size: 14px;
+            color: var(--tov-muted);
+            text-align: right;
         }
 
-        input.segment {
-            width: 2.2em;
+        .row .val.late {
+            color: var(--error-color);
+        }
+
+        /* A one-line label with a summary that truncates, rather than the
+           label wrapping to make room for the summary. */
+        .row.summary .lbl {
             flex: none;
-            text-align: center;
-            /* Hides the native up/down spinner some browsers add to a
-               numeric-inputmode text field - these segments are typed
-               into, not incremented. */
-            -moz-appearance: textfield;
+            white-space: nowrap;
         }
 
-        input.segment.year {
-            width: 3.6em;
+        .row.summary .val {
+            flex: 1;
+            min-width: 0;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
         }
 
-        .segment-sep {
-            color: var(--secondary-text-color);
-            font-size: 16px;
+        .row .ic {
+            color: var(--tov-muted);
         }
 
-        /* Stepper: a rounded pill with ± buttons flanking a
-           tap-to-type value - see wrapValue's own comment for why
-           the buttons wrap rather than clamp. Shared by the due-time
-           hour/minute fields and the repeat interval field below. */
-        .stepper {
-            display: flex;
-            align-items: center;
-            background: rgba(var(--rgb-primary-text-color, 0, 0, 0), 0.06);
-            border-radius: 100px;
-            padding: 4px;
-            gap: 2px;
+        .row.open .val,
+        .row.open .ic {
+            color: var(--primary-color);
         }
 
-        .stepper button {
-            width: 30px;
-            height: 30px;
-            flex: none;
-            border-radius: 50%;
-            border: none;
-            background: transparent;
-            color: var(--primary-text-color);
-            font-size: 16px;
-            line-height: 1;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            cursor: pointer;
-            font-family: inherit;
-            padding: 0;
-            text-transform: none;
+        .row:disabled,
+        .row.off {
+            cursor: default;
+            color: var(--disabled-text-color, var(--tov-muted));
         }
 
-        .stepper button:hover {
-            background: rgba(var(--rgb-primary-text-color, 0, 0, 0), 0.1);
+        .row:disabled .ic,
+        .row.off .ic {
+            opacity: 0.5;
         }
 
-        .stepper-value {
-            box-sizing: border-box;
-            width: 2.2em;
-            flex: none;
-            text-align: center;
-            font-size: 16px;
-            font-weight: 500;
-            font-variant-numeric: tabular-nums;
-            padding: 6px 0;
-            background: none;
-            border: none;
-            outline: none;
-            color: var(--primary-text-color);
+        .chev {
+            transition: transform 0.15s;
         }
 
-        .stepper-value.interval {
-            width: 2.6em;
+        .row.open .chev,
+        .chev.down {
+            transform: rotate(90deg);
         }
 
-        .hm-row .stepper-colon {
-            color: var(--secondary-text-color);
-            font-size: 16px;
-            font-weight: 500;
-        }
-
-        .segmented {
-            display: inline-flex;
-            background: rgba(var(--rgb-primary-text-color, 0, 0, 0), 0.06);
-            border-radius: 100px;
-            padding: 3px;
-            gap: 2px;
-            margin-inline-start: 4px;
-        }
-
-        .segmented button {
-            border: none;
-            background: transparent;
-            font-family: inherit;
-            font-size: 12px;
-            font-weight: 500;
-            text-transform: none;
-            color: var(--secondary-text-color);
-            padding: 7px 14px;
-            border-radius: 100px;
-            cursor: pointer;
-        }
-
-        .segmented button.active {
-            background: var(--primary-color);
-            color: var(--text-primary-color, #fff);
-        }
-
-        .repeat-section {
-            border-top: 1px solid var(--divider-color);
-            padding-top: 16px;
-            margin-bottom: 16px;
+        .panel {
+            padding: 4px 16px 16px;
             display: flex;
             flex-direction: column;
             gap: 12px;
-            font-family: Roboto, "Noto Sans", sans-serif;
         }
 
-        .repeat-label-row {
-            display: flex;
+        input.switch {
+            appearance: none;
+            width: 36px;
+            height: 20px;
+            border-radius: 10px;
+            background: var(--tov-fill-strong);
+            box-shadow: inset 0 0 0 1px var(--divider-color);
+            position: relative;
+            margin: 0;
+            cursor: pointer;
+            flex: none;
+        }
+
+        input.switch::after {
+            content: "";
+            position: absolute;
+            top: 3px;
+            left: 3px;
+            width: 14px;
+            height: 14px;
+            border-radius: 50%;
+            background: var(--tov-muted);
+            transition: left 0.15s;
+        }
+
+        input.switch:checked {
+            background: var(--primary-color);
+            box-shadow: none;
+        }
+
+        input.switch:checked::after {
+            left: 19px;
+            background: var(--tov-on-accent);
+        }
+
+        input.switch:disabled {
+            cursor: default;
+            opacity: 0.5;
+        }
+
+        .pill {
+            all: unset;
+            display: inline-flex;
             align-items: center;
-            gap: 8px;
+            gap: 6px;
+            height: 34px;
+            padding: 0 14px;
+            border-radius: 17px;
+            background: var(--tov-fill-strong);
+            font-size: 14px;
+            color: var(--primary-text-color);
+            cursor: pointer;
         }
 
-        .repeat-label-row label {
-            font-size: 12px;
-            color: var(--secondary-text-color);
+        .pill.small {
+            height: 32px;
+            padding: 0 12px;
+            font-size: 13px;
         }
 
-        .repeat-label-row svg {
-            width: 15px;
-            height: 15px;
-            fill: var(--secondary-text-color);
+        .pill.on {
+            background: var(--tov-accent-wash);
+            color: var(--primary-color);
+            box-shadow: inset 0 0 0 1px var(--primary-color);
         }
 
-        .chip-row {
+        .pills {
             display: flex;
             flex-wrap: wrap;
             gap: 8px;
         }
 
-        .chip {
-            border: 1px solid var(--divider-color);
-            background: none;
-            color: var(--primary-text-color);
-            font-family: inherit;
-            font-size: 13px;
+        .cal-head {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            font-size: 14px;
             font-weight: 500;
-            text-transform: none;
-            padding: 6px 14px;
-            border-radius: 100px;
+        }
+
+        .iconbtn {
+            all: unset;
+            width: 36px;
+            height: 36px;
+            border-radius: 50%;
+            display: grid;
+            place-items: center;
+            color: var(--tov-muted);
+            cursor: pointer;
+            flex: none;
+        }
+
+        .iconbtn:hover {
+            background: var(--tov-hover);
+        }
+
+        .cal-grid {
+            display: grid;
+            grid-template-columns: repeat(7, minmax(0, 1fr));
+            gap: 2px;
+        }
+
+        .cal-dow {
+            font-size: 11px;
+            color: var(--tov-muted);
+            text-align: center;
+            padding: 4px 0;
+        }
+
+        .cal-day {
+            all: unset;
+            height: 34px;
+            display: grid;
+            place-items: center;
+            font-size: 13px;
+            border-radius: 17px;
+            cursor: pointer;
+            color: var(--primary-text-color);
+        }
+
+        .cal-day:hover {
+            background: var(--tov-hover);
+        }
+
+        .cal-day.past {
+            color: var(--tov-muted);
+        }
+
+        .cal-day.today {
+            box-shadow: inset 0 0 0 1px var(--divider-color);
+        }
+
+        .cal-day.selected {
+            background: var(--primary-color);
+            color: var(--tov-on-accent);
+            font-weight: 500;
+            box-shadow: none;
+        }
+
+        .time-row {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 10px;
+        }
+
+        .spin {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 2px;
+        }
+
+        .spin button {
+            all: unset;
+            width: 76px;
+            height: 28px;
+            display: grid;
+            place-items: center;
+            color: var(--tov-muted);
+            border-radius: 8px;
             cursor: pointer;
         }
 
-        .chip:hover {
-            background: rgba(var(--rgb-primary-text-color, 0, 0, 0), 0.06);
+        .spin button:hover {
+            background: var(--tov-hover);
         }
 
-        .chip.active {
+        .spin input {
+            all: unset;
+            box-sizing: border-box;
+            width: 76px;
+            height: 58px;
+            text-align: center;
+            font-family: inherit;
+            font-size: 36px;
+            background: var(--tov-fill-strong);
+            border-radius: 12px;
+            color: var(--primary-text-color);
+            font-variant-numeric: tabular-nums;
+        }
+
+        .time-colon {
+            font-size: 36px;
+            color: var(--tov-muted);
+            padding-bottom: 4px;
+        }
+
+        .ampm {
+            display: flex;
+            flex-direction: column;
+            background: var(--tov-fill-strong);
+            border-radius: 12px;
+            padding: 3px;
+            gap: 2px;
+            margin-inline-start: 6px;
+        }
+
+        .ampm button {
+            all: unset;
+            width: 50px;
+            height: 26px;
+            line-height: 26px;
+            text-align: center;
+            font-size: 13px;
+            font-weight: 500;
+            color: var(--tov-muted);
+            border-radius: 9px;
+            cursor: pointer;
+        }
+
+        .ampm button.on {
             background: var(--primary-color);
-            border-color: var(--primary-color);
-            color: var(--text-primary-color, #fff);
+            color: var(--tov-on-accent);
+        }
+
+        .panel-foot {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 8px;
+            font-size: 12px;
+            color: var(--tov-muted);
+        }
+
+        .seg {
+            display: flex;
+            background: var(--tov-fill-strong);
+            border-radius: 20px;
+            padding: 3px;
+            gap: 2px;
+        }
+
+        .seg button {
+            all: unset;
+            flex: 1;
+            text-align: center;
+            font-size: 13px;
+            font-weight: 500;
+            color: var(--tov-muted);
+            padding: 8px 2px;
+            border-radius: 17px;
+            cursor: pointer;
+        }
+
+        .seg button.on {
+            background: var(--primary-color);
+            color: var(--tov-on-accent);
         }
 
         .custom-interval-row {
             display: flex;
             align-items: center;
             gap: 10px;
-            flex-wrap: wrap;
-            font-size: 14px;
-            color: var(--primary-text-color);
+            font-size: 15px;
         }
 
-        select.unit-select {
-            box-sizing: border-box;
-            font-family: inherit;
-            font-size: 14px;
-            color: var(--primary-text-color);
-            background: rgba(var(--rgb-primary-text-color, 0, 0, 0), 0.06);
-            border: none;
-            border-radius: 100px;
-            padding: 8px 14px;
-            outline: none;
-            cursor: pointer;
-        }
-
-        .repeat-from-caption {
-            font-size: 12px;
-            color: var(--secondary-text-color);
-            line-height: 1.5;
-            margin: 0;
-        }
-
-        .repeat-summary {
+        .stepper {
             display: flex;
             align-items: center;
-            gap: 8px;
-            font-size: 13px;
-            color: var(--primary-color);
-            background: rgba(var(--rgb-primary-color, 3, 169, 244), 0.1);
-            border-radius: 10px;
-            padding: 8px 12px;
+            background: var(--tov-fill-strong);
+            border-radius: 20px;
+            padding: 3px;
         }
 
-        .repeat-summary svg {
-            width: 15px;
-            height: 15px;
-            flex: none;
-            fill: currentColor;
-        }
-
-        .calendar-toggle {
-            flex: none;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            width: 28px;
-            height: 28px;
-            margin-inline-start: 4px;
-            border: none;
+        .stepper button {
+            all: unset;
+            width: 32px;
+            height: 32px;
             border-radius: 50%;
-            background: none;
-            padding: 0;
-            color: var(--secondary-text-color);
+            display: grid;
+            place-items: center;
+            color: var(--primary-text-color);
             cursor: pointer;
         }
 
-        .calendar-toggle:hover {
-            background: rgba(var(--rgb-primary-text-color, 0, 0, 0), 0.06);
+        .stepper input {
+            all: unset;
+            width: 36px;
+            text-align: center;
+            font-family: inherit;
+            font-size: 16px;
+            font-weight: 500;
+            color: var(--primary-text-color);
+            font-variant-numeric: tabular-nums;
         }
 
-        .calendar-toggle svg {
-            width: 18px;
-            height: 18px;
-            fill: currentColor;
-        }
-
-        .date-picker-panel {
-            margin: 0 0 16px;
-            padding: 12px;
-            border: 1px solid var(--divider-color);
-            border-radius: 8px;
-            font-family: Roboto, "Noto Sans", sans-serif;
-        }
-
-        .date-picker-header {
-            display: flex;
+        .selwrap {
+            position: relative;
+            display: inline-flex;
             align-items: center;
-            justify-content: space-between;
-            margin-bottom: 8px;
-            font-size: 14px;
+        }
+
+        .selwrap select {
+            appearance: none;
+            font-family: inherit;
+            font-size: 15px;
+            color: var(--primary-text-color);
+            background: var(--tov-fill-strong);
+            border: 0;
+            border-radius: 20px;
+            padding: 9px 34px 9px 16px;
+            cursor: pointer;
+        }
+
+        .selwrap .ic {
+            position: absolute;
+            right: 10px;
+            width: 16px;
+            height: 16px;
+            color: var(--tov-muted);
+            pointer-events: none;
+        }
+
+        .next-label {
+            font-size: 12px;
+            color: var(--tov-muted);
+        }
+
+        .next-options {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 8px;
+        }
+
+        .next-option {
+            all: unset;
+            box-sizing: border-box;
+            display: flex;
+            flex-direction: column;
+            gap: 3px;
+            padding: 10px 12px;
+            border-radius: 12px;
+            background: var(--tov-fill-strong);
+            cursor: pointer;
+        }
+
+        .next-option.on {
+            background: var(--tov-accent-wash);
+            box-shadow: inset 0 0 0 1.5px var(--primary-color);
+        }
+
+        .next-option .kind {
+            font-size: 13px;
             font-weight: 500;
             color: var(--primary-text-color);
         }
 
-        .date-picker-nav {
-            border: none;
-            background: none;
-            padding: 4px 10px;
-            border-radius: 4px;
-            font-size: 16px;
-            color: var(--secondary-text-color);
-            cursor: pointer;
-        }
-
-        .date-picker-nav:hover {
-            background: rgba(var(--rgb-primary-text-color, 0, 0, 0), 0.06);
-        }
-
-        .date-picker-grid {
-            display: grid;
-            grid-template-columns: repeat(7, 1fr);
-            gap: 2px;
-        }
-
-        .date-picker-weekday {
-            text-align: center;
-            font-size: 11px;
-            color: var(--secondary-text-color);
-            padding: 4px 0;
-        }
-
-        .date-picker-day {
-            border: none;
-            background: none;
-            font-family: inherit;
-            font-size: 13px;
+        .next-option .date {
+            font-size: 17px;
+            font-weight: 500;
             color: var(--primary-text-color);
-            padding: 6px 0;
+        }
+
+        .next-option.on .date {
+            color: var(--primary-color);
+        }
+
+        .next-option .why {
+            font-size: 12px;
+            line-height: 16px;
+            color: var(--tov-muted);
+        }
+
+        .day-card {
+            padding: 14px 16px;
+            border-radius: 14px;
+            background: var(--tov-fill);
+            font-size: 13px;
+            line-height: 19px;
+            color: var(--tov-muted);
+            display: flex;
+            gap: 12px;
+        }
+
+        .day-card .ic {
+            color: var(--primary-color);
+        }
+
+        .day-card b {
+            color: var(--primary-text-color);
+            font-weight: 500;
+        }
+
+        .details {
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+        }
+
+        .chips {
+            display: flex;
+            flex-wrap: wrap;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .chip {
+            display: inline-flex;
+            align-items: center;
+            gap: 2px;
+            height: 32px;
+            padding: 0 4px 0 12px;
+            border: 1px solid var(--divider-color);
+            border-radius: 8px;
+            font-size: 14px;
+            color: var(--primary-text-color);
+        }
+
+        .chip button {
+            all: unset;
+            width: 24px;
+            height: 24px;
+            display: grid;
+            place-items: center;
+            color: var(--tov-muted);
             border-radius: 50%;
             cursor: pointer;
         }
 
-        .date-picker-day:hover {
-            background: rgba(var(--rgb-primary-text-color, 0, 0, 0), 0.08);
+        .chip .ic {
+            width: 16px;
+            height: 16px;
         }
 
-        .date-picker-day.selected {
-            background: var(--primary-color);
-            color: var(--text-primary-color, #fff);
-        }
-
-        textarea {
-            resize: vertical;
-            min-height: 48px;
+        .tag-input {
+            all: unset;
+            box-sizing: border-box;
+            height: 32px;
+            min-width: 110px;
+            flex: 1;
+            padding: 0 10px;
+            border: 1px dashed var(--divider-color);
+            border-radius: 8px;
+            font-family: inherit;
+            font-size: 14px;
+            color: var(--primary-text-color);
         }
 
         .actions {
             display: flex;
             align-items: center;
+            gap: 8px;
             width: 100%;
         }
 
-        button {
-            font-family: Roboto, "Noto Sans", sans-serif;
-            font-size: 14px;
-            font-weight: 500;
-            text-transform: uppercase;
-            border: none;
-            background: none;
-            cursor: pointer;
-            padding: 8px 12px;
-            border-radius: 4px;
-            color: var(--primary-color);
+        .actions .spacer {
+            flex: 1;
         }
 
-        button.destructive {
+        button.text-btn {
+            all: unset;
+            font-family: inherit;
+            font-size: 14px;
+            font-weight: 500;
+            padding: 10px 14px;
+            border-radius: 20px;
+            color: var(--primary-color);
+            cursor: pointer;
+            white-space: nowrap;
+        }
+
+        button.text-btn.small {
+            padding: 6px 10px;
+        }
+
+        button.text-btn.destructive {
             color: var(--error-color);
-            margin-inline-end: auto;
+        }
+
+        button.filled-btn {
+            all: unset;
+            font-family: inherit;
+            font-size: 14px;
+            font-weight: 500;
+            padding: 10px 22px;
+            border-radius: 20px;
+            background: var(--primary-color);
+            color: var(--tov-on-accent);
+            cursor: pointer;
+        }
+
+        button.text-btn:disabled,
+        button.filled-btn:disabled {
+            opacity: 0.4;
+            cursor: default;
         }
 
         .confirm-delete {
@@ -2319,33 +2739,21 @@ TodoItemDialog.styles = i`
             flex-wrap: wrap;
             gap: 8px;
             width: 100%;
-            font-family: Roboto, "Noto Sans", sans-serif;
             font-size: 14px;
             color: var(--primary-text-color);
         }
 
-        /* flex-basis 100% forces this onto its own row rather than
-           shrinking, so on a narrow (phone) dialog the Cancel/Delete
-           buttons wrap onto the next line instead of ever being pushed
-           out past the dialog's edge - a real risk with the plain
-           flex:1 this used to have, since nothing capped how wide the
-           text could push. */
         .confirm-delete span {
             flex: 1 1 100%;
             min-width: 0;
         }
 
-        .field-hint {
-            font-size: 12px;
-            color: var(--error-color);
-            margin-top: -8px;
-            margin-bottom: 16px;
-            font-family: Roboto, "Noto Sans", sans-serif;
-        }
-
-        button:disabled {
-            opacity: 0.4;
-            cursor: default;
+        button:focus-visible,
+        input:focus-visible,
+        select:focus-visible,
+        textarea:focus-visible {
+            outline: 2px solid var(--primary-color);
+            outline-offset: 2px;
         }
     `;
 __decorateClass([
@@ -2380,13 +2788,16 @@ __decorateClass([
 ], TodoItemDialog.prototype, "confirmingDelete", 2);
 __decorateClass([
   r5()
-], TodoItemDialog.prototype, "dueDay", 2);
+], TodoItemDialog.prototype, "openRow", 2);
 __decorateClass([
   r5()
-], TodoItemDialog.prototype, "dueMonth", 2);
+], TodoItemDialog.prototype, "optionsOpen", 2);
 __decorateClass([
   r5()
-], TodoItemDialog.prototype, "dueYear", 2);
+], TodoItemDialog.prototype, "calendarYear", 2);
+__decorateClass([
+  r5()
+], TodoItemDialog.prototype, "calendarMonth", 2);
 __decorateClass([
   r5()
 ], TodoItemDialog.prototype, "dueHour12", 2);
@@ -2398,13 +2809,13 @@ __decorateClass([
 ], TodoItemDialog.prototype, "dueAmPm", 2);
 __decorateClass([
   r5()
-], TodoItemDialog.prototype, "datePickerOpen", 2);
+], TodoItemDialog.prototype, "tagDraft", 2);
 __decorateClass([
   r5()
-], TodoItemDialog.prototype, "datePickerViewYear", 2);
+], TodoItemDialog.prototype, "intervalDraft", 2);
 __decorateClass([
   r5()
-], TodoItemDialog.prototype, "datePickerViewMonth", 2);
+], TodoItemDialog.prototype, "repeatCustom", 2);
 TodoItemDialog = __decorateClass([
   t3("todo-overlay-item-dialog")
 ], TodoItemDialog);
@@ -2595,7 +3006,7 @@ var TodoSaveLoadDialog = class extends i4 {
   render() {
     const isSave = this.action === "save";
     return b2`
-            <ha-dialog open .heading=${isSave ? "Save list" : "Load list"} @closed=${this.close}>
+            <ha-dialog open header-title=${isSave ? "Save list" : "Load list"} @closed=${this.close}>
                 ${isSave ? b2`
                             <div class="field">
                                 <label for="save-load-name">Name</label>
@@ -3200,7 +3611,7 @@ var BELL_ICON = b2`
         ></path>
     </svg>
 `;
-var REPEAT_ICON2 = b2`
+var REPEAT_ICON = b2`
     <svg class="repeat-icon" viewBox="0 0 24 24">
         <path
             d="M17,17H7V14L3,18L7,22V19H19V13H17M7,7H17V10L21,6L17,2V5H5V11H7V7Z"
@@ -3901,7 +4312,7 @@ var TodoTreeItem = class extends i4 {
                                                                 >
                                                                     ${CLOCK_ICON}${due.label}
                                                                     ${this.item.trigger_on_due ? BELL_ICON : ""}
-                                                                    ${this.item.repeat_interval ? b2`<span title="Repeats">${REPEAT_ICON2}</span>` : ""}
+                                                                    ${this.item.repeat_interval ? b2`<span title="Repeats">${REPEAT_ICON}</span>` : ""}
                                                                 </span>
                                                             ` : ""}
                                                     ${this.item.tags.map((tag) => b2`<span class="tag-chip">${tag}</span>`)}
@@ -4937,7 +5348,7 @@ var TodoConfirmDialog = class extends i4 {
   }
   render() {
     return b2`
-            <ha-dialog open .heading=${this.heading} @closed=${this.close}>
+            <ha-dialog open header-title=${this.heading} @closed=${this.close}>
                 <p>${this.message}</p>
                 <div class="actions" slot="footer">
                     <button @click=${this.close}>Cancel</button>
@@ -6322,7 +6733,7 @@ var TodoOverlayList = class extends i4 {
 
             ${this.dialogMode ? b2`
                         <todo-overlay-item-dialog
-                            .heading=${this.dialogMode === "edit" ? "Edit item" : "Add item"}
+                            .heading=${this.dialogMode === "edit" ? "Edit" : "New"}
                             .value=${this.dialogFormValue}
                             .fieldSupport=${this.fieldSupport}
                             ?entityIsLinked=${!!this.list?.link_id}
