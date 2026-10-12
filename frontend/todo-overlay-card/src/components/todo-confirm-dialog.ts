@@ -80,7 +80,7 @@ export class TodoConfirmDialog extends LitElement {
 
     render() {
         return html`
-            <ha-dialog open .heading=${this.heading} @closed=${this.close}>
+            <ha-dialog open header-title=${this.heading} @closed=${this.close}>
                 <p>${this.message}</p>
                 <div class="actions" slot="footer">
                     <button @click=${this.close}>Cancel</button>

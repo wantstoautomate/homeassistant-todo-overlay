@@ -1,29 +1,38 @@
-import {LitElement, html, css} from "lit";
+import {LitElement, html, css, svg, nothing, type SVGTemplateResult} from "lit";
 import {customElement, property, state} from "lit/decorators.js";
 import {classMap} from "lit/directives/class-map.js";
 
 import type {PinType, RepeatFrom, RepeatUnit} from "../models";
 import {WEEKDAY_NAMES} from "../models";
+import {addDays, formatShortDate, nextOccurrence, parseIsoDate, startOfDay, toIsoDate} from "../recurrence";
 
-const CALENDAR_ICON = html`
-    <svg viewBox="0 0 24 24">
-        <path d="M19,19H5V8H19M16,1V3H8V1H6V3H5C3.89,3 3,3.89 3,5V19A2,2 0 0,0 5,21H19A2,2 0 0,0 21,19V5C21,3.89 20.1,3 19,3H18V1M17,12H12V17H17V12Z"></path>
-    </svg>
-`;
+const I_CAL = svg`<rect x="3.5" y="5" width="17" height="15" rx="2"></rect><path d="M3.5 9.5h17M8 3v4M16 3v4"></path>`;
+const I_CLOCK = svg`<circle cx="12" cy="12" r="8.5"></circle><path d="M12 7.5V12l3 2"></path>`;
+const I_REPEAT = svg`<path d="M4 11V9a3 3 0 0 1 3-3h12M16 3l3 3-3 3M20 13v2a3 3 0 0 1-3 3H5M8 21l-3-3 3-3"></path>`;
+const I_BELL = svg`<path d="M6 16v-5a6 6 0 1 1 12 0v5l1.5 2h-15z"></path><path d="M10 20.5a2 2 0 0 0 4 0"></path>`;
+const I_CHEV_R = svg`<path d="M9 6l6 6-6 6"></path>`;
+const I_CHEV_L = svg`<path d="M15 6l-6 6 6 6"></path>`;
+const I_UP = svg`<path d="M6 15l6-6 6 6"></path>`;
+const I_DOWN = svg`<path d="M6 9l6 6 6-6"></path>`;
+const I_X = svg`<path d="M7 7l10 10M17 7L7 17"></path>`;
+const I_PLUS = svg`<path d="M12 5v14M5 12h14"></path>`;
+const I_MINUS = svg`<path d="M6 12h12"></path>`;
+const I_SLIDERS = svg`<path d="M4 7h10M18 7h2M4 17h4M12 17h8"></path><circle cx="16" cy="7" r="2"></circle><circle cx="10" cy="17" r="2"></circle>`;
+const I_LINK = svg`<path d="M10 14a4 4 0 0 0 5.66 0l3-3a4 4 0 0 0-5.66-5.66l-1 1M14 10a4 4 0 0 0-5.66 0l-3 3a4 4 0 0 0 5.66 5.66l1-1"></path>`;
+const I_SHIELD = svg`<path d="M12 3l7 3v6c0 4.5-3 7.5-7 9-4-1.5-7-4.5-7-9V6z"></path>`;
+const I_CHECK = svg`<circle cx="12" cy="12" r="8.5"></circle><path d="M8 12.5l2.5 2.5 5.5-6"></path>`;
 
-const REPEAT_ICON = html`
-    <svg viewBox="0 0 24 24">
-        <path d="M17,17H7V14L3,18L7,22V19H19V13H17M7,7H17V10L21,6L17,2V5H5V11H7V7Z"></path>
-    </svg>
-`;
-
-// 1-12 (hour) or 0-59/step 15 (minute) - wraps rather than clamping, so
-// pressing "+" past the top end (e.g. 12 -> 1, 45 -> 00) behaves like a
-// real clock instead of getting stuck at the boundary.
-function wrapValue(current: number, delta: number, min: number, max: number): number {
-    const span = max - min + 1;
-    return ((current - min + delta) % span + span) % span + min;
+function icon(body: SVGTemplateResult, extraClass = "") {
+    return html`<svg class="ic ${extraClass}" viewBox="0 0 24 24" aria-hidden="true">${body}</svg>`;
 }
+
+const MONTH_NAMES = [
+    "January", "February", "March", "April", "May", "June",
+    "July", "August", "September", "October", "November", "December",
+];
+
+// Monday-first, matching the backend's own weekday numbering (see models.ts).
+const CALENDAR_WEEKDAY_LABELS = ["M", "T", "W", "T", "F", "S", "S"];
 
 const REPEAT_PRESETS: Record<"daily" | "weekly" | "monthly", {interval: number; unit: RepeatUnit}> = {
     daily: {interval: 1, unit: "days"},
@@ -31,69 +40,55 @@ const REPEAT_PRESETS: Record<"daily" | "weekly" | "monthly", {interval: number; 
     monthly: {interval: 1, unit: "months"},
 };
 
-type RepeatMode = "never" | "daily" | "weekly" | "monthly" | "custom";
-
-const MONTH_NAMES = [
-    "January", "February", "March", "April", "May", "June",
-    "July", "August", "September", "October", "November", "December",
+const REPEAT_MODES: Array<[RepeatMode, string]> = [
+    ["never", "Never"],
+    ["daily", "Daily"],
+    ["weekly", "Weekly"],
+    ["monthly", "Monthly"],
+    ["custom", "Custom"],
 ];
 
-const WEEKDAY_LABELS = ["S", "M", "T", "W", "T", "F", "S"];
+const SINGULAR_UNIT: Record<RepeatUnit, string> = {days: "day", weeks: "week", months: "month"};
 
-function daysInMonth(year: number, month0: number): number {
-    return new Date(year, month0 + 1, 0).getDate();
+type RepeatMode = "never" | "daily" | "weekly" | "monthly" | "custom";
+type OpenRow = "date" | "time" | "repeat" | null;
+
+// Wraps rather than clamps, so "+" past 12 goes to 1 (and 45 + 15 to 00) like a real clock.
+function wrapValue(current: number, delta: number, min: number, max: number): number {
+    const span = max - min + 1;
+    return ((current - min + delta) % span + span) % span + min;
 }
 
-function firstWeekdayOfMonth(year: number, month0: number): number {
-    return new Date(year, month0, 1).getDay();
+function digitsOnly(raw: string, maxLen: number): string {
+    return raw.replace(/\D/g, "").slice(0, maxLen);
+}
+
+function parseTags(raw: string): string[] {
+    return raw.split(",").map(tag => tag.trim()).filter(tag => tag.length > 0);
 }
 
 export interface TodoItemFormValue {
     title: string;
     quantity: string;
+    // Comma-separated - the dialog edits it as chips, but the save pipeline
+    // (todo-overlay-list.ts's onDialogSave) still splits this string.
     tags: string;
     description: string;
+    // "YYYY-MM-DD", or "" for no due date.
     dueDate: string;
+    // 24-hour "HH:MM", or "" for no time.
     dueTime: string;
     triggerOnDue: boolean;
-    // "" means unpinned - a plain <select> value, not PinType | null,
-    // so it can sit in the same string-keyed updateField() path every
-    // other text field already goes through.
+    // "" means a normal item (unpinned).
     pinType: "" | PinType;
-    // Only meaningful alongside pinType === "day" - a plain <select>
-    // value ("" | "0".."6", see models.ts's own WEEKDAY_NAMES), same
-    // "fits the string-keyed updateField() path" reasoning as pinType
-    // above. onDialogSave converts this to a real number (or undefined)
-    // before sending it - see its own comment for why the title field
-    // is disabled once this is anything but "".
+    // "" | "0".."6" (Monday..Sunday), only meaningful alongside pinType "day".
     dayWeekday: string;
-    // Mirrors this item onto another item elsewhere - possibly on a
-    // completely different todo.* entity (see the backend's own
-    // item_links.py) - e.g. "Tent" here mirrored onto "Brodie" on a
-    // separate, cross-instance-linked "Shared" list. Ticking this
-    // checkbox for the first time on an unlinked item creates that
-    // mirror on save; unticking it on an already-linked item severs
-    // the pairing (both items survive, independently).
     linked: boolean;
-    // Only ever read on save when linked just flipped false -> true
-    // (see TodoOverlayList's own onDialogSave) - overrides the
-    // configured default destination for THIS item only, uid or title
-    // (same convention as every other "item" field), always within
-    // whichever list auto-resolves as the link target. "" means "use
-    // the configured default" (or the target list's own root, if
-    // there isn't one).
+    // Only read when linked flips false -> true: uid or title of the parent
+    // to file the new mirror under; "" uses the configured default.
     linkTarget: string;
-    // Off by default - opts this item OUT of normal deletion everywhere
-    // (the Delete button below, the mobile row's own swipe-to-delete,
-    // clear completed, clear all - see the backend's own delete_item
-    // docstring). Meant for anchor items a whole structure depends on
-    // (e.g. a "person" pin like "Brodie"/"Anna" a shared list's own
-    // organization relies on).
     deleteProtected: boolean;
-    // Recurrence - null/"" means "doesn't repeat". All-or-nothing (see
-    // the backend's own set_repeat) and only meaningful alongside a due
-    // date. See RepeatMode/repeatMode for how this maps onto the
-    // preset chips.
+    // null/"" means "doesn't repeat". All-or-nothing, and needs a due date.
     repeatInterval: number | null;
     repeatUnit: "" | RepeatUnit;
     repeatFrom: "" | RepeatFrom;
@@ -123,459 +118,768 @@ export const EMPTY_FORM_VALUE: TodoItemFormValue = {
     repeatFrom: "",
 };
 
-// Digits only, capped to maxLen - shared by every day/month/year/hour/
-// minute segment input below, so a paste ("05/03/2026") or a stray
-// non-numeric character can't end up baked into the field.
-function digitsOnly(raw: string, maxLen: number): string {
-    return raw.replace(/\D/g, "").slice(0, maxLen);
-}
-
-// The dialog only knows about the fields above today. Extending it for a
-// new data field later means: add it to TodoItemFormValue and
-// TodoItemDialogFieldSupport, add a matching <input>/<textarea> block in
-// render() gated on the new support flag, and read it back out wherever
-// TodoOverlayCard handles "dialog-save". Nothing else about this component
-// needs to change shape for that.
+// Everything here is plain buttons/inputs/selects, never ha-date-input/
+// ha-time-input or a native date/time input: the HA ones aren't reliably
+// registered in a third-party card's context (live-confirmed), and a native
+// date input's display order follows the browser locale.
 @customElement("todo-overlay-item-dialog")
 export class TodoItemDialog extends LitElement {
 
     static styles = css`
-        .field {
-            display: flex;
-            flex-direction: column;
-            gap: 4px;
-            margin-bottom: 16px;
+        :host {
+            --tov-fill: rgba(var(--rgb-primary-text-color, 0, 0, 0), 0.05);
+            --tov-fill-strong: rgba(var(--rgb-primary-text-color, 0, 0, 0), 0.09);
+            --tov-hover: rgba(var(--rgb-primary-text-color, 0, 0, 0), 0.06);
+            --tov-accent-wash: rgba(var(--rgb-primary-color, 3, 169, 244), 0.14);
+            --tov-on-accent: var(--text-primary-color, #fff);
+            --tov-muted: var(--secondary-text-color);
             font-family: Roboto, "Noto Sans", sans-serif;
         }
 
-        .due-row {
-            display: flex;
-            flex-wrap: wrap;
-            gap: 16px;
+        /* Widened only when there's a second column to fill - see .cols. */
+        ha-dialog.wide {
+            --ha-dialog-width-md: 760px;
         }
 
-        .due-row .field {
-            flex: 1;
-            min-width: 140px;
+        .ic {
+            width: 20px;
+            height: 20px;
+            fill: none;
+            stroke: currentColor;
+            stroke-width: 1.8;
+            stroke-linecap: round;
+            stroke-linejoin: round;
+            flex: none;
+        }
+
+        .dialog-title {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            min-width: 0;
+        }
+
+        .typesel {
+            position: relative;
+            display: inline-flex;
+            align-items: center;
+        }
+
+        .typesel select {
+            appearance: none;
+            font-family: inherit;
+            font-size: 14px;
+            font-weight: 500;
+            color: var(--primary-text-color);
+            background: var(--tov-fill);
+            border: 1px solid var(--divider-color);
+            border-radius: 16px;
+            padding: 5px 28px 5px 12px;
+            cursor: pointer;
+        }
+
+        .typesel .ic {
+            position: absolute;
+            right: 8px;
+            width: 16px;
+            height: 16px;
+            pointer-events: none;
+            color: var(--tov-muted);
+        }
+
+        .visually-hidden {
+            position: absolute;
+            width: 1px;
+            height: 1px;
+            overflow: hidden;
+            clip: rect(0 0 0 0);
+            white-space: nowrap;
+        }
+
+        /* Two columns once the dialog itself is wide enough, driven by its
+           own width rather than the viewport, so a narrow phone or a split
+           screen always gets the single stacked column. */
+        .layout {
+            container-type: inline-size;
+        }
+
+        .cols {
+            display: flex;
+            flex-direction: column;
+        }
+
+        @container (min-width: 600px) {
+            /* The trailing 1fr row soaks up When's extra height, so the
+               left column stays packed instead of spreading out. */
+            .cols.two {
+                display: grid;
+                grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+                grid-template-rows: auto auto auto 1fr;
+                column-gap: 24px;
+                align-items: start;
+            }
+
+            .cols.two .area-item { grid-column: 1; grid-row: 1; }
+            .cols.two .area-details { grid-column: 1; grid-row: 2; }
+            .cols.two .area-options { grid-column: 1; grid-row: 3; }
+            .cols.two .area-when { grid-column: 2; grid-row: 1 / span 4; }
+            .cols.two .area-when > .sec:first-child { margin-top: 0; }
+        }
+
+        .sec {
+            font-size: 12px;
+            font-weight: 700;
+            letter-spacing: 0.08em;
+            text-transform: uppercase;
+            color: var(--tov-muted);
+            margin: 20px 0 8px;
+        }
+
+        .field {
+            background: var(--tov-fill);
+            border-radius: 6px 6px 0 0;
+            border-bottom: 1px solid var(--divider-color);
+            padding: 7px 12px;
+            display: flex;
+            flex-direction: column;
+            gap: 2px;
+            min-width: 0;
+        }
+
+        .field:focus-within {
+            border-bottom: 2px solid var(--primary-color);
+            padding-bottom: 6px;
+        }
+
+        .field label {
+            font-size: 12px;
+            color: var(--tov-muted);
+        }
+
+        .field input,
+        .field textarea {
+            all: unset;
+            box-sizing: border-box;
+            width: 100%;
+            font-family: inherit;
+            font-size: 16px;
+            line-height: 22px;
+            color: var(--primary-text-color);
+        }
+
+        .field textarea {
+            min-height: 44px;
+            white-space: pre-wrap;
+        }
+
+        .field input:disabled {
+            color: var(--primary-text-color);
+            opacity: 0.8;
         }
 
         .title-row {
             display: flex;
-            gap: 16px;
+            gap: 12px;
         }
 
         .title-row .field.title {
-            flex: 2;
-            min-width: 0;
+            flex: 1;
         }
 
         .title-row .field.quantity {
-            flex: 1;
-            min-width: 90px;
+            width: 100px;
+            flex: none;
         }
 
-        .complete-toggle {
+        .group {
+            background: var(--tov-fill);
+            border-radius: 14px;
+            overflow: hidden;
+        }
+
+        .row {
+            all: unset;
+            box-sizing: border-box;
+            width: 100%;
             display: flex;
             align-items: center;
-            gap: 8px;
-            margin-bottom: 16px;
-            font-family: Roboto, "Noto Sans", sans-serif;
-            font-size: 14px;
+            gap: 14px;
+            min-height: 52px;
+            padding: 8px 14px 8px 16px;
+            border-top: 1px solid var(--divider-color);
+            cursor: pointer;
             color: var(--primary-text-color);
         }
 
-        .complete-toggle ha-checkbox {
-            margin-inline-start: -12px;
+        .group > :first-child {
+            border-top: 0;
         }
 
-        label {
+        .row:hover:not(:disabled):not(.off) {
+            background: var(--tov-hover);
+        }
+
+        .row .lbl {
+            flex: 1;
+            min-width: 0;
+            display: flex;
+            flex-direction: column;
+            font-size: 15px;
+        }
+
+        .row .sub {
             font-size: 12px;
-            color: var(--secondary-text-color);
-        }
-
-        input,
-        textarea {
-            box-sizing: border-box;
-            width: 100%;
-            font-family: inherit;
-            font-size: 16px;
-            color: var(--primary-text-color);
-            background: none;
-            border: none;
-            border-bottom: 1px solid var(--divider-color);
-            padding: 8px 0;
-            outline: none;
-            color-scheme: light dark;
-        }
-
-        input:focus,
-        textarea:focus {
-            border-bottom: 2px solid var(--primary-color);
-            padding-bottom: 7px;
-        }
-
-        select.pin-type-select {
-            box-sizing: border-box;
-            width: 100%;
-            font-family: inherit;
-            font-size: 16px;
-            color: var(--primary-text-color);
-            background: none;
-            border: none;
-            border-bottom: 1px solid var(--divider-color);
-            padding: 8px 0;
-            outline: none;
-        }
-
-        select.pin-type-select:focus {
-            border-bottom: 2px solid var(--primary-color);
-            padding-bottom: 7px;
-        }
-
-        .field-hint.pin-type-hint {
+            color: var(--tov-muted);
             margin-top: 2px;
         }
 
-        /* Day/month/year and hour/minute, always in that fixed order
-           regardless of browser or OS locale - see the .dueDay field's
-           own doc comment for why this isn't a single native
-           <input type="date">/<input type="time"> or ha-date-input/
-           ha-time-input. */
-        .dmy-row,
-        .hm-row {
-            display: flex;
-            align-items: baseline;
-            gap: 4px;
+        .row .val {
+            font-size: 14px;
+            color: var(--tov-muted);
+            text-align: right;
         }
 
-        input.segment {
-            width: 2.2em;
+        .row .val.late {
+            color: var(--error-color);
+        }
+
+        /* A one-line label with a summary that truncates, rather than the
+           label wrapping to make room for the summary. */
+        .row.summary .lbl {
             flex: none;
-            text-align: center;
-            /* Hides the native up/down spinner some browsers add to a
-               numeric-inputmode text field - these segments are typed
-               into, not incremented. */
-            -moz-appearance: textfield;
+            white-space: nowrap;
         }
 
-        input.segment.year {
-            width: 3.6em;
+        .row.summary .val {
+            flex: 1;
+            min-width: 0;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
         }
 
-        .segment-sep {
-            color: var(--secondary-text-color);
-            font-size: 16px;
+        .row .ic {
+            color: var(--tov-muted);
         }
 
-        /* Stepper: a rounded pill with ± buttons flanking a
-           tap-to-type value - see wrapValue's own comment for why
-           the buttons wrap rather than clamp. Shared by the due-time
-           hour/minute fields and the repeat interval field below. */
-        .stepper {
-            display: flex;
-            align-items: center;
-            background: rgba(var(--rgb-primary-text-color, 0, 0, 0), 0.06);
-            border-radius: 100px;
-            padding: 4px;
-            gap: 2px;
+        .row.open .val,
+        .row.open .ic {
+            color: var(--primary-color);
         }
 
-        .stepper button {
-            width: 30px;
-            height: 30px;
-            flex: none;
-            border-radius: 50%;
-            border: none;
-            background: transparent;
-            color: var(--primary-text-color);
-            font-size: 16px;
-            line-height: 1;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            cursor: pointer;
-            font-family: inherit;
-            padding: 0;
-            text-transform: none;
+        .row:disabled,
+        .row.off {
+            cursor: default;
+            color: var(--disabled-text-color, var(--tov-muted));
         }
 
-        .stepper button:hover {
-            background: rgba(var(--rgb-primary-text-color, 0, 0, 0), 0.1);
+        .row:disabled .ic,
+        .row.off .ic {
+            opacity: 0.5;
         }
 
-        .stepper-value {
-            box-sizing: border-box;
-            width: 2.2em;
-            flex: none;
-            text-align: center;
-            font-size: 16px;
-            font-weight: 500;
-            font-variant-numeric: tabular-nums;
-            padding: 6px 0;
-            background: none;
-            border: none;
-            outline: none;
-            color: var(--primary-text-color);
+        .chev {
+            transition: transform 0.15s;
         }
 
-        .stepper-value.interval {
-            width: 2.6em;
+        .row.open .chev,
+        .chev.down {
+            transform: rotate(90deg);
         }
 
-        .hm-row .stepper-colon {
-            color: var(--secondary-text-color);
-            font-size: 16px;
-            font-weight: 500;
-        }
-
-        .segmented {
-            display: inline-flex;
-            background: rgba(var(--rgb-primary-text-color, 0, 0, 0), 0.06);
-            border-radius: 100px;
-            padding: 3px;
-            gap: 2px;
-            margin-inline-start: 4px;
-        }
-
-        .segmented button {
-            border: none;
-            background: transparent;
-            font-family: inherit;
-            font-size: 12px;
-            font-weight: 500;
-            text-transform: none;
-            color: var(--secondary-text-color);
-            padding: 7px 14px;
-            border-radius: 100px;
-            cursor: pointer;
-        }
-
-        .segmented button.active {
-            background: var(--primary-color);
-            color: var(--text-primary-color, #fff);
-        }
-
-        .repeat-section {
-            border-top: 1px solid var(--divider-color);
-            padding-top: 16px;
-            margin-bottom: 16px;
+        .panel {
+            padding: 4px 16px 16px;
             display: flex;
             flex-direction: column;
             gap: 12px;
-            font-family: Roboto, "Noto Sans", sans-serif;
         }
 
-        .repeat-label-row {
-            display: flex;
+        input.switch {
+            appearance: none;
+            width: 36px;
+            height: 20px;
+            border-radius: 10px;
+            background: var(--tov-fill-strong);
+            box-shadow: inset 0 0 0 1px var(--divider-color);
+            position: relative;
+            margin: 0;
+            cursor: pointer;
+            flex: none;
+        }
+
+        input.switch::after {
+            content: "";
+            position: absolute;
+            top: 3px;
+            left: 3px;
+            width: 14px;
+            height: 14px;
+            border-radius: 50%;
+            background: var(--tov-muted);
+            transition: left 0.15s;
+        }
+
+        input.switch:checked {
+            background: var(--primary-color);
+            box-shadow: none;
+        }
+
+        input.switch:checked::after {
+            left: 19px;
+            background: var(--tov-on-accent);
+        }
+
+        input.switch:disabled {
+            cursor: default;
+            opacity: 0.5;
+        }
+
+        .pill {
+            all: unset;
+            display: inline-flex;
             align-items: center;
-            gap: 8px;
+            gap: 6px;
+            height: 34px;
+            padding: 0 14px;
+            border-radius: 17px;
+            background: var(--tov-fill-strong);
+            font-size: 14px;
+            color: var(--primary-text-color);
+            cursor: pointer;
         }
 
-        .repeat-label-row label {
-            font-size: 12px;
-            color: var(--secondary-text-color);
+        .pill.small {
+            height: 32px;
+            padding: 0 12px;
+            font-size: 13px;
         }
 
-        .repeat-label-row svg {
-            width: 15px;
-            height: 15px;
-            fill: var(--secondary-text-color);
+        .pill.on {
+            background: var(--tov-accent-wash);
+            color: var(--primary-color);
+            box-shadow: inset 0 0 0 1px var(--primary-color);
         }
 
-        .chip-row {
+        .pills {
             display: flex;
             flex-wrap: wrap;
             gap: 8px;
         }
 
-        .chip {
-            border: 1px solid var(--divider-color);
-            background: none;
-            color: var(--primary-text-color);
-            font-family: inherit;
-            font-size: 13px;
+        .cal-head {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            font-size: 14px;
             font-weight: 500;
-            text-transform: none;
-            padding: 6px 14px;
-            border-radius: 100px;
+        }
+
+        .iconbtn {
+            all: unset;
+            width: 36px;
+            height: 36px;
+            border-radius: 50%;
+            display: grid;
+            place-items: center;
+            color: var(--tov-muted);
+            cursor: pointer;
+            flex: none;
+        }
+
+        .iconbtn:hover {
+            background: var(--tov-hover);
+        }
+
+        .cal-grid {
+            display: grid;
+            grid-template-columns: repeat(7, minmax(0, 1fr));
+            gap: 2px;
+        }
+
+        .cal-dow {
+            font-size: 11px;
+            color: var(--tov-muted);
+            text-align: center;
+            padding: 4px 0;
+        }
+
+        .cal-day {
+            all: unset;
+            height: 34px;
+            display: grid;
+            place-items: center;
+            font-size: 13px;
+            border-radius: 17px;
+            cursor: pointer;
+            color: var(--primary-text-color);
+        }
+
+        .cal-day:hover {
+            background: var(--tov-hover);
+        }
+
+        .cal-day.past {
+            color: var(--tov-muted);
+        }
+
+        .cal-day.today {
+            box-shadow: inset 0 0 0 1px var(--divider-color);
+        }
+
+        .cal-day.selected {
+            background: var(--primary-color);
+            color: var(--tov-on-accent);
+            font-weight: 500;
+            box-shadow: none;
+        }
+
+        .time-row {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 10px;
+        }
+
+        .spin {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 2px;
+        }
+
+        .spin button {
+            all: unset;
+            width: 76px;
+            height: 28px;
+            display: grid;
+            place-items: center;
+            color: var(--tov-muted);
+            border-radius: 8px;
             cursor: pointer;
         }
 
-        .chip:hover {
-            background: rgba(var(--rgb-primary-text-color, 0, 0, 0), 0.06);
+        .spin button:hover {
+            background: var(--tov-hover);
         }
 
-        .chip.active {
+        .spin input {
+            all: unset;
+            box-sizing: border-box;
+            width: 76px;
+            height: 58px;
+            text-align: center;
+            font-family: inherit;
+            font-size: 36px;
+            background: var(--tov-fill-strong);
+            border-radius: 12px;
+            color: var(--primary-text-color);
+            font-variant-numeric: tabular-nums;
+        }
+
+        .time-colon {
+            font-size: 36px;
+            color: var(--tov-muted);
+            padding-bottom: 4px;
+        }
+
+        .ampm {
+            display: flex;
+            flex-direction: column;
+            background: var(--tov-fill-strong);
+            border-radius: 12px;
+            padding: 3px;
+            gap: 2px;
+            margin-inline-start: 6px;
+        }
+
+        .ampm button {
+            all: unset;
+            width: 50px;
+            height: 26px;
+            line-height: 26px;
+            text-align: center;
+            font-size: 13px;
+            font-weight: 500;
+            color: var(--tov-muted);
+            border-radius: 9px;
+            cursor: pointer;
+        }
+
+        .ampm button.on {
             background: var(--primary-color);
-            border-color: var(--primary-color);
-            color: var(--text-primary-color, #fff);
+            color: var(--tov-on-accent);
+        }
+
+        .panel-foot {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 8px;
+            font-size: 12px;
+            color: var(--tov-muted);
+        }
+
+        .seg {
+            display: flex;
+            background: var(--tov-fill-strong);
+            border-radius: 20px;
+            padding: 3px;
+            gap: 2px;
+        }
+
+        .seg button {
+            all: unset;
+            flex: 1;
+            text-align: center;
+            font-size: 13px;
+            font-weight: 500;
+            color: var(--tov-muted);
+            padding: 8px 2px;
+            border-radius: 17px;
+            cursor: pointer;
+        }
+
+        .seg button.on {
+            background: var(--primary-color);
+            color: var(--tov-on-accent);
         }
 
         .custom-interval-row {
             display: flex;
             align-items: center;
             gap: 10px;
-            flex-wrap: wrap;
-            font-size: 14px;
-            color: var(--primary-text-color);
+            font-size: 15px;
         }
 
-        select.unit-select {
-            box-sizing: border-box;
-            font-family: inherit;
-            font-size: 14px;
-            color: var(--primary-text-color);
-            background: rgba(var(--rgb-primary-text-color, 0, 0, 0), 0.06);
-            border: none;
-            border-radius: 100px;
-            padding: 8px 14px;
-            outline: none;
-            cursor: pointer;
-        }
-
-        .repeat-from-caption {
-            font-size: 12px;
-            color: var(--secondary-text-color);
-            line-height: 1.5;
-            margin: 0;
-        }
-
-        .repeat-summary {
+        .stepper {
             display: flex;
             align-items: center;
-            gap: 8px;
-            font-size: 13px;
-            color: var(--primary-color);
-            background: rgba(var(--rgb-primary-color, 3, 169, 244), 0.1);
-            border-radius: 10px;
-            padding: 8px 12px;
+            background: var(--tov-fill-strong);
+            border-radius: 20px;
+            padding: 3px;
         }
 
-        .repeat-summary svg {
-            width: 15px;
-            height: 15px;
-            flex: none;
-            fill: currentColor;
-        }
-
-        .calendar-toggle {
-            flex: none;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            width: 28px;
-            height: 28px;
-            margin-inline-start: 4px;
-            border: none;
+        .stepper button {
+            all: unset;
+            width: 32px;
+            height: 32px;
             border-radius: 50%;
-            background: none;
-            padding: 0;
-            color: var(--secondary-text-color);
+            display: grid;
+            place-items: center;
+            color: var(--primary-text-color);
             cursor: pointer;
         }
 
-        .calendar-toggle:hover {
-            background: rgba(var(--rgb-primary-text-color, 0, 0, 0), 0.06);
+        .stepper input {
+            all: unset;
+            width: 36px;
+            text-align: center;
+            font-family: inherit;
+            font-size: 16px;
+            font-weight: 500;
+            color: var(--primary-text-color);
+            font-variant-numeric: tabular-nums;
         }
 
-        .calendar-toggle svg {
-            width: 18px;
-            height: 18px;
-            fill: currentColor;
-        }
-
-        .date-picker-panel {
-            margin: 0 0 16px;
-            padding: 12px;
-            border: 1px solid var(--divider-color);
-            border-radius: 8px;
-            font-family: Roboto, "Noto Sans", sans-serif;
-        }
-
-        .date-picker-header {
-            display: flex;
+        .selwrap {
+            position: relative;
+            display: inline-flex;
             align-items: center;
-            justify-content: space-between;
-            margin-bottom: 8px;
-            font-size: 14px;
+        }
+
+        .selwrap select {
+            appearance: none;
+            font-family: inherit;
+            font-size: 15px;
+            color: var(--primary-text-color);
+            background: var(--tov-fill-strong);
+            border: 0;
+            border-radius: 20px;
+            padding: 9px 34px 9px 16px;
+            cursor: pointer;
+        }
+
+        .selwrap .ic {
+            position: absolute;
+            right: 10px;
+            width: 16px;
+            height: 16px;
+            color: var(--tov-muted);
+            pointer-events: none;
+        }
+
+        .next-label {
+            font-size: 12px;
+            color: var(--tov-muted);
+        }
+
+        .next-options {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 8px;
+        }
+
+        .next-option {
+            all: unset;
+            box-sizing: border-box;
+            display: flex;
+            flex-direction: column;
+            gap: 3px;
+            padding: 10px 12px;
+            border-radius: 12px;
+            background: var(--tov-fill-strong);
+            cursor: pointer;
+        }
+
+        .next-option.on {
+            background: var(--tov-accent-wash);
+            box-shadow: inset 0 0 0 1.5px var(--primary-color);
+        }
+
+        .next-option .kind {
+            font-size: 13px;
             font-weight: 500;
             color: var(--primary-text-color);
         }
 
-        .date-picker-nav {
-            border: none;
-            background: none;
-            padding: 4px 10px;
-            border-radius: 4px;
-            font-size: 16px;
-            color: var(--secondary-text-color);
-            cursor: pointer;
-        }
-
-        .date-picker-nav:hover {
-            background: rgba(var(--rgb-primary-text-color, 0, 0, 0), 0.06);
-        }
-
-        .date-picker-grid {
-            display: grid;
-            grid-template-columns: repeat(7, 1fr);
-            gap: 2px;
-        }
-
-        .date-picker-weekday {
-            text-align: center;
-            font-size: 11px;
-            color: var(--secondary-text-color);
-            padding: 4px 0;
-        }
-
-        .date-picker-day {
-            border: none;
-            background: none;
-            font-family: inherit;
-            font-size: 13px;
+        .next-option .date {
+            font-size: 17px;
+            font-weight: 500;
             color: var(--primary-text-color);
-            padding: 6px 0;
+        }
+
+        .next-option.on .date {
+            color: var(--primary-color);
+        }
+
+        .next-option .why {
+            font-size: 12px;
+            line-height: 16px;
+            color: var(--tov-muted);
+        }
+
+        .day-card {
+            padding: 14px 16px;
+            border-radius: 14px;
+            background: var(--tov-fill);
+            font-size: 13px;
+            line-height: 19px;
+            color: var(--tov-muted);
+            display: flex;
+            gap: 12px;
+        }
+
+        .day-card .ic {
+            color: var(--primary-color);
+        }
+
+        .day-card b {
+            color: var(--primary-text-color);
+            font-weight: 500;
+        }
+
+        .details {
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+        }
+
+        .chips {
+            display: flex;
+            flex-wrap: wrap;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .chip {
+            display: inline-flex;
+            align-items: center;
+            gap: 2px;
+            height: 32px;
+            padding: 0 4px 0 12px;
+            border: 1px solid var(--divider-color);
+            border-radius: 8px;
+            font-size: 14px;
+            color: var(--primary-text-color);
+        }
+
+        .chip button {
+            all: unset;
+            width: 24px;
+            height: 24px;
+            display: grid;
+            place-items: center;
+            color: var(--tov-muted);
             border-radius: 50%;
             cursor: pointer;
         }
 
-        .date-picker-day:hover {
-            background: rgba(var(--rgb-primary-text-color, 0, 0, 0), 0.08);
+        .chip .ic {
+            width: 16px;
+            height: 16px;
         }
 
-        .date-picker-day.selected {
-            background: var(--primary-color);
-            color: var(--text-primary-color, #fff);
-        }
-
-        textarea {
-            resize: vertical;
-            min-height: 48px;
+        .tag-input {
+            all: unset;
+            box-sizing: border-box;
+            height: 32px;
+            min-width: 110px;
+            flex: 1;
+            padding: 0 10px;
+            border: 1px dashed var(--divider-color);
+            border-radius: 8px;
+            font-family: inherit;
+            font-size: 14px;
+            color: var(--primary-text-color);
         }
 
         .actions {
             display: flex;
             align-items: center;
+            gap: 8px;
             width: 100%;
         }
 
-        button {
-            font-family: Roboto, "Noto Sans", sans-serif;
-            font-size: 14px;
-            font-weight: 500;
-            text-transform: uppercase;
-            border: none;
-            background: none;
-            cursor: pointer;
-            padding: 8px 12px;
-            border-radius: 4px;
-            color: var(--primary-color);
+        .actions .spacer {
+            flex: 1;
         }
 
-        button.destructive {
+        button.text-btn {
+            all: unset;
+            font-family: inherit;
+            font-size: 14px;
+            font-weight: 500;
+            padding: 10px 14px;
+            border-radius: 20px;
+            color: var(--primary-color);
+            cursor: pointer;
+            white-space: nowrap;
+        }
+
+        button.text-btn.small {
+            padding: 6px 10px;
+        }
+
+        button.text-btn.destructive {
             color: var(--error-color);
-            margin-inline-end: auto;
+        }
+
+        button.filled-btn {
+            all: unset;
+            font-family: inherit;
+            font-size: 14px;
+            font-weight: 500;
+            padding: 10px 22px;
+            border-radius: 20px;
+            background: var(--primary-color);
+            color: var(--tov-on-accent);
+            cursor: pointer;
+        }
+
+        button.text-btn:disabled,
+        button.filled-btn:disabled {
+            opacity: 0.4;
+            cursor: default;
         }
 
         .confirm-delete {
@@ -584,77 +888,41 @@ export class TodoItemDialog extends LitElement {
             flex-wrap: wrap;
             gap: 8px;
             width: 100%;
-            font-family: Roboto, "Noto Sans", sans-serif;
             font-size: 14px;
             color: var(--primary-text-color);
         }
 
-        /* flex-basis 100% forces this onto its own row rather than
-           shrinking, so on a narrow (phone) dialog the Cancel/Delete
-           buttons wrap onto the next line instead of ever being pushed
-           out past the dialog's edge - a real risk with the plain
-           flex:1 this used to have, since nothing capped how wide the
-           text could push. */
         .confirm-delete span {
             flex: 1 1 100%;
             min-width: 0;
         }
 
-        .field-hint {
-            font-size: 12px;
-            color: var(--error-color);
-            margin-top: -8px;
-            margin-bottom: 16px;
-            font-family: Roboto, "Noto Sans", sans-serif;
-        }
-
-        button:disabled {
-            opacity: 0.4;
-            cursor: default;
+        button:focus-visible,
+        input:focus-visible,
+        select:focus-visible,
+        textarea:focus-visible {
+            outline: 2px solid var(--primary-color);
+            outline-offset: 2px;
         }
     `;
 
+    // "Edit"/"New" - rendered beside the Show as chip in ha-dialog's title.
     @property({attribute: false})
-    heading = "Item";
+    heading = "Edit";
 
     // What the parent last handed in - read ONLY by willUpdate() to seed
-    // draftValue exactly once (see below). Never read anywhere else.
+    // draftValue exactly once.
     private _seedValue: TodoItemFormValue = EMPTY_FORM_VALUE;
 
-    // The dialog's own live working copy - seeded exactly once from
-    // whatever `value` was set to (see willUpdate(), same gate as the
-    // date/time segments below) and never resynced from it afterwards.
-    // Every input in this dialog reads from and writes to this, not the
-    // incoming `value` assignment directly.
-    //
-    // Without this, the parent (todo-overlay-list.ts) re-renders for all
-    // sorts of reasons that have nothing to do with this dialog (another
-    // item elsewhere in the list changing, a linked list's incoming sync
-    // notification, an error banner timing out) - and since lit-html
-    // always recommits a non-primitive property value regardless of
-    // whether its reference actually changed (see PropertyPart._$setValue
-    // - only primitives are dirty-checked), every single one of those
-    // re-renders reassigned `value` right back to the object the parent
-    // was holding, clobbering whatever the user had already typed but
-    // not yet saved. Live-reproduced: editing a quantity, then having it
-    // silently revert before Save was ever pressed.
-    //
-    // `value` itself stays a real settable/readable property (rather
-    // than being renamed) purely so external code - the parent's initial
-    // seed on dialog-open, and this component's own tests - keeps reading
-    // and writing the same name it always has; the getter transparently
-    // returns the live draft instead of the frozen seed.
+    // The dialog's own working copy, seeded once and never resynced: the
+    // parent re-renders for unrelated reasons (sync notifications, banners)
+    // and lit-html always recommits a non-primitive property, which used to
+    // clobber unsaved edits (live-reproduced).
     @state()
     private draftValue: TodoItemFormValue = EMPTY_FORM_VALUE;
 
-    // hasChanged forced to always-true: Lit's default wrapping of a custom
-    // accessor pair compares the OLD value via this getter (i.e. against
-    // draftValue) - which hasn't been touched by a fresh assignment yet,
-    // so the default reference-equality check would see no change and
-    // never register 'value' in willUpdate()'s changed map at all. Since
-    // this setter only ever runs when the parent hands in a genuinely new
-    // seed (once, at dialog-open - see openEditDialog/openCreateDialog in
-    // todo-overlay-list.ts), always treating it as changed is correct.
+    // hasChanged forced true: Lit's default would compare against the getter
+    // (draftValue), never register the change, and never reseed.
     @property({attribute: false, hasChanged: () => true})
     set value(newValue: TodoItemFormValue) {
         this._seedValue = newValue;
@@ -674,71 +942,38 @@ export class TodoItemDialog extends LitElement {
     @property({type: Boolean})
     showDelete = false;
 
-    // True when the item's OWN entity (not the item itself) already has
-    // a cross-instance MQTT link configured (see link_sync.py) - i.e.
-    // this whole list already IS "the shared list". Live-reported:
-    // "Link to shared list" (item_links.py's separate PER-ITEM mirroring
-    // feature - see its own module docstring) was showing unconditionally,
-    // including on items that already live on the one configured linked
-    // list. The frontend can only ever target the single auto-resolved
-    // default linked entity (linkItem() has no way to name a different
-    // one - see api.ts), so ticking it there could only ever mirror the
-    // item onto a copy of itself on the SAME list, never anything useful.
-    // Suppresses the checkbox in exactly that case - see its own render()
-    // condition for why an already-linked ITEM still shows it regardless
-    // (unticking is still how that pairing gets severed).
+    // True when this item's own list already IS the cross-instance linked
+    // list - linking an item there could only mirror it onto itself.
     @property({type: Boolean})
     entityIsLinked = false;
 
-    // Only relevant for an item whose own row hides its completion
-    // checkbox (see TodoOverlayCardConfig's hide_complete_for_parents) -
-    // this dialog is that item's only way to complete it, so the toggle
-    // only renders when it's actually needed.
+    // Only for an item whose row hides its checkbox (hide_complete_for_parents).
     @property({type: Boolean})
     showCompleteToggle = false;
 
     @property({type: Boolean})
     completed = false;
 
-    // Deleting is the one destructive action this dialog can trigger, so
-    // it defaults to on - set false to skip straight to dialog-delete, as
-    // it always used to.
     @property({type: Boolean})
     confirmDelete = true;
 
     @state()
     private confirmingDelete = false;
 
-    // Day/month/year and hour/minute are edited as separate segments (see
-    // render()'s .dmy-row/.hm-row) rather than a single native
-    // <input type="date">/<input type="time"> - a native date input's
-    // displayed order/format follows the browser's own locale (confirmed
-    // live: even an explicit lang="en-GB" on the element didn't change
-    // Chrome's rendered mm/dd/yyyy), and Home Assistant's own themed
-    // ha-date-input/ha-time-input aren't reliably loaded in a third-party
-    // card's context (confirmed live: customElements.get('ha-date-input')
-    // was false on a fresh dashboard load, leaving the fields invisible
-    // and uneditable). Plain digit segments in a fixed day-month-year
-    // order sidestep both problems entirely - nothing here depends on
-    // what the browser or Home Assistant happen to have loaded.
-    //
-    // Kept as local state (not derived from `value` on every render) so
-    // a partially-typed date/time isn't wiped out mid-entry - see
-    // willUpdate(), which seeds these from `value` exactly once.
     @state()
-    private dueDay = "";
+    private openRow: OpenRow = null;
 
     @state()
-    private dueMonth = "";
+    private optionsOpen = false;
 
     @state()
-    private dueYear = "";
+    private calendarYear = 0;
 
-    // 12-hour clock + AM/PM, matching how due times are actually read
-    // aloud/entered day to day - dueHour12 holds "1".."12" as typed;
-    // converted to/from the 24-hour "HH:MM" that TodoItemFormValue.dueTime
-    // and the rest of the save pipeline (todo-overlay-list.ts's
-    // dueDatetime string) expect - see syncDueTime()/willUpdate().
+    @state()
+    private calendarMonth = 0;
+
+    // 12-hour clock state, kept separately from draftValue.dueTime ("HH:MM",
+    // 24h) so a half-typed value isn't reformatted under the cursor.
     @state()
     private dueHour12 = "";
 
@@ -748,136 +983,85 @@ export class TodoItemDialog extends LitElement {
     @state()
     private dueAmPm: "AM" | "PM" = "AM";
 
-    private dateTimePartsInitialized = false;
+    @state()
+    private tagDraft = "";
 
-    // Captured once, at the same moment draftValue itself is seeded
-    // (see willUpdate) - NOT read live off _seedValue, which keeps
-    // getting reassigned on every parent re-render regardless of
-    // whether this dialog has actually consumed it yet (see
-    // _seedValue's own comment). isCreatingANewLink needs the ORIGINAL
-    // value this dialog session opened with, not whatever the parent
-    // happens to think right now.
+    @state()
+    private intervalDraft: string | null = null;
+
+    // Custom is sticky once picked: otherwise stepping it down to 1 day
+    // would match the Daily preset and the Custom controls would vanish
+    // mid-edit.
+    @state()
+    private repeatCustom = false;
+
+    private seeded = false;
+
+    // Captured when the dialog opens: the destination field only makes sense
+    // while creating a new link, not for an item that was already linked.
     private originallyLinked = false;
 
-    // The day/month/year segments are always the source of truth for
-    // what's SELECTED - this panel is purely an alternate, visual way to
-    // fill them in (a calendar to click through rather than digits to
-    // type), so it never holds its own copy of the chosen date. It does
-    // need its own "which month is currently being browsed" state,
-    // though, since that's allowed to differ from the selected date
-    // while navigating (e.g. paging forward to pick a date next month).
-    @state()
-    private datePickerOpen = false;
-
-    @state()
-    private datePickerViewYear = 0;
-
-    @state()
-    private datePickerViewMonth = 0;
-
-    private openDatePicker() {
-        const now = new Date();
-        this.datePickerViewYear = this.dueYear.length === 4 ? Number(this.dueYear) : now.getFullYear();
-        this.datePickerViewMonth = this.dueMonth ? Number(this.dueMonth) - 1 : now.getMonth();
-        this.datePickerOpen = true;
-    }
-
-    private toggleDatePicker() {
-        if (this.datePickerOpen) {
-            this.datePickerOpen = false;
-        } else {
-            this.openDatePicker();
-        }
-    }
-
-    private shiftDatePickerMonth(delta: number) {
-        let month = this.datePickerViewMonth + delta;
-        let year = this.datePickerViewYear;
-
-        if (month < 0) {
-            month = 11;
-            year -= 1;
-        } else if (month > 11) {
-            month = 0;
-            year += 1;
-        }
-
-        this.datePickerViewMonth = month;
-        this.datePickerViewYear = year;
-    }
-
-    private pickDate(day: number) {
-        this.dueDay = String(day).padStart(2, "0");
-        this.dueMonth = String(this.datePickerViewMonth + 1).padStart(2, "0");
-        this.dueYear = String(this.datePickerViewYear);
-        this.syncDueDate();
-        this.datePickerOpen = false;
-    }
-
     protected willUpdate(changed: Map<string, unknown>): void {
-        if (!changed.has("value") || this.dateTimePartsInitialized) {
+        if (!changed.has("value") || this.seeded) {
             return;
         }
 
-        this.dateTimePartsInitialized = true;
+        this.seeded = true;
         this.draftValue = this._seedValue;
         this.originallyLinked = this._seedValue.linked;
-
-        const [year, month, day] = this._seedValue.dueDate ? this._seedValue.dueDate.split("-") : ["", "", ""];
-        this.dueYear = year ?? "";
-        this.dueMonth = month ?? "";
-        this.dueDay = day ?? "";
 
         const [hour24Str, minute] = this._seedValue.dueTime ? this._seedValue.dueTime.split(":") : ["", ""];
         this.dueMinute = minute ?? "";
 
         if (hour24Str) {
             const hour24 = Number(hour24Str);
-            const hour12 = hour24 % 12 || 12;
-            this.dueHour12 = String(hour12).padStart(2, "0");
+            this.dueHour12 = String(hour24 % 12 || 12).padStart(2, "0");
             this.dueAmPm = hour24 >= 12 ? "PM" : "AM";
         } else {
             this.dueHour12 = "";
             this.dueAmPm = "AM";
         }
+
+        this.showCalendarMonthOf(parseIsoDate(this._seedValue.dueDate) ?? new Date());
+        this.repeatCustom = this.repeatMode === "custom";
     }
 
-    // Belt-and-suspenders alongside each <option>'s own ?selected
-    // binding in render() - a <select>'s selection state has real
-    // engine-specific quirks around exactly when a dynamically-mapped
-    // list of <option> children ends up reflected in the parent
-    // <select>'s own .value once rendering settles (confirmed live,
-    // not assumed: happy-dom's own handling of this specific pattern
-    // left the wrong option selected in this project's own test suite,
-    // despite each <option>'s ?selected binding being individually
-    // correct). Forcing it here, after every update, costs nothing when
-    // it's already right and guarantees it never drifts either way.
-    protected updated(): void {
-        const select = this.renderRoot.querySelector("#todo-item-day-weekday") as HTMLSelectElement | null;
+    private get today(): Date {
+        return startOfDay(new Date());
+    }
 
-        if (select && select.value !== this.draftValue.dayWeekday) {
-            select.value = this.draftValue.dayWeekday;
-        }
+    private get isDayPin(): boolean {
+        return this.draftValue.pinType === "day";
+    }
+
+    private get showDue(): boolean {
+        return this.fieldSupport.dueDate || this.fieldSupport.dueDateTime;
+    }
+
+    private get hasDate(): boolean {
+        return this.draftValue.dueDate !== "";
+    }
+
+    private get hasTime(): boolean {
+        return this.draftValue.dueTime !== "";
+    }
+
+    private patch(changes: Partial<TodoItemFormValue>) {
+        this.draftValue = {...this.draftValue, ...changes};
     }
 
     private close() {
-        this.dispatchEvent(
-            new CustomEvent("dialog-close", {bubbles: true, composed: true}),
-        );
+        this.dispatchEvent(new CustomEvent("dialog-close", {bubbles: true, composed: true}));
     }
 
     private save() {
-        if (this.triggerOnDueBlocked || this.dayPinMissingWeekday || this.repeatBlocked) {
+        if (this.saveBlocked) {
             return;
         }
 
         this.dispatchEvent(
             new CustomEvent("dialog-save", {
-                // effectiveTitle, not the possibly-stale raw title - a
-                // "day" pin's title is always its weekday's own name
-                // (see effectiveTitle's own comment); this keeps that
-                // true even before its own setPinType call runs, not
-                // just after.
+                // effectiveTitle: a "day" pin's title is always its weekday's name.
                 detail: {...this.draftValue, title: this.effectiveTitle},
                 bubbles: true,
                 composed: true,
@@ -891,77 +1075,20 @@ export class TodoItemDialog extends LitElement {
             return;
         }
 
-        this.dispatchEvent(
-            new CustomEvent("dialog-delete", {bubbles: true, composed: true}),
-        );
-    }
-
-    private cancelDelete() {
-        this.confirmingDelete = false;
+        this.dispatchEvent(new CustomEvent("dialog-delete", {bubbles: true, composed: true}));
     }
 
     private confirmDeleteNow() {
         this.confirmingDelete = false;
-
-        this.dispatchEvent(
-            new CustomEvent("dialog-delete", {bubbles: true, composed: true}),
-        );
+        this.dispatchEvent(new CustomEvent("dialog-delete", {bubbles: true, composed: true}));
     }
 
-    // Bound to "change", not "click" - ha-checkbox wraps a native
-    // <input type="checkbox"> inside an internal <label>, and a single
-    // physical click on it fires TWO bubbling "click" events (the
-    // label's own, plus the browser's automatic forwarded click to the
-    // input it labels - standard native label/control behavior). A
-    // click-driven toggle (this.value.triggerOnDue = !this.value.
-    // triggerOnDue) silently cancelled itself out on every real click:
-    // on, then immediately back off, net no-op - confirmed live via a
-    // real (not synthetic) click, the actual bug behind "the toggle
-    // doesn't work" that a directly-dispatched synthetic click event
-    // never reproduced, since it bypasses the internal label entirely.
-    // "change" fires exactly once per genuine state transition
-    // regardless of how many internal clicks produced it, so both
-    // toggles below read the checkbox's own resulting .checked state
-    // rather than blindly flipping a local boolean.
     private toggleComplete() {
-        this.dispatchEvent(
-            new CustomEvent("dialog-toggle-complete", {bubbles: true, composed: true}),
-        );
+        this.dispatchEvent(new CustomEvent("dialog-toggle-complete", {bubbles: true, composed: true}));
     }
 
-    private onTriggerOnDueChanged(e: Event) {
-        const checked = (e.target as unknown as {checked: boolean}).checked;
-        this.draftValue = {...this.draftValue, triggerOnDue: checked};
-    }
-
-    private onLinkedChanged(e: Event) {
-        const checked = (e.target as unknown as {checked: boolean}).checked;
-        this.draftValue = {...this.draftValue, linked: checked};
-    }
-
-    private onDeleteProtectedChanged(e: Event) {
-        const checked = (e.target as unknown as {checked: boolean}).checked;
-        this.draftValue = {...this.draftValue, deleteProtected: checked};
-    }
-
-    // True only while this dialog session is creating a brand new link -
-    // the override control (see render()) only makes sense THEN, not
-    // for an item that was already linked when the dialog opened (this
-    // component has no "move an existing link" action - see
-    // item_links.py's own link_item, which only ever creates).
-    private get isCreatingANewLink(): boolean {
-        return this.draftValue.linked && !this.originallyLinked;
-    }
-
-    // A "day" pin's title is always its weekday's own plain name (see
-    // the backend's own set_pin_type docstring) - the title input
-    // itself is disabled in that case (see render()), showing this
-    // computed preview instead of whatever raw title happens to be
-    // stored, so what's on screen always matches what saving will
-    // actually produce. "" (no weekday picked yet) shows a blank
-    // field rather than a stale leftover title.
     private get effectiveTitle(): string {
-        if (this.draftValue.pinType !== "day") {
+        if (!this.isDayPin) {
             return this.draftValue.title;
         }
 
@@ -972,48 +1099,72 @@ export class TodoItemDialog extends LitElement {
             : "";
     }
 
-    private updateField(field: keyof Omit<TodoItemFormValue, "triggerOnDue" | "linked" | "deleteProtected">, fieldValue: string) {
-        this.draftValue = {...this.draftValue, [field]: fieldValue};
+    // --- When: row accordion -----------------------------------------------
+
+    private toggleRow(row: Exclude<OpenRow, null>) {
+        if (this.openRow === row) {
+            this.openRow = null;
+            return;
+        }
+
+        if (row === "date") {
+            this.showCalendarMonthOf(parseIsoDate(this.draftValue.dueDate) ?? this.today);
+        }
+
+        // Opening Time on an item with none starts it at 9:00 AM rather than
+        // showing empty steppers with nothing to nudge from.
+        if (row === "time" && !this.hasTime) {
+            this.dueHour12 = "09";
+            this.dueMinute = "00";
+            this.dueAmPm = "AM";
+            this.syncDueTime();
+        }
+
+        this.openRow = row;
     }
 
-    // Combines the three segments into "YYYY-MM-DD" only once all three
-    // are actually present - a day and month with no year yet (etc.)
-    // isn't a real date, so dueDate stays empty (matching what a native
-    // date input's .value does while incomplete) rather than guessing.
-    private syncDueDate() {
-        if (this.dueDay && this.dueMonth && this.dueYear.length === 4) {
-            this.updateField(
-                "dueDate",
-                `${this.dueYear}-${this.dueMonth.padStart(2, "0")}-${this.dueDay.padStart(2, "0")}`,
-            );
-        } else {
-            this.updateField("dueDate", "");
-        }
+    // --- Due date ------------------------------------------------------------
+
+    private showCalendarMonthOf(date: Date) {
+        this.calendarYear = date.getFullYear();
+        this.calendarMonth = date.getMonth();
     }
+
+    private shiftCalendarMonth(delta: number) {
+        this.showCalendarMonthOf(new Date(this.calendarYear, this.calendarMonth + delta, 1));
+    }
+
+    private pickDate(date: Date) {
+        this.patch({dueDate: toIsoDate(date)});
+        this.openRow = null;
+    }
+
+    // Time, repeat and the automation trigger all depend on a date, so they go with it.
+    private clearDate() {
+        this.dueHour12 = "";
+        this.dueMinute = "";
+        this.dueAmPm = "AM";
+        this.patch({
+            dueDate: "",
+            dueTime: "",
+            triggerOnDue: false,
+            repeatInterval: null,
+            repeatUnit: "",
+            repeatFrom: "",
+        });
+        this.openRow = null;
+    }
+
+    // --- Due time ------------------------------------------------------------
 
     private syncDueTime() {
         if (this.dueHour12 && this.dueMinute) {
             const hour12 = Number(this.dueHour12) % 12;
             const hour24 = this.dueAmPm === "PM" ? hour12 + 12 : hour12;
-            this.updateField("dueTime", `${String(hour24).padStart(2, "0")}:${this.dueMinute.padStart(2, "0")}`);
+            this.patch({dueTime: `${String(hour24).padStart(2, "0")}:${this.dueMinute.padStart(2, "0")}`});
         } else {
-            this.updateField("dueTime", "");
+            this.patch({dueTime: ""});
         }
-    }
-
-    private updateDueDay(raw: string) {
-        this.dueDay = digitsOnly(raw, 2);
-        this.syncDueDate();
-    }
-
-    private updateDueMonth(raw: string) {
-        this.dueMonth = digitsOnly(raw, 2);
-        this.syncDueDate();
-    }
-
-    private updateDueYear(raw: string) {
-        this.dueYear = digitsOnly(raw, 4);
-        this.syncDueDate();
     }
 
     private updateDueHour12(raw: string) {
@@ -1026,14 +1177,6 @@ export class TodoItemDialog extends LitElement {
         this.syncDueTime();
     }
 
-    private setDueAmPm(period: "AM" | "PM") {
-        this.dueAmPm = period;
-        this.syncDueTime();
-    }
-
-    // Hour wraps 12 -> 1 (never 0 - this is a 12-hour clock), minute
-    // wraps 59 -> 00 in whole 15-minute jumps - a real clock's own
-    // behavior, not a value that gets stuck at either end.
     private stepDueHour(delta: number) {
         const current = Number(this.dueHour12) || 12;
         this.updateDueHour12(String(wrapValue(current, delta, 1, 12)).padStart(2, "0"));
@@ -1044,14 +1187,38 @@ export class TodoItemDialog extends LitElement {
         this.updateDueMinute(String(wrapValue(current, delta, 0, 59)).padStart(2, "0"));
     }
 
-    // Which preset chip (if any) the current interval/unit matches -
-    // "custom" covers everything else, including an interval/unit
-    // combination no preset chip represents (e.g. every 2 weeks).
+    private setDueAmPm(period: "AM" | "PM") {
+        this.dueAmPm = period;
+        this.syncDueTime();
+    }
+
+    private removeTime() {
+        this.dueHour12 = "";
+        this.dueMinute = "";
+        this.dueAmPm = "AM";
+        this.patch({dueTime: "", triggerOnDue: false});
+        this.openRow = null;
+    }
+
+    private get timeLabel(): string {
+        if (!this.hasTime) {
+            return "";
+        }
+
+        return `${Number(this.dueHour12)}:${this.dueMinute.padStart(2, "0")} ${this.dueAmPm}`;
+    }
+
+    // --- Repeats -------------------------------------------------------------
+
     private get repeatMode(): RepeatMode {
         const {repeatInterval, repeatUnit} = this.draftValue;
 
         if (repeatInterval === null || repeatUnit === "") {
             return "never";
+        }
+
+        if (this.repeatCustom) {
+            return "custom";
         }
 
         for (const [mode, preset] of Object.entries(REPEAT_PRESETS)) {
@@ -1064,63 +1231,143 @@ export class TodoItemDialog extends LitElement {
     }
 
     private setRepeatMode(mode: RepeatMode) {
+        this.repeatCustom = mode === "custom";
+
         if (mode === "never") {
-            this.draftValue = {...this.draftValue, repeatInterval: null, repeatUnit: "", repeatFrom: ""};
+            this.patch({repeatInterval: null, repeatUnit: "", repeatFrom: ""});
             return;
         }
 
-        // Picking any repeating preset (or Custom) for the first time
-        // needs a repeatFrom too, since the three fields are all-or-
-        // nothing - defaults to "due" (a fixed schedule) rather than
-        // leaving it blank, so a first-time pick doesn't silently fail
-        // save's own repeatBlocked guard below. An already-set
-        // repeatFrom (switching between presets, or Custom <-> a
-        // preset) is left exactly as the user chose it.
+        // A first pick needs a repeatFrom too (all-or-nothing); an existing
+        // choice is kept when switching between presets.
         const repeatFrom = this.draftValue.repeatFrom || "due";
 
         if (mode === "custom") {
-            // Defaults to 2 (days), never 1 - {interval: 1, unit: "days"}
-            // is exactly what the Daily preset also is (see
-            // REPEAT_PRESETS/repeatMode's own matching), so defaulting
-            // Custom to that same combination would make it render as
-            // "Daily" the instant it's picked, with no visible custom
-            // row at all.
-            this.draftValue = {
-                ...this.draftValue,
-                repeatInterval: this.draftValue.repeatInterval ?? 2,
+            // 2 days, never 1 - {1, days} IS the Daily preset, so Custom
+            // would otherwise render as Daily the moment it's picked.
+            this.patch({
+                repeatInterval: this.repeatMode === "never" ? 2 : this.draftValue.repeatInterval === 1 ? 2 : this.draftValue.repeatInterval,
                 repeatUnit: this.draftValue.repeatUnit || "days",
                 repeatFrom,
-            };
+            });
             return;
         }
 
         const preset = REPEAT_PRESETS[mode];
-        this.draftValue = {...this.draftValue, repeatInterval: preset.interval, repeatUnit: preset.unit, repeatFrom};
+        this.patch({repeatInterval: preset.interval, repeatUnit: preset.unit, repeatFrom});
     }
 
-    private setRepeatFrom(value: RepeatFrom) {
-        this.draftValue = {...this.draftValue, repeatFrom: value};
-    }
-
-    private setRepeatUnit(unit: RepeatUnit) {
-        this.draftValue = {...this.draftValue, repeatUnit: unit};
-    }
-
+    // Typed text is held separately until it's a valid number - committing
+    // "" straight to repeatInterval would read as "doesn't repeat" and
+    // collapse the Custom row mid-edit.
     private onRepeatIntervalInput(raw: string) {
         const digits = digitsOnly(raw, 3);
-        this.draftValue = {...this.draftValue, repeatInterval: digits === "" ? null : Number(digits)};
+        this.intervalDraft = digits;
+
+        if (Number(digits) >= 1) {
+            this.patch({repeatInterval: Math.min(365, Number(digits))});
+        }
     }
 
     private stepRepeatInterval(delta: number) {
         const current = this.draftValue.repeatInterval ?? 1;
-        const next = Math.min(365, Math.max(1, current + delta));
-        this.draftValue = {...this.draftValue, repeatInterval: next};
+        this.intervalDraft = null;
+        this.patch({repeatInterval: Math.min(365, Math.max(1, current + delta))});
     }
 
-    // Same "block Save rather than round-trip an error" reasoning as
-    // triggerOnDueBlocked/dayPinMissingWeekday above - the backend
-    // enforces both of these too (see RepeatRequiresDueDateError/
-    // InvalidRepeatError).
+    private get repeatLabel(): string {
+        const {repeatInterval, repeatUnit} = this.draftValue;
+
+        switch (this.repeatMode) {
+            case "never":
+                return "Never";
+            case "custom":
+                return repeatUnit === ""
+                    ? "Custom"
+                    : `Every ${repeatInterval} ${repeatInterval === 1 ? SINGULAR_UNIT[repeatUnit] : repeatUnit}`;
+            default:
+                return REPEAT_MODES.find(([mode]) => mode === this.repeatMode)![1];
+        }
+    }
+
+    // What ticking it off today would produce under each repeat_from choice.
+    private get nextOccurrences(): {due: Date; completion: Date} | null {
+        const due = parseIsoDate(this.draftValue.dueDate);
+        const {repeatInterval, repeatUnit} = this.draftValue;
+
+        if (!due || repeatInterval === null || repeatInterval < 1 || repeatUnit === "") {
+            return null;
+        }
+
+        const today = this.today;
+
+        return {
+            due: nextOccurrence(due, repeatInterval, repeatUnit, "due", today),
+            completion: nextOccurrence(due, repeatInterval, repeatUnit, "completion", today),
+        };
+    }
+
+    // --- Automation ----------------------------------------------------------
+
+    private onTriggerOnDueChanged(e: Event) {
+        this.patch({triggerOnDue: (e.target as HTMLInputElement).checked});
+    }
+
+    private get automationHint(): string {
+        if (!this.hasDate) {
+            return "Needs a due date and time";
+        }
+
+        if (!this.hasTime) {
+            return "Needs a due time";
+        }
+
+        if (this.repeatMode !== "never") {
+            return `Fires at ${this.timeLabel} each time it comes due`;
+        }
+
+        return `Fires ${formatShortDate(parseIsoDate(this.draftValue.dueDate)!, this.today)}, ${this.timeLabel}`;
+    }
+
+    // --- Tags ----------------------------------------------------------------
+
+    private get tagList(): string[] {
+        return parseTags(this.draftValue.tags);
+    }
+
+    private commitTagDraft() {
+        const additions = parseTags(this.tagDraft).filter(tag => !this.tagList.includes(tag));
+
+        if (additions.length > 0) {
+            this.patch({tags: [...this.tagList, ...additions].join(", ")});
+        }
+
+        this.tagDraft = "";
+    }
+
+    private onTagKeydown(e: KeyboardEvent) {
+        if (e.key === "Enter" || e.key === ",") {
+            e.preventDefault();
+            this.commitTagDraft();
+        } else if (e.key === "Backspace" && this.tagDraft === "" && this.tagList.length > 0) {
+            this.removeTag(this.tagList[this.tagList.length - 1]);
+        }
+    }
+
+    private removeTag(tag: string) {
+        this.patch({tags: this.tagList.filter(existing => existing !== tag).join(", ")});
+    }
+
+    // --- Save gating ---------------------------------------------------------
+
+    private get triggerOnDueBlocked(): boolean {
+        return this.draftValue.triggerOnDue && !(this.hasDate && this.hasTime);
+    }
+
+    private get dayPinMissingWeekday(): boolean {
+        return this.isDayPin && this.draftValue.dayWeekday === "";
+    }
+
     private get repeatBlocked(): boolean {
         const {repeatInterval, repeatUnit, repeatFrom} = this.draftValue;
 
@@ -1128,154 +1375,412 @@ export class TodoItemDialog extends LitElement {
             return false;
         }
 
-        return !this.draftValue.dueDate || repeatUnit === "" || repeatFrom === "" || repeatInterval < 1;
+        return !this.hasDate || repeatUnit === "" || repeatFrom === "" || repeatInterval < 1;
     }
 
-    private get repeatFromCaption(): string {
-        return this.draftValue.repeatFrom === "due"
-            ? "Fixed schedule — the next due date always counts from the original one, so it never drifts even if this gets completed late. Right for something like bins day."
-            : "Floating schedule — the next due date counts from whenever it's actually completed instead, so finishing late never compresses the next cycle. Right for something like a water filter.";
+    private get titleMissing(): boolean {
+        return !this.isDayPin && this.draftValue.title.trim() === "";
     }
 
-    private get repeatSummary(): string {
-        const {repeatInterval, repeatUnit, repeatFrom} = this.draftValue;
+    private get saveBlocked(): boolean {
+        return this.triggerOnDueBlocked || this.dayPinMissingWeekday || this.repeatBlocked || this.titleMissing;
+    }
 
-        if (repeatInterval === null || repeatUnit === "" || repeatFrom === "") {
-            return "";
+    // --- Render --------------------------------------------------------------
+
+    private renderTitleArea() {
+        if (this.isDayPin) {
+            return html`
+                <div class="field">
+                    <label for="todo-item-title">Title</label>
+                    <input id="todo-item-title" type="text" .value=${this.effectiveTitle} placeholder="Pick a day below" disabled />
+                </div>
+                <div class="pills" role="group" aria-label="Day of week" style="margin-top: 10px">
+                    ${WEEKDAY_NAMES.map((name, index) => {
+                        const selected = this.draftValue.dayWeekday === String(index);
+
+                        return html`
+                            <button
+                                type="button"
+                                class=${classMap({pill: true, small: true, on: selected})}
+                                aria-pressed=${selected ? "true" : "false"}
+                                aria-label=${name}
+                                @click=${() => this.patch({dayWeekday: String(index)})}
+                            >${name.slice(0, 3)}</button>
+                        `;
+                    })}
+                </div>
+            `;
         }
 
-        const whence = repeatFrom === "due" ? "from its own due date" : "from whenever it's checked off";
-
-        if (repeatInterval === 1) {
-            const singular = {days: "day", weeks: "week", months: "month"}[repeatUnit];
-            return `Repeats every ${singular}, counting ${whence}.`;
-        }
-
-        return `Repeats every ${repeatInterval} ${repeatUnit}, counting ${whence}.`;
-    }
-
-    // Enabling "trigger on due" without a due time is meaningless - the
-    // backend enforces the same rule (see DueTimeRequiredError), but
-    // blocking Save here gives immediate feedback instead of a
-    // round-trip error.
-    private get triggerOnDueBlocked(): boolean {
-        return this.draftValue.triggerOnDue && !(this.draftValue.dueDate && this.draftValue.dueTime);
-    }
-
-    // Same "block Save rather than round-trip an error" reasoning as
-    // triggerOnDueBlocked above - the backend enforces this too (see
-    // WeekdayRequiredError).
-    private get dayPinMissingWeekday(): boolean {
-        return this.draftValue.pinType === "day" && this.draftValue.dayWeekday === "";
-    }
-
-    // Rendered inline, full-width, right below .due-row - not as an
-    // absolutely-positioned floating popup. ha-dialog's own content area
-    // is externally defined and out of this component's control; an
-    // absolutely-positioned child risks being silently clipped by
-    // whatever overflow behavior that container happens to have. Pushing
-    // the rest of the dialog down instead has no such risk, at the minor
-    // cost of the dialog growing taller while the panel is open - the
-    // same tradeoff the quick-add "Details…" panel elsewhere in this
-    // card already makes.
-    private renderDatePickerPanel() {
-        const year = this.datePickerViewYear;
-        const month = this.datePickerViewMonth;
-        const leadingBlanks = firstWeekdayOfMonth(year, month);
-        const totalDays = daysInMonth(year, month);
-        const selectedDay = Number(this.dueDay) || undefined;
-        const selectedMonth = this.dueMonth ? Number(this.dueMonth) - 1 : undefined;
-        const selectedYear = this.dueYear.length === 4 ? Number(this.dueYear) : undefined;
+        const pinType = this.draftValue.pinType;
+        const titleLabel = pinType === "category" ? "Category name" : pinType === "person" ? "Name" : "Title";
 
         return html`
-            <div class="date-picker-panel">
-                <div class="date-picker-header">
-                    <button
-                        type="button"
-                        class="date-picker-nav"
-                        aria-label="Previous month"
-                        @click=${() => this.shiftDatePickerMonth(-1)}
-                    >‹</button>
-                    <span>${MONTH_NAMES[month]} ${year}</span>
-                    <button
-                        type="button"
-                        class="date-picker-nav"
-                        aria-label="Next month"
-                        @click=${() => this.shiftDatePickerMonth(1)}
-                    >›</button>
+            <div class="title-row">
+                <div class="field title">
+                    <label for="todo-item-title">${titleLabel}</label>
+                    <input
+                        id="todo-item-title"
+                        type="text"
+                        .value=${this.draftValue.title}
+                        @input=${(e: InputEvent) => this.patch({title: (e.target as HTMLInputElement).value})}
+                    />
                 </div>
-                <div class="date-picker-grid">
-                    ${WEEKDAY_LABELS.map(label => html`<span class="date-picker-weekday">${label}</span>`)}
-                    ${Array.from({length: leadingBlanks}, () => html`<span></span>`)}
-                    ${
-                        Array.from({length: totalDays}, (_, i) => {
-                            const day = i + 1;
-                            const isSelected = day === selectedDay && month === selectedMonth && year === selectedYear;
+                ${
+                    pinType === ""
+                        ? html`
+                            <div class="field quantity">
+                                <label for="todo-item-quantity">Quantity</label>
+                                <input
+                                    id="todo-item-quantity"
+                                    type="text"
+                                    placeholder="e.g. 2"
+                                    .value=${this.draftValue.quantity}
+                                    @input=${(e: InputEvent) => this.patch({quantity: (e.target as HTMLInputElement).value})}
+                                />
+                            </div>
+                        `
+                        : nothing
+                }
+            </div>
+            ${
+                this.showCompleteToggle
+                    ? html`
+                        <div class="group" style="margin-top: 12px">
+                            <label class="row">
+                                ${icon(I_CHECK)}
+                                <span class="lbl">Completed</span>
+                                <input
+                                    id="todo-item-completed"
+                                    type="checkbox"
+                                    class="switch"
+                                    .checked=${this.completed}
+                                    @change=${this.toggleComplete}
+                                />
+                            </label>
+                        </div>
+                    `
+                    : nothing
+            }
+        `;
+    }
+
+    private renderWhenArea() {
+        if (this.isDayPin) {
+            return html`
+                <h3 class="sec">When</h3>
+                <div class="day-card">
+                    ${icon(I_REPEAT)}
+                    <span>Day pins schedule themselves. On its day it moves to the top and reads <b>Today</b>, the day
+                    before <b>Tomorrow</b>. Anything left unticked under it moves to <b>Overdue</b> the next morning.</span>
+                </div>
+            `;
+        }
+
+        const due = parseIsoDate(this.draftValue.dueDate);
+        const overdue = due !== null && due < this.today;
+
+        return html`
+            <h3 class="sec">When</h3>
+            <div class="group">
+                <button
+                    type="button"
+                    id="todo-item-due-date-row"
+                    class=${classMap({row: true, open: this.openRow === "date"})}
+                    aria-expanded=${this.openRow === "date" ? "true" : "false"}
+                    @click=${() => this.toggleRow("date")}
+                >
+                    ${icon(I_CAL)}
+                    <span class="lbl">Due date</span>
+                    <span class=${classMap({val: true, late: overdue})}>
+                        ${due ? `${formatShortDate(due, this.today)}${overdue ? " · overdue" : ""}` : "None"}
+                    </span>
+                    ${icon(I_CHEV_R, "chev")}
+                </button>
+                ${this.openRow === "date" ? this.renderDatePanel(due) : nothing}
+
+                ${
+                    this.fieldSupport.dueDateTime
+                        ? html`
+                            <button
+                                type="button"
+                                id="todo-item-due-time-row"
+                                class=${classMap({row: true, open: this.openRow === "time"})}
+                                ?disabled=${!this.hasDate}
+                                aria-expanded=${this.openRow === "time" ? "true" : "false"}
+                                @click=${() => this.toggleRow("time")}
+                            >
+                                ${icon(I_CLOCK)}
+                                <span class="lbl">Time${this.hasDate ? nothing : html`<span class="sub">Set a date first</span>`}</span>
+                                <span class="val">${this.hasDate ? (this.hasTime ? this.timeLabel : "Any time") : ""}</span>
+                                ${icon(I_CHEV_R, "chev")}
+                            </button>
+                            ${this.openRow === "time" ? this.renderTimePanel() : nothing}
+                        `
+                        : nothing
+                }
+
+                <button
+                    type="button"
+                    id="todo-item-repeat-row"
+                    class=${classMap({row: true, open: this.openRow === "repeat"})}
+                    ?disabled=${!this.hasDate}
+                    aria-expanded=${this.openRow === "repeat" ? "true" : "false"}
+                    @click=${() => this.toggleRow("repeat")}
+                >
+                    ${icon(I_REPEAT)}
+                    <span class="lbl">Repeats${this.hasDate ? nothing : html`<span class="sub">Set a date first</span>`}</span>
+                    <span class="val">${this.hasDate ? this.repeatLabel : ""}</span>
+                    ${icon(I_CHEV_R, "chev")}
+                </button>
+                ${this.openRow === "repeat" ? this.renderRepeatPanel() : nothing}
+
+                ${
+                    this.fieldSupport.dueDateTime
+                        ? html`
+                            <label class=${classMap({row: true, off: !this.hasTime})}>
+                                ${icon(I_BELL)}
+                                <span class="lbl">
+                                    Run automation when due
+                                    <span class="sub">${this.automationHint}</span>
+                                </span>
+                                <input
+                                    id="todo-item-trigger-on-due"
+                                    type="checkbox"
+                                    class="switch"
+                                    .checked=${this.draftValue.triggerOnDue && this.hasTime}
+                                    ?disabled=${!this.hasTime}
+                                    @change=${this.onTriggerOnDueChanged}
+                                />
+                            </label>
+                        `
+                        : nothing
+                }
+            </div>
+        `;
+    }
+
+    private renderDatePanel(selected: Date | null) {
+        const year = this.calendarYear;
+        const month = this.calendarMonth;
+        const leadingBlanks = (new Date(year, month, 1).getDay() + 6) % 7;
+        const totalDays = new Date(year, month + 1, 0).getDate();
+        const today = this.today;
+        const quickPicks: Array<[string, Date]> = [
+            ["Today", today],
+            ["Tomorrow", addDays(today, 1)],
+            ["Next week", addDays(today, 7)],
+        ];
+
+        return html`
+            <div class="panel date-panel">
+                <div class="pills">
+                    ${quickPicks.map(([label, date]) => html`
+                        <button
+                            type="button"
+                            class=${classMap({pill: true, on: selected !== null && toIsoDate(selected) === toIsoDate(date)})}
+                            @click=${() => this.pickDate(date)}
+                        >${label}</button>
+                    `)}
+                </div>
+                <div>
+                    <div class="cal-head">
+                        <button type="button" class="iconbtn" aria-label="Previous month" @click=${() => this.shiftCalendarMonth(-1)}>
+                            ${icon(I_CHEV_L)}
+                        </button>
+                        <span>${MONTH_NAMES[month]} ${year}</span>
+                        <button type="button" class="iconbtn" aria-label="Next month" @click=${() => this.shiftCalendarMonth(1)}>
+                            ${icon(I_CHEV_R)}
+                        </button>
+                    </div>
+                    <div class="cal-grid">
+                        ${CALENDAR_WEEKDAY_LABELS.map(label => html`<span class="cal-dow" aria-hidden="true">${label}</span>`)}
+                        ${Array.from({length: leadingBlanks}, () => html`<span></span>`)}
+                        ${Array.from({length: totalDays}, (_, i) => {
+                            const date = new Date(year, month, i + 1);
 
                             return html`
                                 <button
                                     type="button"
-                                    class=${classMap({"date-picker-day": true, selected: isSelected})}
-                                    @click=${() => this.pickDate(day)}
-                                >${day}</button>
+                                    class=${classMap({
+                                        "cal-day": true,
+                                        past: date < today,
+                                        today: toIsoDate(date) === toIsoDate(today),
+                                        selected: selected !== null && toIsoDate(date) === toIsoDate(selected),
+                                    })}
+                                    aria-label=${date.toDateString()}
+                                    @click=${() => this.pickDate(date)}
+                                >${i + 1}</button>
                             `;
-                        })
-                    }
+                        })}
+                    </div>
+                </div>
+                ${
+                    this.hasDate
+                        ? html`
+                            <div class="panel-foot" style="justify-content: flex-end">
+                                <button type="button" class="text-btn small" @click=${this.clearDate}>Clear date</button>
+                            </div>
+                        `
+                        : nothing
+                }
+            </div>
+        `;
+    }
+
+    private renderTimePanel() {
+        return html`
+            <div class="panel">
+                <div class="time-row">
+                    <div class="spin">
+                        <button type="button" aria-label="Increase hour" @click=${() => this.stepDueHour(1)}>${icon(I_UP)}</button>
+                        <input
+                            type="text"
+                            inputmode="numeric"
+                            maxlength="2"
+                            aria-label="Hour"
+                            .value=${this.dueHour12}
+                            @input=${(e: InputEvent) => this.updateDueHour12((e.target as HTMLInputElement).value)}
+                        />
+                        <button type="button" aria-label="Decrease hour" @click=${() => this.stepDueHour(-1)}>${icon(I_DOWN)}</button>
+                    </div>
+                    <span class="time-colon" aria-hidden="true">:</span>
+                    <div class="spin">
+                        <button type="button" aria-label="Increase minute" @click=${() => this.stepDueMinute(15)}>${icon(I_UP)}</button>
+                        <input
+                            type="text"
+                            inputmode="numeric"
+                            maxlength="2"
+                            aria-label="Minute"
+                            .value=${this.dueMinute}
+                            @input=${(e: InputEvent) => this.updateDueMinute((e.target as HTMLInputElement).value)}
+                        />
+                        <button type="button" aria-label="Decrease minute" @click=${() => this.stepDueMinute(-15)}>${icon(I_DOWN)}</button>
+                    </div>
+                    <div class="ampm" role="group" aria-label="AM or PM">
+                        <button
+                            type="button"
+                            class=${classMap({on: this.dueAmPm === "AM"})}
+                            aria-pressed=${this.dueAmPm === "AM" ? "true" : "false"}
+                            @click=${() => this.setDueAmPm("AM")}
+                        >AM</button>
+                        <button
+                            type="button"
+                            class=${classMap({on: this.dueAmPm === "PM"})}
+                            aria-pressed=${this.dueAmPm === "PM" ? "true" : "false"}
+                            @click=${() => this.setDueAmPm("PM")}
+                        >PM</button>
+                    </div>
+                </div>
+                <div class="panel-foot">
+                    <span>Arrows step 15 min · tap a number to type</span>
+                    <button type="button" class="text-btn small" @click=${this.removeTime}>Remove time</button>
                 </div>
             </div>
         `;
     }
 
-    render() {
-        const showDue = this.fieldSupport.dueDate || this.fieldSupport.dueDateTime;
+    private renderRepeatPanel() {
+        const mode = this.repeatMode;
+        const next = this.nextOccurrences;
+        const today = this.today;
 
         return html`
-            <ha-dialog open .heading=${this.heading} @closed=${this.close}>
-                <div class="title-row">
-                    <div class="field title">
-                        <label for="todo-item-title">Title</label>
-                        <input
-                            id="todo-item-title"
-                            type="text"
-                            .value=${this.effectiveTitle}
-                            ?disabled=${this.draftValue.pinType === "day"}
-                            title=${
-                                this.draftValue.pinType === "day"
-                                    ? "Set by the weekday picked below"
-                                    : ""
-                            }
-                            @input=${(e: InputEvent) =>
-                                this.updateField("title", (e.target as HTMLInputElement).value)}
-                        />
-                    </div>
-
-                    <div class="field quantity">
-                        <label for="todo-item-quantity">Quantity</label>
-                        <input
-                            id="todo-item-quantity"
-                            type="text"
-                            placeholder="e.g. 150g"
-                            .value=${this.draftValue.quantity}
-                            @input=${(e: InputEvent) =>
-                                this.updateField("quantity", (e.target as HTMLInputElement).value)}
-                        />
-                    </div>
+            <div class="panel">
+                <div class="seg" role="group" aria-label="Repeat">
+                    ${REPEAT_MODES.map(([value, label]) => html`
+                        <button
+                            type="button"
+                            class=${classMap({on: mode === value})}
+                            aria-pressed=${mode === value ? "true" : "false"}
+                            @click=${() => this.setRepeatMode(value)}
+                        >${label}</button>
+                    `)}
                 </div>
 
                 ${
-                    this.showCompleteToggle
+                    mode === "custom"
                         ? html`
-                            <div class="complete-toggle">
-                                <ha-checkbox
-                                    .checked=${this.completed}
-                                    @change=${this.toggleComplete}
-                                ></ha-checkbox>
-                                <span>${this.completed ? "Completed" : "Mark complete"}</span>
+                            <div class="custom-interval-row">
+                                <span>Every</span>
+                                <div class="stepper">
+                                    <button type="button" aria-label="Decrease repeat interval" @click=${() => this.stepRepeatInterval(-1)}>
+                                        ${icon(I_MINUS)}
+                                    </button>
+                                    <input
+                                        class="interval"
+                                        type="text"
+                                        inputmode="numeric"
+                                        maxlength="3"
+                                        aria-label="Repeat interval"
+                                        .value=${this.intervalDraft ?? String(this.draftValue.repeatInterval ?? "")}
+                                        @input=${(e: InputEvent) => this.onRepeatIntervalInput((e.target as HTMLInputElement).value)}
+                                        @blur=${() => {
+                                            this.intervalDraft = null;
+                                        }}
+                                    />
+                                    <button type="button" aria-label="Increase repeat interval" @click=${() => this.stepRepeatInterval(1)}>
+                                        ${icon(I_PLUS)}
+                                    </button>
+                                </div>
+                                <span class="selwrap">
+                                    <select
+                                        class="unit-select"
+                                        aria-label="Repeat unit"
+                                        .value=${this.draftValue.repeatUnit}
+                                        @change=${(e: Event) => this.patch({repeatUnit: (e.target as HTMLSelectElement).value as RepeatUnit})}
+                                    >
+                                        <option value="days">days</option>
+                                        <option value="weeks">weeks</option>
+                                        <option value="months">months</option>
+                                    </select>
+                                    ${icon(I_DOWN)}
+                                </span>
                             </div>
                         `
-                        : ""
+                        : nothing
                 }
 
+                ${
+                    next
+                        ? html`
+                            <span class="next-label">Tick it off today and the next one is due</span>
+                            <div class="next-options" role="group" aria-label="Next one counts from">
+                                <button
+                                    type="button"
+                                    class=${classMap({"next-option": true, on: this.draftValue.repeatFrom === "due"})}
+                                    aria-pressed=${this.draftValue.repeatFrom === "due" ? "true" : "false"}
+                                    data-from="due"
+                                    @click=${() => this.patch({repeatFrom: "due"})}
+                                >
+                                    <span class="kind">On its schedule</span>
+                                    <span class="date">${formatShortDate(next.due, today)}</span>
+                                    <span class="why">Counts from the due date. Missed ones are skipped.</span>
+                                </button>
+                                <button
+                                    type="button"
+                                    class=${classMap({"next-option": true, on: this.draftValue.repeatFrom === "completion"})}
+                                    aria-pressed=${this.draftValue.repeatFrom === "completion" ? "true" : "false"}
+                                    data-from="completion"
+                                    @click=${() => this.patch({repeatFrom: "completion"})}
+                                >
+                                    <span class="kind">After I finish</span>
+                                    <span class="date">${formatShortDate(next.completion, today)}</span>
+                                    <span class="why">Counts from the day it's ticked off.</span>
+                                </button>
+                            </div>
+                        `
+                        : nothing
+                }
+            </div>
+        `;
+    }
+
+    private renderDetailsArea() {
+        return html`
+            <h3 class="sec">Details</h3>
+            <div class="details">
                 ${
                     this.fieldSupport.description
                         ? html`
@@ -1283,458 +1788,206 @@ export class TodoItemDialog extends LitElement {
                                 <label for="todo-item-description">Description</label>
                                 <textarea
                                     id="todo-item-description"
+                                    rows="2"
+                                    placeholder="Add notes"
                                     .value=${this.draftValue.description}
-                                    @input=${(e: InputEvent) =>
-                                        this.updateField(
-                                            "description",
-                                            (e.target as HTMLTextAreaElement).value,
-                                        )}
+                                    @input=${(e: InputEvent) => this.patch({description: (e.target as HTMLTextAreaElement).value})}
                                 ></textarea>
                             </div>
                         `
-                        : ""
+                        : nothing
                 }
-
-                <div class="field">
-                    <label for="todo-item-tags">Tags</label>
+                <div class="chips" role="group" aria-label="Tags">
+                    ${this.tagList.map(tag => html`
+                        <span class="chip">
+                            ${tag}
+                            <button type="button" aria-label="Remove tag ${tag}" @click=${() => this.removeTag(tag)}>${icon(I_X)}</button>
+                        </span>
+                    `)}
                     <input
                         id="todo-item-tags"
+                        class="tag-input"
                         type="text"
-                        placeholder="e.g. urgent, weekend"
-                        .value=${this.draftValue.tags}
-                        @input=${(e: InputEvent) =>
-                            this.updateField("tags", (e.target as HTMLInputElement).value)}
+                        aria-label="Add tag"
+                        placeholder="+ Add tag"
+                        .value=${this.tagDraft}
+                        @input=${(e: InputEvent) => {
+                            this.tagDraft = (e.target as HTMLInputElement).value;
+                        }}
+                        @keydown=${this.onTagKeydown}
+                        @blur=${this.commitTagDraft}
                     />
                 </div>
+            </div>
+        `;
+    }
 
-                <div class="field">
-                    <label for="todo-item-pin-type">Show as</label>
-                    <select
-                        id="todo-item-pin-type"
-                        class="pin-type-select"
-                        .value=${this.draftValue.pinType}
-                        @change=${(e: Event) =>
-                            this.updateField("pinType", (e.target as HTMLSelectElement).value)}
-                    >
-                        <option value="">Normal item</option>
-                        <option value="category">Category (e.g. "Groceries")</option>
-                        <option value="person">Person (e.g. "Brodie")</option>
-                        <option value="day">Day of week</option>
-                    </select>
-                    ${
-                        this.draftValue.pinType === "day"
-                            ? html`
-                                <select
-                                    id="todo-item-day-weekday"
-                                    class="day-weekday-select"
-                                    @change=${(e: Event) =>
-                                        this.updateField("dayWeekday", (e.target as HTMLSelectElement).value)}
-                                >
-                                    <option value="" disabled ?selected=${this.draftValue.dayWeekday === ""}>
-                                        Which day?
-                                    </option>
-                                    ${WEEKDAY_NAMES.map(
-                                        (name, index) => html`
-                                            <option
-                                                value=${index}
-                                                ?selected=${this.draftValue.dayWeekday === String(index)}
-                                            >${name}</option>
-                                        `,
-                                    )}
-                                </select>
-                                <div class="field-hint pin-type-hint">
-                                    Always shown as a section header. Titled with the day's own name, and
-                                    reads "Today"/"Tomorrow" when it's due - both update automatically, so
-                                    there's nothing to maintain once it's set.
-                                </div>
-                            `
-                            : this.draftValue.pinType
-                                ? html`
-                                    <div class="field-hint pin-type-hint">
-                                        Always shown as a section header, even with nothing under it yet.
-                                    </div>
-                                `
-                                : ""
-                    }
-                </div>
+    private renderOptionsArea() {
+        const showLink = !this.entityIsLinked || this.draftValue.linked;
+        // Names only what's switched on - "Not linked · Deletable" was too
+        // long to fit beside the label and said nothing when truncated.
+        const summary = [
+            this.draftValue.linked ? "Linked" : null,
+            this.draftValue.deleteProtected ? "Protected" : null,
+        ].filter(Boolean).join(" · ") || "Off";
 
+        return html`
+            <h3 class="sec">Options</h3>
+            <div class="group">
+                <button
+                    type="button"
+                    id="todo-item-options-row"
+                    class="row summary"
+                    aria-expanded=${this.optionsOpen ? "true" : "false"}
+                    @click=${() => {
+                        this.optionsOpen = !this.optionsOpen;
+                    }}
+                >
+                    ${icon(I_SLIDERS)}
+                    <span class="lbl">Sharing &amp; safety</span>
+                    <span class="val">${summary}</span>
+                    ${icon(I_CHEV_R, this.optionsOpen ? "chev down" : "chev")}
+                </button>
                 ${
-                    !this.entityIsLinked || this.draftValue.linked
+                    this.optionsOpen
                         ? html`
-                            <div class="field">
-                                <div class="complete-toggle">
-                                    <ha-checkbox
-                                        id="todo-item-linked"
-                                        .checked=${this.draftValue.linked}
-                                        @change=${this.onLinkedChanged}
-                                    ></ha-checkbox>
-                                    <span>Link to shared list</span>
-                                </div>
-                                ${
-                                    this.isCreatingANewLink
-                                        ? html`
-                                            <input
-                                                id="todo-item-link-target"
-                                                type="text"
-                                                class="link-target-input"
-                                                placeholder="Destination (optional) - e.g. Brodie"
-                                                .value=${this.draftValue.linkTarget}
-                                                @input=${(e: InputEvent) =>
-                                                    this.updateField("linkTarget", (e.target as HTMLInputElement).value)}
-                                            />
-                                            <div class="field-hint">
-                                                Creates a copy on your configured shared list, kept in sync both ways -
-                                                completing, editing, or deleting either one affects both. Leave blank
-                                                to use the default destination.
-                                            </div>
-                                        `
-                                        : this.draftValue.linked
-                                            ? html`
-                                                <div class="field-hint">
-                                                    Linked - unticking this only unlinks it, the item itself is
-                                                    untouched.
-                                                </div>
-                                            `
-                                            : ""
-                                }
-                            </div>
-                        `
-                        : ""
-                }
-
-                <div class="field">
-                    <div class="complete-toggle">
-                        <ha-checkbox
-                            id="todo-item-delete-protected"
-                            .checked=${this.draftValue.deleteProtected}
-                            @change=${this.onDeleteProtectedChanged}
-                        ></ha-checkbox>
-                        <span>Prevent deletion</span>
-                    </div>
-                    ${
-                        this.draftValue.deleteProtected
-                            ? html`
-                                <div class="field-hint">
-                                    Blocks the delete button, swipe-to-delete, and clear completed/all -
-                                    untick to allow deleting it again.
-                                </div>
-                            `
-                            : ""
-                    }
-                </div>
-
-                ${
-                    showDue
-                        ? html`
-                            <div class="due-row">
-                                <div class="field">
-                                    <label id="due-date-label">Due date</label>
-                                    <div class="dmy-row" aria-labelledby="due-date-label">
-                                        <input
-                                            class="segment day"
-                                            type="text"
-                                            inputmode="numeric"
-                                            maxlength="2"
-                                            placeholder="DD"
-                                            aria-label="Day"
-                                            .value=${this.dueDay}
-                                            @input=${(e: InputEvent) =>
-                                                this.updateDueDay((e.target as HTMLInputElement).value)}
-                                        />
-                                        <span class="segment-sep">/</span>
-                                        <input
-                                            class="segment month"
-                                            type="text"
-                                            inputmode="numeric"
-                                            maxlength="2"
-                                            placeholder="MM"
-                                            aria-label="Month"
-                                            .value=${this.dueMonth}
-                                            @input=${(e: InputEvent) =>
-                                                this.updateDueMonth((e.target as HTMLInputElement).value)}
-                                        />
-                                        <span class="segment-sep">/</span>
-                                        <input
-                                            class="segment year"
-                                            type="text"
-                                            inputmode="numeric"
-                                            maxlength="4"
-                                            placeholder="YYYY"
-                                            aria-label="Year"
-                                            .value=${this.dueYear}
-                                            @input=${(e: InputEvent) =>
-                                                this.updateDueYear((e.target as HTMLInputElement).value)}
-                                        />
-                                        <button
-                                            type="button"
-                                            class="calendar-toggle"
-                                            aria-label=${this.datePickerOpen ? "Close date picker" : "Open date picker"}
-                                            @click=${this.toggleDatePicker}
-                                        >
-                                            ${CALENDAR_ICON}
-                                        </button>
-                                    </div>
-                                </div>
-
-                                ${
-                                    this.fieldSupport.dueDateTime
-                                        ? html`
-                                            <div class="field">
-                                                <label id="due-time-label">Due time</label>
-                                                <div class="hm-row" aria-labelledby="due-time-label">
-                                                    <div class="stepper">
-                                                        <button
-                                                            type="button"
-                                                            aria-label="Decrease hour"
-                                                            @click=${() => this.stepDueHour(-1)}
-                                                        >–</button>
-                                                        <input
-                                                            class="stepper-value"
-                                                            type="text"
-                                                            inputmode="numeric"
-                                                            maxlength="2"
-                                                            aria-label="Hour"
-                                                            .value=${this.dueHour12}
-                                                            @input=${(e: InputEvent) =>
-                                                                this.updateDueHour12((e.target as HTMLInputElement).value)}
-                                                        />
-                                                        <button
-                                                            type="button"
-                                                            aria-label="Increase hour"
-                                                            @click=${() => this.stepDueHour(1)}
-                                                        >+</button>
-                                                    </div>
-                                                    <span class="segment-sep stepper-colon">:</span>
-                                                    <div class="stepper">
-                                                        <button
-                                                            type="button"
-                                                            aria-label="Decrease minute"
-                                                            @click=${() => this.stepDueMinute(-15)}
-                                                        >–</button>
-                                                        <input
-                                                            class="stepper-value"
-                                                            type="text"
-                                                            inputmode="numeric"
-                                                            maxlength="2"
-                                                            aria-label="Minute"
-                                                            .value=${this.dueMinute}
-                                                            @input=${(e: InputEvent) =>
-                                                                this.updateDueMinute((e.target as HTMLInputElement).value)}
-                                                        />
-                                                        <button
-                                                            type="button"
-                                                            aria-label="Increase minute"
-                                                            @click=${() => this.stepDueMinute(15)}
-                                                        >+</button>
-                                                    </div>
-                                                    <div class="segmented" role="group" aria-label="AM or PM">
-                                                        <button
-                                                            type="button"
-                                                            class=${classMap({active: this.dueAmPm === "AM"})}
-                                                            @click=${() => this.setDueAmPm("AM")}
-                                                        >AM</button>
-                                                        <button
-                                                            type="button"
-                                                            class=${classMap({active: this.dueAmPm === "PM"})}
-                                                            @click=${() => this.setDueAmPm("PM")}
-                                                        >PM</button>
-                                                    </div>
-                                                </div>
-                                            </div>
-                                        `
-                                        : ""
-                                }
-                            </div>
-
-                            ${this.datePickerOpen ? this.renderDatePickerPanel() : ""}
-
                             ${
-                                this.fieldSupport.dueDateTime
+                                showLink
                                     ? html`
-                                        <div class="complete-toggle">
-                                            <ha-checkbox
-                                                .checked=${this.draftValue.triggerOnDue}
-                                                @change=${this.onTriggerOnDueChanged}
-                                            ></ha-checkbox>
-                                            <span>Trigger automation when due</span>
-                                        </div>
+                                        <label class="row">
+                                            ${icon(I_LINK)}
+                                            <span class="lbl">
+                                                Link to shared list
+                                                <span class="sub">${
+                                                    this.draftValue.linked && this.originallyLinked
+                                                        ? "Turning this off only unlinks - the item stays"
+                                                        : "Keeps a synced copy on your shared list"
+                                                }</span>
+                                            </span>
+                                            <input
+                                                id="todo-item-linked"
+                                                type="checkbox"
+                                                class="switch"
+                                                .checked=${this.draftValue.linked}
+                                                @change=${(e: Event) => this.patch({linked: (e.target as HTMLInputElement).checked})}
+                                            />
+                                        </label>
                                         ${
-                                            this.triggerOnDueBlocked
+                                            this.draftValue.linked && !this.originallyLinked
                                                 ? html`
-                                                    <div class="field-hint">
-                                                        Requires a due time to enable
+                                                    <div class="panel">
+                                                        <div class="field">
+                                                            <label for="todo-item-link-target">Put it under (optional)</label>
+                                                            <input
+                                                                id="todo-item-link-target"
+                                                                type="text"
+                                                                placeholder="e.g. Brodie"
+                                                                .value=${this.draftValue.linkTarget}
+                                                                @input=${(e: InputEvent) => this.patch({linkTarget: (e.target as HTMLInputElement).value})}
+                                                            />
+                                                        </div>
                                                     </div>
                                                 `
-                                                : ""
+                                                : nothing
                                         }
                                     `
-                                    : ""
+                                    : nothing
                             }
-
-                            <div class="repeat-section">
-                                <div class="repeat-label-row">
-                                    ${REPEAT_ICON}
-                                    <label>Repeats</label>
-                                </div>
-
-                                <div class="chip-row" role="group" aria-label="Repeat interval">
-                                    <button
-                                        type="button"
-                                        class=${classMap({chip: true, active: this.repeatMode === "never"})}
-                                        @click=${() => this.setRepeatMode("never")}
-                                    >Doesn't repeat</button>
-                                    <button
-                                        type="button"
-                                        class=${classMap({chip: true, active: this.repeatMode === "daily"})}
-                                        @click=${() => this.setRepeatMode("daily")}
-                                    >Daily</button>
-                                    <button
-                                        type="button"
-                                        class=${classMap({chip: true, active: this.repeatMode === "weekly"})}
-                                        @click=${() => this.setRepeatMode("weekly")}
-                                    >Weekly</button>
-                                    <button
-                                        type="button"
-                                        class=${classMap({chip: true, active: this.repeatMode === "monthly"})}
-                                        @click=${() => this.setRepeatMode("monthly")}
-                                    >Monthly</button>
-                                    <button
-                                        type="button"
-                                        class=${classMap({chip: true, active: this.repeatMode === "custom"})}
-                                        @click=${() => this.setRepeatMode("custom")}
-                                    >Custom</button>
-                                </div>
-
-                                ${
-                                    this.repeatMode === "custom"
-                                        ? html`
-                                            <div class="custom-interval-row">
-                                                <span>Every</span>
-                                                <div class="stepper">
-                                                    <button
-                                                        type="button"
-                                                        aria-label="Decrease repeat interval"
-                                                        @click=${() => this.stepRepeatInterval(-1)}
-                                                    >–</button>
-                                                    <input
-                                                        class="stepper-value interval"
-                                                        type="text"
-                                                        inputmode="numeric"
-                                                        maxlength="3"
-                                                        aria-label="Repeat interval"
-                                                        .value=${String(this.draftValue.repeatInterval ?? "")}
-                                                        @input=${(e: InputEvent) =>
-                                                            this.onRepeatIntervalInput((e.target as HTMLInputElement).value)}
-                                                    />
-                                                    <button
-                                                        type="button"
-                                                        aria-label="Increase repeat interval"
-                                                        @click=${() => this.stepRepeatInterval(1)}
-                                                    >+</button>
-                                                </div>
-                                                <select
-                                                    class="unit-select"
-                                                    aria-label="Repeat unit"
-                                                    .value=${this.draftValue.repeatUnit}
-                                                    @change=${(e: Event) =>
-                                                        this.setRepeatUnit((e.target as HTMLSelectElement).value as RepeatUnit)}
-                                                >
-                                                    <option value="days">days</option>
-                                                    <option value="weeks">weeks</option>
-                                                    <option value="months">months</option>
-                                                </select>
-                                            </div>
-                                        `
-                                        : ""
-                                }
-
-                                ${
-                                    this.repeatMode !== "never"
-                                        ? html`
-                                            <div class="segmented" role="group" aria-label="Repeat from">
-                                                <button
-                                                    type="button"
-                                                    class=${classMap({active: this.draftValue.repeatFrom === "due"})}
-                                                    @click=${() => this.setRepeatFrom("due")}
-                                                >From due date</button>
-                                                <button
-                                                    type="button"
-                                                    class=${classMap({active: this.draftValue.repeatFrom === "completion"})}
-                                                    @click=${() => this.setRepeatFrom("completion")}
-                                                >From completion</button>
-                                            </div>
-                                            <p class="repeat-from-caption">${this.repeatFromCaption}</p>
-                                        `
-                                        : ""
-                                }
-
-                                ${
-                                    this.repeatMode !== "never" && !this.repeatBlocked
-                                        ? html`
-                                            <div class="repeat-summary">
-                                                ${REPEAT_ICON}
-                                                <span>${this.repeatSummary}</span>
-                                            </div>
-                                        `
-                                        : ""
-                                }
-
-                                ${
-                                    this.repeatMode !== "never" && !this.draftValue.dueDate
-                                        ? html`
-                                            <div class="field-hint">
-                                                Set a due date above to make this item repeat
-                                            </div>
-                                        `
-                                        : ""
-                                }
-                            </div>
+                            <label class="row">
+                                ${icon(I_SHIELD)}
+                                <span class="lbl">
+                                    Prevent deletion
+                                    <span class="sub">Blocks delete, swipe and clear</span>
+                                </span>
+                                <input
+                                    id="todo-item-delete-protected"
+                                    type="checkbox"
+                                    class="switch"
+                                    .checked=${this.draftValue.deleteProtected}
+                                    @change=${(e: Event) => this.patch({deleteProtected: (e.target as HTMLInputElement).checked})}
+                                />
+                            </label>
                         `
-                        : ""
+                        : nothing
                 }
+            </div>
+        `;
+    }
 
-                <div class="actions" slot="footer">
-                    ${
-                        this.confirmingDelete
-                            ? html`
-                                <div class="confirm-delete">
-                                    <span>Delete this item?</span>
-                                    <button @click=${this.cancelDelete}>
-                                        Cancel
-                                    </button>
-                                    <button class="destructive" @click=${this.confirmDeleteNow}>
-                                        Delete
-                                    </button>
-                                </div>
-                            `
-                            : html`
-                                ${
-                                    this.showDelete
-                                        ? html`
-                                            <button
-                                                class="destructive"
-                                                ?disabled=${this.draftValue.deleteProtected}
-                                                title=${
-                                                    this.draftValue.deleteProtected
-                                                        ? "Untick \"Prevent deletion\" above to delete this item"
-                                                        : ""
-                                                }
-                                                @click=${this.requestDelete}
-                                            >
-                                                Delete
-                                            </button>
-                                        `
-                                        : ""
-                                }
-                                <button
-                                    @click=${this.save}
-                                    ?disabled=${this.triggerOnDueBlocked || this.dayPinMissingWeekday || this.repeatBlocked}
-                                >
-                                    Save
-                                </button>
-                            `
-                    }
+    private renderFooter() {
+        if (this.confirmingDelete) {
+            return html`
+                <div class="confirm-delete">
+                    <span>Delete this item?</span>
+                    <button type="button" class="text-btn" @click=${() => {
+                        this.confirmingDelete = false;
+                    }}>Cancel</button>
+                    <button type="button" class="text-btn destructive" @click=${this.confirmDeleteNow}>Delete</button>
                 </div>
+            `;
+        }
+
+        return html`
+            ${
+                this.showDelete
+                    ? html`
+                        <button
+                            type="button"
+                            class="text-btn destructive"
+                            ?disabled=${this.draftValue.deleteProtected}
+                            title=${this.draftValue.deleteProtected ? "Turn off Prevent deletion to delete this item" : ""}
+                            @click=${this.requestDelete}
+                        >Delete</button>
+                    `
+                    : nothing
+            }
+            <span class="spacer"></span>
+            <button type="button" class="text-btn" @click=${this.close}>Cancel</button>
+            <button type="button" class="filled-btn" ?disabled=${this.saveBlocked} @click=${this.save}>Save</button>
+        `;
+    }
+
+    render() {
+        const twoColumns = this.showDue || this.isDayPin;
+
+        // ha-dialog here is HA's web-awesome-based dialog: the title goes in
+        // the "headerTitle" slot (the old .heading property is ignored), it
+        // supplies its own close button, and actions go in slot="footer".
+        return html`
+            <ha-dialog
+                open
+                class=${classMap({wide: twoColumns})}
+                .accessibleLabel=${`${this.heading} item`}
+                @closed=${this.close}
+            >
+                <span slot="headerTitle" class="dialog-title">
+                    <span>${this.heading}</span>
+                    <label class="typesel">
+                        <span class="visually-hidden">Show as</span>
+                        <select
+                            id="todo-item-pin-type"
+                            .value=${this.draftValue.pinType}
+                            @change=${(e: Event) => this.patch({pinType: (e.target as HTMLSelectElement).value as "" | PinType})}
+                        >
+                            <option value="">Item</option>
+                            <option value="category">Category</option>
+                            <option value="person">Person</option>
+                            <option value="day">Day of week</option>
+                        </select>
+                        ${icon(I_DOWN)}
+                    </label>
+                </span>
+
+                <div class="layout">
+                    <div class=${classMap({cols: true, two: twoColumns})}>
+                        <div class="area-item">${this.renderTitleArea()}</div>
+                        ${this.showDue || this.isDayPin ? html`<div class="area-when">${this.renderWhenArea()}</div>` : nothing}
+                        <div class="area-details">${this.renderDetailsArea()}</div>
+                        <div class="area-options">${this.renderOptionsArea()}</div>
+                    </div>
+                </div>
+
+                <div class="actions" slot="footer">${this.renderFooter()}</div>
             </ha-dialog>
         `;
     }

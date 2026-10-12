@@ -3,6 +3,21 @@
 All notable changes to this project are documented here. Versions follow the
 integration's `manifest.json`/card's `package.json` (kept in lockstep).
 
+## 2.0.0
+
+**New: a redesigned item dialog.** The add/edit dialog has been rebuilt around grouped sections - When, Details and Options - instead of one long column of mixed controls. Inspired by `scheduler-card`'s editor.
+
+- **"Show as" moved into the dialog's title** ("Edit [Item ▾]"), since it changes what the rest of the form shows: Category and Person drop Quantity and relabel the title; Day of week swaps the title for a Mon-Sun picker and replaces When with a note on how day pins schedule themselves.
+- **When** shows due date, time, repeats and "Run automation when due" as summary rows that open one at a time. Dates are picked from Today / Tomorrow / Next week or a Monday-first calendar (typed day/month/year boxes are gone). Times use large steppers in 15-minute steps, and you can still tap a number to type it.
+- **Repeats shows both "next one is due" choices as real dates** - "On its schedule" vs "After I finish" - for if you ticked it off today, replacing the old explanation text. The row itself just reads "Weekly", "Every 3 months", etc.
+- **Nothing fails at Save any more.** Time and Repeats are locked until there's a due date, the automation switch says what it's waiting for, and clearing the date also clears the time, repeat and automation that depend on it. Save is off only while the title (or a day pin's weekday) is missing.
+- **Tags are chips**: Enter or comma adds one, Backspace on an empty box removes the last.
+- **Sharing & safety** (link to shared list, prevent deletion) is folded under Options with a short summary.
+- **Two columns on desktop** (When on the right), one stacked column on a phone - driven by the dialog's own width.
+- **Follows your Home Assistant theme**, light or dark.
+
+**Fixed: dialog titles were missing.** Home Assistant's rebuilt dialog component ignores the property this card used for titles, so the item dialog, the save/load list dialog and the "clear all" confirmation all showed no title. All three show their titles again.
+
 ## 1.7.7
 
 **Fixed: a linked list could fail to sync with "Unable to find to-do list item".** Each linked item keeps a pairing to its local copy, and that pairing outlived the local item whenever it was deleted - including via Home Assistant's own to-do UI, which bypasses this integration entirely. If the other side then sent a newer version of that item, the update was aimed at an item that no longer existed. The stale pairing is now dropped and the item recreated, following the same newest-change-wins rule as every other synced change.

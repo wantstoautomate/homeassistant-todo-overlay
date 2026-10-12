@@ -30,8 +30,8 @@ describe("todo-overlay-confirm-dialog", () => {
             confirmLabel: "Delete all",
         });
 
-        const dialog = el.shadowRoot?.querySelector("ha-dialog") as unknown as {heading?: string};
-        expect(dialog?.heading).toBe("Delete all items?");
+        // header-title, not .heading: HA's current (web-awesome) ha-dialog ignores .heading entirely.
+        expect(el.shadowRoot?.querySelector("ha-dialog")?.getAttribute("header-title")).toBe("Delete all items?");
         expect(el.shadowRoot?.querySelector("p")?.textContent).toBe("This can't be undone.");
         expect(buttons(el).find(b => b.textContent?.trim() === "Delete all")).toBeDefined();
     });

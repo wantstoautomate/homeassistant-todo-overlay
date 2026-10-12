@@ -600,7 +600,7 @@ export class TodoSaveLoadDialog extends LitElement {
         const isSave = this.action === "save";
 
         return html`
-            <ha-dialog open .heading=${isSave ? "Save list" : "Load list"} @closed=${this.close}>
+            <ha-dialog open header-title=${isSave ? "Save list" : "Load list"} @closed=${this.close}>
                 ${
                     isSave
                         ? html`
